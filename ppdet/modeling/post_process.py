@@ -28,7 +28,7 @@ except Exception:
 __all__ = [
     'BBoxPostProcess', 'MaskPostProcess', 'FCOSPostProcess',
     'S2ANetBBoxPostProcess', 'JDEBBoxPostProcess', 'CenterNetPostProcess',
-    'DETRBBoxPostProcess', 'SparsePostProcess'
+    'DETRBBoxPostProcess', 'SparsePostProcess', 'RetinaNetPostProcess'
 ]
 
 
@@ -669,6 +669,85 @@ class SparsePostProcess(object):
 
         bbox_pred = paddle.concat(boxes_final)
         return bbox_pred, bbox_num
+
+
+@register
+class RetinaNetPostProcess(object):
+    __inject__ = ['nms']
+
+    def __init__(self, nms, bbox_reg_weights=[1.0, 1.0, 1.0, 1.0]):
+        super(RetinaNetPostProcess, self).__init__()
+        self.nms = nms
+        self.bbox_reg_weights = bbox_reg_weights
+        self.fake_bboxes = paddle.to_tensor(
+            np.array(
+                [[-1, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype='float32'))
+        self.fake_bbox_num = paddle.to_tensor(np.array([1], dtype='int32'))
+
+    def _process_single_level_pred(self, box_lvl, score_lvl, anchors,
+                                   scale_factor, im_shape):
+        score_lvl = paddle.transpose(score_lvl, [0, 2, 1])
+        score_lvl = F.sigmoid(score_lvl)
+
+        # Notes:
+        # Currently only support bs = 1.
+        box_lvl_i = delta2bbox(box_lvl[0], anchors,
+                               self.bbox_reg_weights)  # [144000, 1, 4]
+        box_lvl_i = paddle.reshape(box_lvl_i, anchors.shape)  # [144000, 4]
+
+        im_h, im_w = im_shape[0][0], im_shape[0][1]
+        scale_w, scale_h = scale_factor[0][0], scale_factor[0][1]
+
+        box_lvl_i[:, 0::2] = paddle.clip(
+            box_lvl_i[:, 0::2], min=0, max=im_w) / scale_w
+
+        box_lvl_i[:, 1::2] = paddle.clip(
+            box_lvl_i[:, 1::2], min=0, max=im_h) / scale_h
+
+        batch_lvl = []
+        batch_lvl.append(box_lvl_i)
+        box_lvl_res = paddle.stack(batch_lvl, axis=0)
+
+        return box_lvl_res, score_lvl
+
+    def __call__(self, pred_scores_list, pred_boxes_list, anchors_list,
+                 scale_factor, im_shape):
+        """
+        Args:
+            pred_scores_list (list[Tensor]): shape of each tensor is [bs, R, num_classes].
+                The tensor predicts the classification probability for each level proposals.
+            pred_boxes_list (list[Tensor]): shape of each tensor is [bs, R, 4].
+                The tensor predicts anchor's delta for each level proposals.
+            anchors_list (list[Tensor]): mutil-level anchors.
+            scale_factor (Tensor): [bs, 2], the scale_factor of per image.
+            im_shape (Tensor): [bs, 2], the shape after transforms of per image.
+        Returns:
+            bboxes (Tensor): tensors of shape [num_boxes, 6], each row has 6 values:
+                [label, confidence, xmin, ymin, xmax, ymax]
+            bbox_num (Tensor): tensors of shape [bs] the number of RoIs in each image.
+        """
+        assert len(pred_boxes_list) == len(pred_boxes_list) == len(anchors_list)
+        assert len(pred_boxes_list[0]) == len(scale_factor) == len(im_shape)
+
+        mutil_level_bbox = []
+        mutil_level_score = []
+
+        for i in range(len(pred_boxes_list)):
+            lvl_res_b, lvl_res_s = self._process_single_level_pred(
+                pred_boxes_list[i], pred_scores_list[i], anchors_list[i],
+                scale_factor, im_shape)
+
+            mutil_level_bbox.append(lvl_res_b)
+            mutil_level_score.append(lvl_res_s)
+
+        pred_boxes = paddle.concat(mutil_level_bbox, axis=1)
+        pred_scores = paddle.concat(mutil_level_score, axis=2)
+
+        bboxes, bbox_num, _ = self.nms(pred_boxes, pred_scores)
+        if bboxes.shape[0] == 0:
+            bboxes = self.fake_bboxes
+            bbox_num = self.fake_bbox_num
+        return bboxes, bbox_num
 
 
 def nms(dets, thresh):
