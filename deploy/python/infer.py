@@ -26,7 +26,7 @@ from paddle.inference import create_predictor
 
 from benchmark_utils import PaddleInferBenchmark
 from picodet_postprocess import PicoDetPostProcess
-from preprocess import preprocess, Resize, NormalizeImage, Permute, PadStride, LetterBoxResize, WarpAffine
+from preprocess import preprocess, Resize, NormalizeImage, Permute, PadStride, LetterBoxResize, WarpAffine, SquareImage
 from visualize import visualize_box_mask
 from utils import argsparser, Timer, get_current_memory_mb
 

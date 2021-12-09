@@ -1,0 +1,18 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  '_base_/optimizer.yml',
+  '_base_/yolox_darknet53.yml',
+  '_base_/yolox_reader.yml',
+]
+
+snapshot_epoch: 5
+weights: output/yolox_darknet53_coco/model_final
+
+dep_mul: 1.0
+wid_mul: 1.0
+
+worker_num: 4
+TrainReader:
+  batch_size: 64
+  use_shared_memory: true

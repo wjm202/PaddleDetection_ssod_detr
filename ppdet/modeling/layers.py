@@ -552,6 +552,29 @@ class YOLOBox(object):
 
 @register
 @serializable
+class YOLOXBox(object):
+    __shared__ = ['num_classes']
+
+    def __init__(self, num_classes=80):
+        super(YOLOXBox, self).__init__()
+        self.num_classes = num_classes
+
+    def __call__(self,
+                 outputs,
+                 scale_factor):
+        yolo_boxes = outputs[:, :, :4]  # [N, A, 4]  cxcywh
+        yolo_boxes = paddle.concat([yolo_boxes[:, :, :2] - yolo_boxes[:, :, 2:] * 0.5,
+                                    yolo_boxes[:, :, :2] + yolo_boxes[:, :, 2:] * 0.5], axis=-1)
+        im_scale = scale_factor[:, 0:1]  # [N, 1]
+        im_scale = im_scale.unsqueeze(2)  # [N, 1, 1]
+        yolo_boxes /= im_scale
+        yolo_scores = outputs[:, :, 4:5] * outputs[:, :, 5:]
+        yolo_scores = paddle.transpose(yolo_scores, [0, 2, 1])  # [N, 80, A]
+        return yolo_boxes, yolo_scores
+
+
+@register
+@serializable
 class SSDBox(object):
     def __init__(self, is_normalized=True):
         self.is_normalized = is_normalized

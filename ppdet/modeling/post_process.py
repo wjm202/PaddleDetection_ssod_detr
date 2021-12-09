@@ -28,7 +28,7 @@ except Exception:
 __all__ = [
     'BBoxPostProcess', 'MaskPostProcess', 'FCOSPostProcess',
     'S2ANetBBoxPostProcess', 'JDEBBoxPostProcess', 'CenterNetPostProcess',
-    'DETRBBoxPostProcess', 'SparsePostProcess'
+    'DETRBBoxPostProcess', 'SparsePostProcess', 'YOLOXPostProcess'
 ]
 
 
@@ -668,6 +668,25 @@ class SparsePostProcess(object):
             bbox_num[i] = bboxes.shape[0]
 
         bbox_pred = paddle.concat(boxes_final)
+        return bbox_pred, bbox_num
+
+
+@register
+class YOLOXPostProcess(object):
+    __inject__ = ['decode', 'nms']
+
+    def __init__(self, decode=None, nms=None):
+        super(YOLOXPostProcess, self).__init__()
+        self.decode = decode
+        self.nms = nms
+
+    def __call__(self, yolox_head_outs, scale_factor):
+        """
+        Decode the bbox and do NMS in YOLOX.
+        """
+        outputs = yolox_head_outs
+        bboxes, score = self.decode(outputs, scale_factor)
+        bbox_pred, bbox_num, _ = self.nms(bboxes, score)
         return bbox_pred, bbox_num
 
 

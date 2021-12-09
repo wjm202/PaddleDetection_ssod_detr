@@ -1,0 +1,13 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  './_base_/yolox_cspdarknet.yml',
+  './_base_/optimizer_300e.yml',
+  './_base_/yolox_reader.yml',
+]
+
+snapshot_epoch: 5
+weights: output/yolox_l_coco/model_final
+
+dep_mul: 1.0
+wid_mul: 1.0
