@@ -42,10 +42,6 @@ class BBoxPostProcess(nn.Layer):
         self.num_classes = num_classes
         self.decode = decode
         self.nms = nms
-        self.fake_bboxes = paddle.to_tensor(
-            np.array(
-                [[-1, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype='float32'))
-        self.fake_bbox_num = paddle.to_tensor(np.array([1], dtype='int32'))
 
     def forward(self, head_out, rois, im_shape, scale_factor):
         """
@@ -94,12 +90,16 @@ class BBoxPostProcess(nn.Layer):
         bboxes_list = []
         bbox_num_list = []
         id_start = 0
+        fake_bboxes = paddle.to_tensor(
+            np.array(
+                [[-1, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype='float32'))
+        fake_bbox_num = paddle.to_tensor(np.array([1], dtype='int32'))
+
         # add fake bbox when output is empty for each batch
         for i in range(bbox_num.shape[0]):
             if bbox_num[i] == 0:
-                bboxes_i = self.fake_bboxes
-                bbox_num_i = self.fake_bbox_num
-                id_start += 1
+                bboxes_i = fake_bboxes
+                bbox_num_i = fake_bbox_num
             else:
                 bboxes_i = bboxes[id_start:id_start + bbox_num[i], :]
                 bbox_num_i = bbox_num[i]
@@ -252,7 +252,7 @@ class S2ANetBBoxPostProcess(nn.Layer):
     def __init__(self, num_classes=15, nms_pre=2000, min_bbox_size=0, nms=None):
         super(S2ANetBBoxPostProcess, self).__init__()
         self.num_classes = num_classes
-        self.nms_pre = paddle.to_tensor(nms_pre)
+        self.nms_pre = nms_pre
         self.min_bbox_size = min_bbox_size
         self.nms = nms
         self.origin_shape_list = []
