@@ -16,7 +16,7 @@ import math
 import six
 import numpy as np
 from numbers import Integral
-
+from IPython import embed
 import paddle
 import paddle.nn as nn
 from paddle import ParamAttr
@@ -544,6 +544,29 @@ class YOLOBox(object):
             scores_list.append(paddle.transpose(scores, perm=[0, 2, 1]))
         yolo_boxes = paddle.concat(boxes_list, axis=1)
         yolo_scores = paddle.concat(scores_list, axis=2)
+        return yolo_boxes, yolo_scores
+
+
+@register
+@serializable
+class YOLOXBox(object):
+    __shared__ = ['num_classes']
+
+    def __init__(self, num_classes=80):
+        super(YOLOXBox, self).__init__()
+        self.num_classes = num_classes
+
+    def __call__(self,
+                 outputs,
+                 scale_factor):
+        yolo_boxes = outputs[:, :, :4]  # [N, A, 4]  cxcywh
+        yolo_boxes = paddle.concat([yolo_boxes[:, :, :2] - yolo_boxes[:, :, 2:] * 0.5,
+                                    yolo_boxes[:, :, :2] + yolo_boxes[:, :, 2:] * 0.5], axis=-1)
+        im_scale = scale_factor[:, 0:1]  # [N, 1]
+        im_scale = im_scale.unsqueeze(2)  # [N, 1, 1]
+        yolo_boxes /= im_scale
+        yolo_scores = outputs[:, :, 4:5] * outputs[:, :, 5:]
+        yolo_scores = paddle.transpose(yolo_scores, [0, 2, 1])  # [N, 80, A]
         return yolo_boxes, yolo_scores
 
 

@@ -295,6 +295,43 @@ class WarpAffine(object):
         return inp, im_info
 
 
+class SquareImage(object):
+    def __init__(self, fill_value=0, is_channel_first=True):
+        """
+        Pad zeros to bboxes if number of bboxes is less than num_max_boxes.
+        Args:
+            fill_value (int): the filled pixel value
+            is_channel_first (bool): ...
+        """
+        if not isinstance(fill_value, int):
+            raise ValueError('fill_value must be int!')
+        if fill_value < 0 or fill_value > 255:
+            raise ValueError('fill_value must in 0 ~ 255')
+        self.fill_value = fill_value
+        self.is_channel_first = is_channel_first
+        super(SquareImage, self).__init__()
+
+    def __call__(self, im, im_info):
+        im = im.astype(np.float32, copy=False)
+        if self.is_channel_first:
+            C, H, W = im.shape
+            if H != W:
+                max_ = max(H, W)
+                padded_img = np.ones((C, max_, max_), dtype=np.uint8) * self.fill_value
+                padded_img = padded_img.astype(np.float32)
+                padded_img[:C, :H, :W] = im
+                img = padded_img
+        else:
+            H, W, C = im.shape
+            if H != W:
+                max_ = max(H, W)
+                padded_img = np.ones((max_, max_, C), dtype=np.uint8) * self.fill_value
+                padded_img = padded_img.astype(np.float32)
+                padded_img[:H, :W, :C] = im
+                img = padded_img
+        return img, im_info
+
+
 def preprocess(im, preprocess_ops):
     # process image by preprocess_ops
     im_info = {

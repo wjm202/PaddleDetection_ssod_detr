@@ -19,7 +19,7 @@
 from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
-
+from IPython import embed
 try:
     from collections.abc import Sequence
 except Exception:
@@ -3012,4 +3012,557 @@ class CenterRandColor(BaseOperator):
         for func in distortions:
             img = func(img, img_gray)
         sample['image'] = img
+        return sample
+
+
+@register_op
+class LetterBox(BaseOperator):
+    """Resize a rectangular image to a padded rectangular
+    Args:
+        target_size (float):
+        color (float):
+        auto (bool):
+        scaleFill (bool):
+        scaleup (bool):
+        stride (float):
+    """
+
+    def __init__(self,
+                 target_size=640,
+                 color=(114, 114, 114),
+                 auto=True, # False in trainset
+                 scaleFill=False,
+                 scaleup=True, # False in trainset augement
+                 stride=32):
+        super(LetterBox, self).__init__()
+        if not isinstance(target_size, (Integral, Sequence)):
+            raise TypeError(
+                "Type of target_size is invalid. Must be Integer or List or Tuple, now is {}".
+                format(type(target_size)))
+        if isinstance(target_size, Integral):
+            target_size = [target_size, target_size]
+        self.target_size = target_size
+        self.img_size = target_size[0]
+
+        self.color = color
+        self.auto = auto
+        self.scaleFill = scaleFill
+        self.scaleup = scaleup
+        self.stride = stride
+
+    def apply_image(self, img, height, width, color=(114, 114, 114)):
+        shape = img.shape[:2]  # [height, width]
+        ratio_h = float(height) / shape[0]
+        ratio_w = float(width) / shape[1]
+        r = min(ratio_h, ratio_w)
+
+        # only scale down, do not scale up (for better val mAP)
+        if not self.scaleup:
+            r = min(r, 1.0)
+
+        # Compute padding
+        ratio = r, r  # width, height ratios
+        new_unpad = int(round(shape[1] * r)), int(round(shape[0] * r))
+        padw, padh = width - new_unpad[0], height - new_unpad[1]
+        if self.auto:  # minimum rectangle
+            padw, padh = np.mod(padw, self.stride), np.mod(padh, self.stride)
+        elif self.scaleFill:  # stretch
+            padw, padh = 0.0, 0.0
+            new_unpad = width, height
+            ratio = width / shape[1], height / shape[0]  # width, height ratios
+
+        padw /= 2  # divide padding into 2 sides
+        padh /= 2
+        if shape[::-1] != new_unpad:
+            img = cv2.resize(img, new_unpad, interpolation=cv2.INTER_LINEAR)
+
+        top, bottom = int(round(padh - 0.1)), int(round(padh + 0.1))
+        left, right = int(round(padw - 0.1)), int(round(padw + 0.1))
+        img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color) # add border
+        return img, ratio, padw, padh
+
+    def apply_bbox(self, x, w=640, h=640, padw=0, padh=0):
+        # normalized [x, y, w, h] to pixel [x1, y1, x2, y2]
+        y = np.copy(x)
+        y[:, 0] = w * (x[:, 0] - x[:, 2] / 2) + padw
+        y[:, 1] = h * (x[:, 1] - x[:, 3] / 2) + padh
+        y[:, 2] = w * (x[:, 0] + x[:, 2] / 2) + padw
+        y[:, 3] = h * (x[:, 1] + x[:, 3] / 2) + padh
+        return y
+
+    def apply(self, sample, context=None):
+        img = sample['image']
+        h0, w0 = sample['im_shape']
+
+        resized_ratio = self.img_size / max(h0, w0)
+        if resized_ratio != 1:  # if sizes are not equal
+            img = cv2.resize(img, (int(w0 * resized_ratio), int(h0 * resized_ratio)),
+                            interpolation=cv2.INTER_AREA if resized_ratio < 1 else cv2.INTER_LINEAR) # resized_ratio
+            resized_h, resized_w = img.shape[:2]
+        else:
+            resized_h, resized_w = h0, w0
+
+        height, width = self.target_size
+        img, ratio, padw, padh = self.apply_image(
+            img, height=height, width=width)
+
+        sample['image'] = img
+        sample['im_pad'] = [padw, padh]
+
+        new_h, new_w = img.shape[:2]
+        scale_h_ratio = new_h / h0
+        scale_w_ratio = new_w / w0
+        sample['scale_factor'] = np.asarray([scale_h_ratio, scale_w_ratio], dtype=np.float32)
+        
+        # apply bbox only when trainning
+        if 'gt_bbox' in sample and len(sample['gt_bbox']) > 0:
+            gt_bboxes = sample['gt_bbox']
+            sample['gt_bbox']  = self.apply_bbox(gt_bboxes, ratio[0] * resized_w, ratio[1] * resized_h, padw, padh)
+
+        return sample
+
+
+@register_op
+class YOLOXMosaic(BaseOperator):
+    def __init__(self,
+                 prob=0.5,
+                 degrees=10.0,
+                 translate=0.1,
+                 scale=[0.1, 2],
+                 shear=2.0,
+                 perspective=0.0,
+                 input_dim=[640, 640],
+                 enable_mixup=True,
+                 mixup_prob=1.0,
+                 mixup_scale=[0.5, 1.5]):
+        """ YOLOXMosaic image and gt_bbbox/gt_score
+        Args:
+            alpha (float): alpha parameter of beta distribute
+            beta (float): beta parameter of beta distribute
+        """
+        super(YOLOXMosaic, self).__init__()
+        self.prob = prob
+        self.degrees = degrees
+        self.translate = translate
+        self.scale = scale
+        self.shear = shear
+        self.perspective = perspective
+        self.input_dim = input_dim
+        self.enable_mixup = enable_mixup
+        self.mixup_prob = mixup_prob
+        self.mixup_scale = mixup_scale
+
+    def get_mosaic_coordinate(self, mosaic_image, mosaic_index, xc, yc, w, h, input_h, input_w):
+        # TODO update doc
+        # index0 to top left part of image
+        if mosaic_index == 0:
+            x1, y1, x2, y2 = max(xc - w, 0), max(yc - h, 0), xc, yc
+            small_coord = w - (x2 - x1), h - (y2 - y1), w, h
+        # index1 to top right part of image
+        elif mosaic_index == 1:
+            x1, y1, x2, y2 = xc, max(yc - h, 0), min(xc + w, input_w * 2), yc
+            small_coord = 0, h - (y2 - y1), min(w, x2 - x1), h
+        # index2 to bottom left part of image
+        elif mosaic_index == 2:
+            x1, y1, x2, y2 = max(xc - w, 0), yc, xc, min(input_h * 2, yc + h)
+            small_coord = w - (x2 - x1), 0, w, min(y2 - y1, h)
+        # index2 to bottom right part of image
+        elif mosaic_index == 3:
+            x1, y1, x2, y2 = xc, yc, min(xc + w, input_w * 2), min(input_h * 2, yc + h)  # noqa
+            small_coord = 0, 0, min(w, x2 - x1), min(y2 - y1, h)
+        return (x1, y1, x2, y2), small_coord
+
+    def random_perspective(
+            self,
+            img,
+            targets=(),
+            degrees=10,
+            translate=0.1,
+            scale=0.1,
+            shear=10,
+            perspective=0.0,
+            border=(0, 0)):
+        # targets = [xyxy, cls, is_crowd]
+        height = img.shape[0] + border[0] * 2  # shape(h,w,c)
+        width = img.shape[1] + border[1] * 2
+
+        # Center
+        C = np.eye(3)
+        C[0, 2] = -img.shape[1] / 2  # x translation (pixels)
+        C[1, 2] = -img.shape[0] / 2  # y translation (pixels)
+
+        # Rotation and Scale
+        R = np.eye(3)
+        a = random.uniform(-degrees, degrees)
+        # a += random.choice([-180, -90, 0, 90])  # add 90deg rotations to small rotations
+        s = random.uniform(scale[0], scale[1])
+        # s = 2 ** random.uniform(-scale, scale)
+        R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
+
+        # Shear
+        S = np.eye(3)
+        S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # x shear (deg)
+        S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # y shear (deg)
+
+        # Translation
+        T = np.eye(3)
+        T[0, 2] = (
+                random.uniform(0.5 - translate, 0.5 + translate) * width
+        )  # x translation (pixels)
+        T[1, 2] = (
+                random.uniform(0.5 - translate, 0.5 + translate) * height
+        )  # y translation (pixels)
+
+        # Combined rotation matrix
+        M = T @ S @ R @ C  # order of operations (right to left) is IMPORTANT
+
+        ###########################
+        # For Aug out of Mosaic
+        # s = 1.
+        # M = np.eye(3)
+        ###########################
+
+        if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
+            if perspective:
+                img = cv2.warpPerspective(
+                    img, M, dsize=(width, height), borderValue=(114, 114, 114)
+                )
+            else:  # affine
+                img = cv2.warpAffine(
+                    img, M[:2], dsize=(width, height), borderValue=(114, 114, 114)
+                )
+
+        # Transform label coordinates
+        n = len(targets)
+        if n:
+            # warp points
+            xy = np.ones((n * 4, 3))
+            xy[:, :2] = targets[:, [0, 1, 2, 3, 0, 3, 2, 1]].reshape(
+                n * 4, 2
+            )  # x1y1, x2y2, x1y2, x2y1
+            xy = xy @ M.T  # transform
+            if perspective:
+                xy = (xy[:, :2] / xy[:, 2:3]).reshape(n, 8)  # rescale
+            else:  # affine
+                xy = xy[:, :2].reshape(n, 8)
+
+            # create new boxes
+            x = xy[:, [0, 2, 4, 6]]
+            y = xy[:, [1, 3, 5, 7]]
+            xy = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
+
+            # clip boxes
+            xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width)
+            xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height)
+
+            # filter candidates
+            i = self.box_candidates(box1=targets[:, :4].T * s, box2=xy.T)
+            targets = targets[i]
+            targets[:, :4] = xy[i]
+
+        return img, targets
+
+    def box_candidates(self, box1, box2, wh_thr=2, ar_thr=20, area_thr=0.2):
+        # box1(4,n), box2(4,n)
+        # Compute candidate boxes which include follwing 5 things:
+        # box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
+        w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
+        w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
+        ar = np.maximum(w2 / (h2 + 1e-16), h2 / (w2 + 1e-16))  # aspect ratio
+        return (
+                (w2 > wh_thr)
+                & (h2 > wh_thr)
+                & (w2 * h2 / (w1 * h1 + 1e-16) > area_thr)
+                & (ar < ar_thr)
+        )  # candidates
+
+    def __call__(self, sample, context=None):
+        if not isinstance(sample, Sequence):
+            return sample
+
+        assert len(sample) == 5, 'YOLOXMosaic need five samples'
+
+        if np.random.uniform(0., 1.) > self.prob:
+            return sample[0]
+
+        sample1 = sample[1]
+        sample2 = sample[2]
+        sample3 = sample[3]
+        sample_mixup = sample[4]
+        sample0 = sample[0]
+
+        mosaic_is_crowd = []
+        mosaic_gt_class = []
+        mosaic_gt_bbox = []
+        input_dim = self.input_dim
+        input_h, input_w = input_dim[0], input_dim[1]
+
+        # yc, xc = s, s  # mosaic center x, y
+        yc = int(random.uniform(0.5 * input_h, 1.5 * input_h))
+        xc = int(random.uniform(0.5 * input_w, 1.5 * input_w))
+
+        for i_mosaic, sp in enumerate([sample0, sample1, sample2, sample3]):
+            # img, _labels, _, img_id = self._dataset.pull_item(index)
+            img = sp['image']
+            im_id = sp['im_id']  # [1, ]
+            is_crowd = sp['is_crowd']  # [?, 1]
+            gt_class = sp['gt_class']  # [?, 1]
+            gt_bbox = sp['gt_bbox']  # [?, 4]
+            h0, w0 = img.shape[:2]  # orig hw
+            scale = min(1. * input_h / h0, 1. * input_w / w0)
+            img = cv2.resize(
+                img, (int(w0 * scale), int(h0 * scale)), interpolation=cv2.INTER_LINEAR
+            )
+            # generate output mosaic image
+            (h, w, c) = img.shape[:3]
+            if i_mosaic == 0:
+                mosaic_img = np.full((input_h * 2, input_w * 2, c), 114, dtype=np.uint8)
+
+            # suffix l means large image, while s means small image in mosaic aug.
+            (l_x1, l_y1, l_x2, l_y2), (s_x1, s_y1, s_x2, s_y2) = self.get_mosaic_coordinate(
+                mosaic_img, i_mosaic, xc, yc, w, h, input_h, input_w
+            )
+
+            mosaic_img[l_y1:l_y2, l_x1:l_x2] = img[s_y1:s_y2, s_x1:s_x2]
+            padw, padh = l_x1 - s_x1, l_y1 - s_y1
+
+            _gt_bbox = gt_bbox.copy()
+            # Normalized xywh to pixel xyxy format
+            if len(gt_bbox) > 0:
+                _gt_bbox[:, 0] = scale * gt_bbox[:, 0] + padw
+                _gt_bbox[:, 1] = scale * gt_bbox[:, 1] + padh
+                _gt_bbox[:, 2] = scale * gt_bbox[:, 2] + padw
+                _gt_bbox[:, 3] = scale * gt_bbox[:, 3] + padh
+            mosaic_gt_bbox.append(_gt_bbox)
+            mosaic_gt_class.append(gt_class)
+            mosaic_is_crowd.append(is_crowd)
+        # cv2.imwrite('%d.jpg'%im_id, mosaic_img)
+        # print()
+
+        if len(mosaic_gt_bbox):
+            mosaic_gt_bbox = np.concatenate(mosaic_gt_bbox, 0)
+            mosaic_gt_class = np.concatenate(mosaic_gt_class, 0)
+            mosaic_is_crowd = np.concatenate(mosaic_is_crowd, 0)
+            np.clip(mosaic_gt_bbox[:, 0], 0, 2 * input_w, out=mosaic_gt_bbox[:, 0])
+            np.clip(mosaic_gt_bbox[:, 1], 0, 2 * input_h, out=mosaic_gt_bbox[:, 1])
+            np.clip(mosaic_gt_bbox[:, 2], 0, 2 * input_w, out=mosaic_gt_bbox[:, 2])
+            np.clip(mosaic_gt_bbox[:, 3], 0, 2 * input_h, out=mosaic_gt_bbox[:, 3])
+
+        mosaic_labels = np.concatenate([mosaic_gt_bbox, mosaic_gt_class.astype(mosaic_gt_bbox.dtype),
+                                        mosaic_is_crowd.astype(mosaic_gt_bbox.dtype)], 1)
+        mosaic_img, mosaic_labels = self.random_perspective(
+            mosaic_img,
+            mosaic_labels,
+            degrees=self.degrees,
+            translate=self.translate,
+            scale=self.scale,
+            shear=self.shear,
+            perspective=self.perspective,
+            border=[-input_h // 2, -input_w // 2],
+        )  # border to remove
+        # cv2.imwrite('%d2.jpg'%im_id, mosaic_img)
+        # print()
+
+        # -----------------------------------------------------------------
+        # CopyPaste: https://arxiv.org/abs/2012.07177
+        # -----------------------------------------------------------------
+        if (
+                self.enable_mixup
+                and not len(mosaic_labels) == 0
+                and random.random() < self.mixup_prob
+        ):
+            img_mixup = sample_mixup['image']
+            cp_labels = np.concatenate(
+                [sample_mixup['gt_bbox'], sample_mixup['gt_class'].astype(mosaic_labels.dtype),
+                 sample_mixup['is_crowd'].astype(mosaic_labels.dtype)], 1)
+            mosaic_img, mosaic_labels = self.mixup(mosaic_img, mosaic_labels, self.input_dim, cp_labels, img_mixup)
+            # mosaic_img_bgr = cv2.cvtColor(mosaic_img, cv2.COLOR_RGB2BGR)
+            # cv2.imwrite('%d3.jpg' % im_id, mosaic_img_bgr)
+            # print()
+        sample0['image'] = mosaic_img
+        sample0['h'] = float(mosaic_img.shape[0])
+        sample0['w'] = float(mosaic_img.shape[1])
+        sample0['im_shape'][0] = sample0['h']
+        sample0['im_shape'][1] = sample0['w']
+        sample0['gt_class'] = mosaic_labels[:, 4:5].astype(np.int32)
+        sample0['is_crowd'] = mosaic_labels[:, 5:6].astype(np.int32)
+        sample0['gt_bbox'] = mosaic_labels[:, :4].astype(np.float32)
+        return sample0
+
+    def adjust_box_anns(self, bbox, scale_ratio, padw, padh, w_max, h_max):
+        bbox[:, 0::2] = np.clip(bbox[:, 0::2] * scale_ratio + padw, 0, w_max)
+        bbox[:, 1::2] = np.clip(bbox[:, 1::2] * scale_ratio + padh, 0, h_max)
+        return bbox
+
+    def mixup(self, origin_img, origin_labels, input_dim, cp_labels, img):
+        jit_factor = random.uniform(*self.mixup_scale)
+        FLIP = random.uniform(0, 1) > 0.5
+        # cp_labels = []
+        # while len(cp_labels) == 0:
+        #     cp_index = random.randint(0, self.__len__() - 1)
+        #     cp_labels = self._dataset.load_anno(cp_index)
+        # img, cp_labels, _, _ = self._dataset.pull_item(cp_index)
+
+        if len(img.shape) == 3:
+            cp_img = np.ones((input_dim[0], input_dim[1], 3), dtype=np.uint8) * 114
+        else:
+            cp_img = np.ones(input_dim, dtype=np.uint8) * 114
+
+        cp_scale_ratio = min(input_dim[0] / img.shape[0], input_dim[1] / img.shape[1])
+        resized_img = cv2.resize(
+            img,
+            (int(img.shape[1] * cp_scale_ratio), int(img.shape[0] * cp_scale_ratio)),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+        cp_img[
+        : int(img.shape[0] * cp_scale_ratio), : int(img.shape[1] * cp_scale_ratio)
+        ] = resized_img
+
+        cp_img = cv2.resize(
+            cp_img,
+            (int(cp_img.shape[1] * jit_factor), int(cp_img.shape[0] * jit_factor)),
+        )
+        cp_scale_ratio *= jit_factor
+
+        if FLIP:
+            cp_img = cp_img[:, ::-1, :]
+
+        origin_h, origin_w = cp_img.shape[:2]
+        target_h, target_w = origin_img.shape[:2]
+        padded_img = np.zeros(
+            (max(origin_h, target_h), max(origin_w, target_w), 3), dtype=np.uint8
+        )
+        padded_img[:origin_h, :origin_w] = cp_img
+
+        x_offset, y_offset = 0, 0
+        if padded_img.shape[0] > target_h:
+            y_offset = random.randint(0, padded_img.shape[0] - target_h - 1)
+        if padded_img.shape[1] > target_w:
+            x_offset = random.randint(0, padded_img.shape[1] - target_w - 1)
+        padded_cropped_img = padded_img[
+                             y_offset: y_offset + target_h, x_offset: x_offset + target_w
+                             ]
+
+        cp_bboxes_origin_np = self.adjust_box_anns(
+            cp_labels[:, :4].copy(), cp_scale_ratio, 0, 0, origin_w, origin_h
+        )
+        if FLIP:
+            cp_bboxes_origin_np[:, 0::2] = (
+                    origin_w - cp_bboxes_origin_np[:, 0::2][:, ::-1]
+            )
+        cp_bboxes_transformed_np = cp_bboxes_origin_np.copy()
+        cp_bboxes_transformed_np[:, 0::2] = np.clip(
+            cp_bboxes_transformed_np[:, 0::2] - x_offset, 0, target_w
+        )
+        cp_bboxes_transformed_np[:, 1::2] = np.clip(
+            cp_bboxes_transformed_np[:, 1::2] - y_offset, 0, target_h
+        )
+        keep_list = self.box_candidates(cp_bboxes_origin_np.T, cp_bboxes_transformed_np.T, 5)
+
+        if keep_list.sum() >= 1.0:
+            cls_labels = cp_labels[keep_list, 4:5].copy()
+            crd_labels = cp_labels[keep_list, 5:6].copy()
+            box_labels = cp_bboxes_transformed_np[keep_list]
+            labels = np.hstack((box_labels, cls_labels, crd_labels))
+            origin_labels = np.vstack((origin_labels, labels))
+            origin_img = origin_img.astype(np.float32)
+            origin_img = 0.5 * origin_img + 0.5 * padded_cropped_img.astype(np.float32)
+
+        return origin_img.astype(np.uint8), origin_labels
+
+
+@register_op
+class YOLOXPadBox(BaseOperator):
+    def __init__(self, num_max_boxes=50, init_bbox=[-9999.0, -9999.0, 10.0, 10.0]):
+        """
+        Pad init_bbox to bboxes if number of bboxes is less than num_max_boxes.
+        Args:
+            num_max_boxes (int): the max number of bboxes
+            init_bbox (list): the init value of bboxes
+        """
+        self.num_max_boxes = num_max_boxes
+        self.init_bbox = init_bbox
+        super(YOLOXPadBox, self).__init__()
+
+    def apply(self, sample, context=None):
+        assert 'gt_bbox' in sample
+        bbox = sample['gt_bbox']
+        gt_num = min(self.num_max_boxes, len(bbox))
+        num_max = self.num_max_boxes
+        # fields = context['fields'] if context else []
+        pad_bbox = np.zeros((num_max, 4), dtype=np.float32)
+        if self.init_bbox is not None:
+            pad_bbox = np.ones((num_max, 4), dtype=np.float32) * self.init_bbox
+        if gt_num > 0:
+            pad_bbox[:gt_num, :] = bbox[:gt_num, :]
+        sample['gt_bbox'] = pad_bbox
+        if 'gt_class' in sample:
+            pad_class = np.zeros((num_max, ), dtype=np.int32)
+            if gt_num > 0:
+                pad_class[:gt_num] = sample['gt_class'][:gt_num, 0]
+            sample['gt_class'] = pad_class
+        if 'gt_score' in sample:
+            pad_score = np.zeros((num_max, ), dtype=np.float32)
+            if gt_num > 0:
+                pad_score[:gt_num] = sample['gt_score'][:gt_num, 0]
+            sample['gt_score'] = pad_score
+        # in training, for example in op ExpandImage,
+        # the bbox and gt_class is expandded, but the difficult is not,
+        # so, judging by it's length
+        if 'difficult' in sample:
+            pad_diff = np.zeros((num_max, ), dtype=np.int32)
+            if gt_num > 0:
+                pad_diff[:gt_num] = sample['difficult'][:gt_num, 0]
+            sample['difficult'] = pad_diff
+        if 'is_crowd' in sample:
+            pad_crowd = np.zeros((num_max, ), dtype=np.int32)
+            if gt_num > 0:
+                pad_crowd[:gt_num] = sample['is_crowd'][:gt_num, 0]
+            sample['is_crowd'] = pad_crowd
+        if 'gt_ide' in sample:
+            pad_ide = np.zeros((num_max, ), dtype=np.int32)
+            if gt_num > 0:
+                pad_ide[:gt_num] = sample['gt_ide'][:gt_num, 0]
+            sample['gt_ide'] = pad_ide
+        return sample
+
+
+@register_op
+class SquareImage(BaseOperator):
+    def __init__(self, fill_value=0, is_channel_first=True):
+        """
+        Pad zeros to bboxes if number of bboxes is less than num_max_boxes.
+        Args:
+            fill_value (int): the filled pixel value
+            is_channel_first (bool): ...
+        """
+        if not isinstance(fill_value, int):
+            raise ValueError('fill_value must be int!')
+        if fill_value < 0 or fill_value > 255:
+            raise ValueError('fill_value must in 0 ~ 255')
+        self.fill_value = fill_value
+        self.is_channel_first = is_channel_first
+        super(SquareImage, self).__init__()
+
+    def apply(self, sample, context=None):
+        im = sample['image']
+        im = im.astype(np.float32, copy=False)
+        sample['image'] = im
+        if self.is_channel_first:
+            C, H, W = im.shape
+            if H != W:
+                max_ = max(H, W)
+                padded_img = np.ones((C, max_, max_), dtype=np.uint8) * self.fill_value
+                padded_img = padded_img.astype(np.float32)
+                padded_img[:C, :H, :W] = im
+                sample['image'] = padded_img
+        else:
+            H, W, C = im.shape
+            if H != W:
+                max_ = max(H, W)
+                padded_img = np.ones((max_, max_, C), dtype=np.uint8) * self.fill_value
+                padded_img = padded_img.astype(np.float32)
+                padded_img[:H, :W, :C] = im
+                sample['image'] = padded_img
         return sample

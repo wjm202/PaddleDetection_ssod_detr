@@ -1,0 +1,41 @@
+architecture: YOLOX
+use_ema: true
+ema_decay: 0.9998
+depth_factor: 0.33
+width_factor: 0.50
+act: silu
+
+YOLOX:
+  backbone: DarkNet
+  neck: YOLOPAFPN
+  yolox_head: YOLOXHead
+  post_process: YOLOXPostProcess
+
+DarkNet:
+  depth: 53
+  return_idx: [2, 3, 4]
+  freeze_at: -1
+
+YOLOPAFPN:
+  channels: [256, 512, 1024]
+  depthwise: False
+
+YOLOXHead:
+  strides: [8, 16, 32]
+  channels: [256, 512, 1024]
+  depthwise: False
+  yoloxmosaic_epoch: 285
+  yolox_loss: YOLOXLoss
+
+YOLOXLoss:
+  loss_type: "iou"
+
+YOLOXPostProcess:
+  decode:
+    name: YOLOXBox
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 1000
+    keep_top_k: 100
+    score_threshold: 0.01
+    nms_threshold: 0.65

@@ -1,0 +1,41 @@
+worker_num: 2
+TrainReader:
+  inputs_def:
+    num_max_boxes: 120
+  sample_transforms:
+    - Decode: {}
+    - YOLOXMosaic: {prob: 1.0, degrees: 10.0, translate: 0.1, scale: [0.1, 2], shear: 2.0, perspective: 0.0, input_dim: [640, 640]}
+    - RandomDistort: {}
+    - RandomFlip: {}
+  batch_transforms:
+    - BboxXYXY2XYWH: {}
+    - BatchRandomResize: {target_size: [448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832], random_size: True, random_interp: True, keep_ratio: True}
+    - YOLOXPadBox: {num_max_boxes: 120, init_bbox: [-9999.0, -9999.0, 10.0, 10.0]}
+    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - Permute: {}
+  batch_size: 8
+  shuffle: true
+  drop_last: true
+  yoloxmosaic_epoch: 285
+  use_shared_memory: true
+
+
+EvalReader:
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [640, 640], keep_ratio: True, interp: 1}
+  batch_transforms:
+    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - Permute: {}
+  batch_size: 8
+
+
+TestReader:
+  inputs_def:
+    image_shape: [3, 640, 640]
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [640, 640], keep_ratio: True, interp: 1}
+    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - Permute: {}
+  batch_size: 1

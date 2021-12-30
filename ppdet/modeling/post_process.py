@@ -24,11 +24,12 @@ try:
     from collections.abc import Sequence
 except Exception:
     from collections import Sequence
+from IPython import embed
 
 __all__ = [
     'BBoxPostProcess', 'MaskPostProcess', 'FCOSPostProcess',
     'S2ANetBBoxPostProcess', 'JDEBBoxPostProcess', 'CenterNetPostProcess',
-    'DETRBBoxPostProcess', 'SparsePostProcess'
+    'DETRBBoxPostProcess', 'SparsePostProcess', 'YOLOXPostProcess',
 ]
 
 
@@ -725,3 +726,22 @@ def nms(dets, thresh):
     keep = np.where(suppressed == 0)[0]
     dets = dets[keep, :]
     return dets
+
+
+@register
+class YOLOXPostProcess(object):
+    __inject__ = ['decode', 'nms']
+
+    def __init__(self, decode=None, nms=None):
+        super(YOLOXPostProcess, self).__init__()
+        self.decode = decode
+        self.nms = nms
+
+    #def __call__(self, yolox_head_outs, anchors, im_shape, scale_factor):
+    def __call__(self, yolox_head_outs, im_shape, scale_factor):
+        """
+        Decode the bbox and do NMS in YOLOX.
+        """
+        bboxes, score = self.decode(yolox_head_outs, scale_factor)
+        bbox_pred, bbox_num, _ = self.nms(bboxes, score)
+        return bbox_pred, bbox_num

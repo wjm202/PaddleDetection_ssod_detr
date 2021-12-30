@@ -1,0 +1,13 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  './_base_/yolox_cspdarknet.yml',
+  './_base_/optimizer_300e.yml',
+  './_base_/yolox_reader.yml',
+]
+
+snapshot_epoch: 5
+weights: output/yolox_m_coco/model_final
+
+depth_factor: 0.67
+width_factor: 0.75
