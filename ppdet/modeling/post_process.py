@@ -28,7 +28,7 @@ except Exception:
 __all__ = [
     'BBoxPostProcess', 'MaskPostProcess', 'FCOSPostProcess',
     'S2ANetBBoxPostProcess', 'JDEBBoxPostProcess', 'CenterNetPostProcess',
-    'DETRBBoxPostProcess', 'SparsePostProcess'
+    'DETRBBoxPostProcess', 'SparsePostProcess', 'YOLOv5PostProcess'
 ]
 
 
@@ -725,3 +725,59 @@ def nms(dets, thresh):
     keep = np.where(suppressed == 0)[0]
     dets = dets[keep, :]
     return dets
+
+
+@register
+class YOLOv5PostProcess(object):
+    __inject__ = ['decode', 'nms']
+
+    def __init__(self, decode=None, nms=None, max_det=300):
+        super(YOLOv5PostProcess, self).__init__()
+        self.decode = decode
+        self.nms = nms
+        self.max_det = max_det
+        self.fake_bboxes = paddle.to_tensor(
+            np.array(
+                [[-1, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype='float32'))
+        self.fake_bbox_num = paddle.to_tensor(np.array([1], dtype='int32'))
+        self.max_bbox_num = paddle.to_tensor(np.array([max_det], dtype='int32'))
+
+    def scale_coords(self, coords, im_shape, scale_factor):
+        img0_shape = im_shape[0].numpy()  
+        scale_h_ratio = scale_factor[:, 0].numpy()
+        scale_w_ratio = scale_factor[:, 1].numpy()
+        ratio = min(scale_h_ratio, scale_w_ratio)
+
+        pad_w = (img0_shape[1] * scale_w_ratio - img0_shape[1] * ratio) / 2
+        pad_h = (img0_shape[0] * scale_h_ratio - img0_shape[0] * ratio) / 2
+        coords[:, 0::2] -= pad_w
+        coords[:, 1::2] -= pad_h
+        coords[:, 0:4] /= paddle.to_tensor(ratio)
+
+        coords[:, 0::2] = paddle.clip(coords[:, 0::2], min=0, max=img0_shape[1])
+        coords[:, 1::2] = paddle.clip(coords[:, 1::2], min=0, max=img0_shape[0])
+        return coords
+
+    def __call__(self, yolox_head_outs, anchors, im_shape, scale_factor):
+        """
+        Decode the bbox and do NMS in YOLOX.
+        """
+        bboxes_maxwh, score, out_clses, out_scores, out_boxes = self.decode(yolox_head_outs, anchors)
+        bbox_pred_maxwh, bbox_num, nms_keep_idx = self.nms(bboxes_maxwh, score)
+        '''
+        if len(nms_keep_idx) == 0:
+            return self.fake_bboxes, self.fake_bbox_num
+        '''
+        bbox_clses = paddle.gather_nd(out_clses, nms_keep_idx)
+        bbox_scores = paddle.gather_nd(out_scores, nms_keep_idx)
+        bbox_coords = paddle.gather_nd(out_boxes, nms_keep_idx)
+        bbox_coords = self.scale_coords(bbox_coords, im_shape, scale_factor)
+        # num_id, score, xmin, ymin, xmax, ymax
+        bbox_pred = paddle.concat((bbox_clses, bbox_scores, bbox_coords), axis=-1)
+        '''
+        if bbox_pred.shape[0] > self.max_det:
+            bbox_pred = bbox_pred[:self.max_det]
+            bbox_num = self.max_bbox_num
+        '''
+        return bbox_pred, bbox_num
+        

@@ -1,0 +1,17 @@
+epoch: 300
+
+LearningRate:
+  base_lr: 0.01
+  schedulers:
+    - !OneCycle
+      max_epochs: 300
+      use_warmup: True
+    - !LinearWarmup
+      start_factor: 0.1
+      steps: 100
+
+OptimizerBuilder:
+  optimizer:
+    type: "Momentum"
+    momentum: 0.937
+    use_nesterov: True

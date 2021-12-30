@@ -21,9 +21,10 @@ import paddle.nn as nn
 import paddle.nn.functional as F
 from ppdet.core.workspace import register
 
-from ..bbox_utils import decode_yolo, xywh2xyxy, iou_similarity
+from ..bbox_utils import decode_yolo, xywh2xyxy, iou_similarity, bbox_iou
+from IPython import embed
 
-__all__ = ['YOLOv3Loss']
+__all__ = ['YOLOv3Loss', 'YOLOv5Loss']
 
 
 def bbox_transform(pbox, anchor, downsample):
@@ -203,4 +204,106 @@ class YOLOv3Loss(nn.Layer):
             loss += v
 
         yolo_losses['loss'] = loss
+        return yolo_losses
+
+
+@register
+class YOLOv5Loss(nn.Layer):
+    __shared__ = ['num_classes']
+
+    def __init__(self,
+                 num_classes=80,
+                 downsample=[32, 16, 8],
+                 label_smooth=False,
+                 balance=[4., 1., 0.4],
+                 box_weight=0.05,
+                 obj_weight=1.0,
+                 cls_weght=0.5):
+        super(YOLOv5Loss, self).__init__()
+        self.num_classes = num_classes
+        self.balance = balance
+        self.downsample = downsample
+        self.na = len(downsample)
+        self.no = self.num_classes + 4 + 1
+        self.gr = 1.0
+
+        self.BCEcls = nn.BCEWithLogitsLoss(reduction="none")
+        self.BCEobj = nn.BCEWithLogitsLoss(reduction="none")
+
+        self.loss_weights = {
+            'box': box_weight,
+            'obj': obj_weight,
+            'cls': cls_weght,
+        }
+
+        # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf
+        eps = 0.
+        self.cp = 1.0 - 0.5 * eps
+        self.cn = 0.5 * eps
+
+    def yolov5_loss(self, pi, t_cls, t_box, t_indices, t_anchor, balance):
+        b, a, gj, gi = t_indices
+        n = b.shape[0] # number of targets
+        tobj = paddle.zeros_like(pi[:, :, :, :, 0]) # [4, 3, 80, 80]
+        tobj.stop_gradient = True
+
+        loss = dict()
+        ps = pi[b, a, gj, gi] # TODO, fix in paddle 2.2.1
+        # [4, 3, 80, 80, 85] -> [21, 85]
+
+        # Regression
+        pxy = F.sigmoid(ps[:, :2]) * 2 - 0.5
+        pwh = (F.sigmoid(ps[:, 2:4]) * 2) ** 2 * t_anchor
+        pbox = paddle.concat((pxy, pwh), 1)  # predicted box # [21, 4]
+        iou = bbox_iou(pbox.T, t_box.T, x1y1x2y2=False, ciou=True)  # iou(prediction, target)
+        iou.stop_gradient = True
+        loss_box = (1.0 - iou).mean()
+
+        # Objectness
+        score_iou = iou.clip(0)
+        tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * score_iou # iou ratio
+        obji = self.BCEobj(pi[:, :, :, :, 4], tobj).mean() # [4, 3, 80, 80]
+        loss_obj = obji * balance
+
+        # Classification
+        t = paddle.full_like(ps[:, 5:], self.cn)
+        t[range(n), t_cls] = self.cp
+        t.stop_gradient = True
+        loss_cls = self.BCEcls(ps[:, 5:], t).mean()
+
+        loss['loss_box'] = loss_box * self.loss_weights['box']
+        loss['loss_obj'] = loss_obj * self.loss_weights['obj']
+        loss['loss_cls'] = loss_cls * self.loss_weights['cls']
+
+        return loss
+
+    def forward(self, inputs, targets, anchors):
+        assert len(inputs) == len(anchors)
+        batch_size = inputs[0].shape[0]
+        yolo_losses = dict()
+        for i, (p_det, balance) in enumerate(zip(inputs, self.balance)):
+            t_cls = targets['tcls{}'.format(i)][0]
+            t_box = targets['tbox{}'.format(i)][0]
+            t_anchor = targets['anchors{}'.format(i)][0]
+            # TODO, now each sample has all targets of the batch
+
+            num_indices = len(targets['indices{}'.format(i)])
+            t_indices = [targets['indices{}'.format(i)][j][0] for j in range(num_indices)]
+
+            bs, ch, h, w = p_det.shape
+            pi = p_det.reshape((bs, self.na, -1, h, w)).transpose((0, 1, 3, 4, 2))
+            
+            yolo_loss = self.yolov5_loss(pi, t_cls, t_box, t_indices, t_anchor, balance)
+
+            for k, v in yolo_loss.items():
+                if k in yolo_losses:
+                    yolo_losses[k] += v
+                else:
+                    yolo_losses[k] = v
+
+        loss = 0
+        for k, v in yolo_losses.items():
+            loss += v
+
+        yolo_losses['loss'] = loss * batch_size
         return yolo_losses

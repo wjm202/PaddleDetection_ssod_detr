@@ -16,7 +16,7 @@ import math
 import six
 import numpy as np
 from numbers import Integral
-
+from IPython import embed
 import paddle
 import paddle.nn as nn
 from paddle import ParamAttr
@@ -548,6 +548,109 @@ class YOLOBox(object):
         yolo_boxes = paddle.concat(boxes_list, axis=1)
         yolo_scores = paddle.concat(scores_list, axis=2)
         return yolo_boxes, yolo_scores
+
+
+@register
+@serializable
+class YOLOv5Box(object):
+    __shared__ = ['num_classes']
+
+    def __init__(self,
+                 num_classes=80,
+                 conf_thresh=0.25,
+                 downsample_ratio=32,
+                 anchor_levels=3,
+                 multi_label=True,
+                 max_wh=4096):
+        self.num_classes = num_classes
+        self.conf_thresh = conf_thresh
+        self.downsample_ratio = downsample_ratio
+        self.multi_label = multi_label
+        self.max_wh = max_wh
+        self.agnostic = False if num_classes > 1 else True
+
+        self.na = anchor_levels
+        self.no = num_classes + 4 + 1
+
+    def make_grid(self, nx, ny, anchor):
+        yv, xv = paddle.meshgrid([paddle.arange(ny), paddle.arange(nx)])
+        grid = paddle.stack((xv, yv), axis=2).unsqueeze(0)
+        grid = paddle.tile(grid, [self.na, 1, 1, 1])
+        # [1, nx, ny, 2]-> [na, nx, ny, 2]
+
+        anchor_ = np.array(anchor).reshape([-1, 1, 1, 2])
+        anchor_grid = anchor_.repeat(ny, axis=-3).repeat(nx, axis=-2)
+        anchor_grid = paddle.to_tensor(anchor_grid.astype(np.float32))
+
+        return grid, anchor_grid
+
+    def postprocessing_by_level(self, head_out, stride, anchor):
+        ny, nx = head_out.shape[2:]
+        grid, anchor_grid = self.make_grid(nx, ny, anchor)
+
+        nB = 1 # TODO: only support bs=1 now
+        boxes_scores_list = []
+        for idx in range(nB):
+            x = paddle.reshape(head_out[idx], [self.na, self.no, ny, nx]).transpose([0, 2, 3, 1])
+            y = F.sigmoid(x) # [na, nx, ny, no]
+
+            xy = (y[:, :, :, 0:2] * 2. - 0.5 + grid) * stride
+            wh = (y[:, :, :, 2:4] * 2) ** 2 * anchor_grid
+            lt_xy = (xy - wh / 2.)
+            rb_xy = (xy + wh / 2.)
+
+            boxes = paddle.concat((lt_xy, rb_xy), axis=-1)
+            # 'xmin ymin xmax ymax', shape [na, nx, ny, 4]         
+            boxes_scores = paddle.concat((boxes, y[:, :, :, 4:]), axis=-1)
+            boxes_scores = paddle.reshape(boxes_scores, [self.na * nx * ny, self.no])
+            boxes_scores_list.append(boxes_scores)
+        
+        boxes_scores_results = boxes_scores_list[0]
+        # TODO: paddle.stack(boxes_scores_list)
+        return boxes_scores_results
+
+    def __call__(self, yolo_head_out, anchors):
+        boxes_scores_list = []
+        self.strides = [self.downsample_ratio // 2**i for i in range(self.na)][::-1]
+        self.anchors = anchors[::-1]
+
+        for i, head_out in enumerate(yolo_head_out):
+            boxes_scores = self.postprocessing_by_level(head_out, self.strides[i], self.anchors[i] )
+            boxes_scores_list.append(boxes_scores)
+
+        boxes_scores_concats = paddle.concat(boxes_scores_list, axis=0)
+        keep_coarse = paddle.nonzero(boxes_scores_concats[:, 4:5] > self.conf_thresh)
+        yolo_boxes_scores = paddle.gather_nd(boxes_scores_concats, keep_coarse[:, 0:1]) 
+
+        yolo_boxes_scores[:, 5:] *= yolo_boxes_scores[:, 4:5]
+        out_boxes = yolo_boxes_scores[:, :4]
+        
+        if self.multi_label:
+            keep_fine = paddle.nonzero(yolo_boxes_scores[:, 5:] > self.conf_thresh)
+            out_scores = yolo_boxes_scores[:, 5:][keep_fine[:, 0]] 
+            mask = F.one_hot(keep_fine[:, 1], self.num_classes)
+            out_scores = paddle.masked_select(out_scores, mask > 0).unsqueeze(-1)
+
+            out_clses = keep_fine[:, 1:2]
+            out_clses = paddle.cast(out_clses, out_scores.dtype)
+
+            out_boxes = out_boxes[keep_fine[:, 0]]
+        else:
+            out_scores = paddle.max(yolo_boxes_scores[:, 5:], axis=-1).unsqueeze(-1)
+            max_idx = paddle.argmax(yolo_boxes_scores[:, 5:], axis=-1).unsqueeze(-1)
+            keep_fine = paddle.nonzero(out_scores > self.conf_thresh)
+
+            out_boxes = paddle.gather_nd(out_boxes, keep_fine[:, 0:1])
+            out_scores = paddle.gather_nd(out_scores, keep_fine[:, 0:1])
+            out_clses = paddle.gather_nd(max_idx, keep_fine[:, 0:1])
+            out_clses = paddle.cast(out_clses, out_scores.dtype)
+
+        c = out_clses * (0 if self.agnostic else self.max_wh)
+        out_boxes_maxwh = out_boxes + c
+        yolo_boxes_maxwh = paddle.reshape(out_boxes_maxwh, shape=[1, len(out_boxes_maxwh), 4])
+        yolo_scores = paddle.reshape(out_scores, shape=[1, 1, len(out_scores)])
+
+        return yolo_boxes_maxwh, yolo_scores, out_clses, out_scores, out_boxes
 
 
 @register

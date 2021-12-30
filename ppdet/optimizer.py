@@ -70,6 +70,42 @@ class CosineDecay(object):
 
 
 @serializable
+class OneCycle(object):
+    """
+    Cosine learning rate decay
+
+    Args:
+        max_epochs (int): max epochs for the training process.
+            if you commbine cosine decay with warmup, it is recommended that
+            the max_iters is much larger than the warmup iter
+    """
+
+    def __init__(self, max_epochs=1000, use_warmup=True):
+        self.max_epochs = max_epochs
+        self.use_warmup = use_warmup
+
+    def __call__(self,
+                 base_lr=None,
+                 boundary=None,
+                 value=None,
+                 step_per_epoch=None):
+        assert base_lr is not None, "either base LR or values should be provided"
+
+        max_iters = self.max_epochs * int(step_per_epoch)
+
+        if boundary is not None and value is not None and self.use_warmup:
+            for i in range(int(boundary[-1]), max_iters):
+                boundary.append(i)
+
+                decayed_lr = base_lr * 0.5 * (1 - 
+                    math.cos(i * math.pi / max_iters)) * (0.2 - 1) + 1
+                value.append(decayed_lr)
+            return optimizer.lr.PiecewiseDecay(boundary, value)
+
+        return optimizer.lr.CosineAnnealingDecay(base_lr, T_max=max_iters)
+
+
+@serializable
 class PiecewiseDecay(object):
     """
     Multi step learning rate decay

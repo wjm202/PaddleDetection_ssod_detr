@@ -17,7 +17,7 @@ from __future__ import division
 from __future__ import print_function
 
 import typing
-
+from IPython import embed
 try:
     from collections.abc import Sequence
 except Exception:
@@ -47,6 +47,7 @@ __all__ = [
     'PadMaskBatch',
     'Gt2GFLTarget',
     'Gt2CenterNetTarget',
+    'Gt2Yolov5Target',
 ]
 
 
@@ -280,6 +281,116 @@ class Gt2YoloTarget(BaseOperator):
             # remove useless gt_class and gt_score after target calculated
             sample.pop('gt_class')
             sample.pop('gt_score')
+
+        return samples
+
+
+@register_op
+class Gt2Yolov5Target(BaseOperator):
+    __shared__ = ['num_classes']
+    """
+    Generate YOLOv5 targets
+    """
+    def __init__(self,
+                 anchor_masks,
+                 anchors,
+                 downsample_ratios,
+                 bias=0.5,
+                 anchor_t=4.0,
+                 num_classes=80):
+        super(Gt2Yolov5Target, self).__init__()
+        self.anchors = [[anchors[i] for i in row] for row in anchor_masks]
+        self.downsample_ratios = downsample_ratios
+        self.bias = bias
+        self.off = np.array([
+            [0, 0],
+            [1, 0],
+            [0, 1],
+            [-1, 0],
+            [0, -1],  # j,k,l,m
+        ], dtype=np.float32) * self.bias
+        self.anchor_t = anchor_t
+        self.num_classes = num_classes
+
+    def __call__(self, samples, context=None):
+        assert len(self.anchors) == len(self.downsample_ratios), \
+            "anchors', and 'downsample_ratios' should have same length."
+        h, w = samples[0]['image'].shape[1:3]
+        gt_nums = [len(sample['gt_bbox']) for sample in samples]
+        nt = np.sum(gt_nums)
+        num_max = max(gt_nums)
+        #print([sample['im_id'] for sample in samples])
+
+        na = len(self.anchors)
+        tcls, tbox, indices, anch = [], [], [], []
+        gain = np.ones(7, dtype=np.float32)  # normalized to gridspace gain
+        ai = np.repeat(np.arange(na).reshape(na, 1), nt, axis=1)
+
+        gt_labels = []
+        for idx, sample in enumerate(samples):
+            gt_bbox = sample['gt_bbox']
+            gt_class = sample['gt_class']
+            nt = len(gt_bbox)
+            img_idx = np.repeat(np.array([[idx]]), nt, axis=0)
+            gt_labels.append(np.concatenate((img_idx, gt_class, gt_bbox), axis=-1))
+        gt_labels = np.concatenate(gt_labels)
+        targets = np.concatenate((np.repeat(gt_labels[None, :, :], na, axis=0), ai[:, :, None]), axis=2)
+        # targets.shape (3, 13, 7)
+
+        for i, (anchors, ratio) in enumerate(zip(self.anchors, self.downsample_ratios)):
+            anchors = np.array(anchors, dtype=np.float32) / ratio
+            gain[2:6] = [w / ratio, h / ratio, w / ratio, h / ratio] 
+
+            t = targets * gain
+            if len(targets):
+                # Matches
+                r = t[:, :, 4:6] / anchors[:, None]  # wh ratio
+                j = np.maximum(r, 1 / r).max(2) < self.anchor_t  # compare
+                new_t = t[j]  # filter
+
+                # Offsets
+                gxy = new_t[:, 2:4]  # grid xy
+                gxi = gain[[2, 3]] - gxy  # inverse
+                j, k = ((gxy % 1 < self.bias) & (gxy > 1)).T
+                l, m = ((gxi % 1 < self.bias) & (gxi > 1)).T
+                j = np.stack((np.ones_like(j), j, k, l, m))
+                t = np.repeat(new_t[None, :, :], 5, axis=0)[j]
+                offsets = (np.zeros_like(gxy)[None] + self.off[:, None])[j]
+                # (5, 6, 2)[5,2] -> (6, 2)
+            else:
+                t = targets[0]
+                offsets = 0
+                    
+            # Define
+            b, c = np.array(t[:, :2].T, dtype=int)  # image, class
+            gxy = np.array(t[:, 2:4], dtype=np.float32)  # grid xy
+            gwh = np.array(t[:, 4:6], dtype=np.float32)  # grid wh
+            gij = np.array(gxy - offsets, dtype=int) # int
+            gi, gj = gij.T  # grid xy indices
+            gj = np.array(gj.clip(0, gain[3] - 1), dtype=int)
+            gi = np.array(gi.clip(0, gain[2] - 1), dtype=int)
+            bbox = np.concatenate((gxy - gij, gwh), axis=1)
+            bbox = np.array(bbox, dtype=np.float32)
+
+            # Append
+            a = np.array(t[:, 6], dtype=int)  # anchor indices
+            indices.append((b, a, gj, gi))  # image, anchor, grid indices
+            tbox.append(bbox)  # box
+            anch.append(anchors[a])  # anchors
+            tcls.append(c)  # class
+
+
+        for idx, sample in enumerate(samples):
+            sample.pop('gt_class')
+            sample.pop('gt_bbox')
+            sample.pop('is_crowd')
+
+            # TODO, now each sample has all targets of the batch
+            for i in range(len(self.anchors)):
+                sample['tcls{}'.format(i)] = tcls[i]
+                sample['tbox{}'.format(i)] = tbox[i]
+                sample['indices{}'.format(i)] = indices[i]
+                sample['anchors{}'.format(i)] = anch[i]
 
         return samples
 
