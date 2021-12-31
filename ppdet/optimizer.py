@@ -15,7 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from IPython import embed
 import math
 import paddle
 import paddle.nn as nn
@@ -65,6 +65,54 @@ class CosineDecay(object):
                     (i - warmup_iters) * math.pi /
                     (max_iters - warmup_iters)) + 1)
                 value.append(decayed_lr)
+            return optimizer.lr.PiecewiseDecay(boundary, value)
+
+        return optimizer.lr.CosineAnnealingDecay(
+            base_lr, T_max=max_iters, eta_min=self.eta_min)
+
+
+@serializable
+class YOLOXCosineDecay(object):
+    """
+    Cosine learning rate decay with no_aug_iter in YOLOX, 
+    Args:
+        max_epochs (int): max epochs for the training process.
+            if you commbine cosine decay with warmup, it is recommended that
+            the max_iters is much larger than the warmup iter
+    """
+
+    def __init__(self, max_epochs=300, no_aug_epochs=15, min_lr_ratio=0.2, use_warmup=True, eta_min=0):
+        self.max_epochs = max_epochs
+        self.no_aug_epochs = no_aug_epochs
+        self.min_lr_ratio = min_lr_ratio
+        self.use_warmup = use_warmup
+        self.eta_min = eta_min
+
+    def __call__(self,
+                 base_lr=None,
+                 boundary=None,
+                 value=None,
+                 step_per_epoch=None):
+        assert base_lr is not None, "either base LR or values should be provided"
+        assert self.no_aug_epochs < self.max_epochs, "no_aug_epochs is {}, should be smaller than max_epochs {}".format(self.no_aug_epochs, self.max_epochs)
+        assert self.no_aug_epochs > 0, "YOLOXCosineDecay should set no_aug_epochs > 0"
+
+        max_iters = self.max_epochs * int(step_per_epoch)
+        no_aug_iters = self.no_aug_epochs * int(step_per_epoch)
+
+        if boundary is not None and value is not None and self.use_warmup:
+            warmup_iters = int(boundary[-1]) # len(boundary)
+
+            min_lr = base_lr * self.min_lr_ratio
+            for i in range(warmup_iters, max_iters):
+                boundary.append(i)
+                if i < max_iters - no_aug_iters:
+                    lr = min_lr + (base_lr - min_lr) * 0.5 * (math.cos(
+                        (i - warmup_iters) * math.pi /
+                        (max_iters - warmup_iters - no_aug_iters)) + 1.0)
+                else:
+                    lr = min_lr
+                value.append(lr)
             return optimizer.lr.PiecewiseDecay(boundary, value)
 
         return optimizer.lr.CosineAnnealingDecay(
@@ -176,6 +224,33 @@ class BurninWarmup(object):
         return boundary, value
 
 
+@serializable
+class ExpWarmup(object):
+    """
+    Warm up learning rate in exponential mode, used in YOLOX
+    Args:
+        warmup_epochs (int): warm up epochs
+    """
+
+    def __init__(self, start_lr=0., warmup_epochs=5):
+        super(ExpWarmup, self).__init__()
+        self.start_lr = start_lr
+        self.warmup_epochs = warmup_epochs
+
+    def __call__(self, base_lr, step_per_epoch):
+        boundary = []
+        value = []
+        warmup_total_iters = self.warmup_epochs * int(step_per_epoch)
+        for i in range(warmup_total_iters + 1):
+            factor = pow(i * 1.0 / warmup_total_iters, 2)
+            lr = (base_lr - self.start_lr) * factor + self.start_lr
+            value.append(lr)
+            if i > 0:
+                boundary.append(i)
+
+        return boundary, value
+
+
 @register
 class LearningRate(object):
     """
@@ -263,6 +338,8 @@ class OptimizerBuilder():
                     if all([k not in n for k in keys])
                 ]
             }]
+            logger.info('Totally {} params without weight_decay, they are {}.'.format(len(params[0]['params']), keys))
+            logger.info('Totally {} params with weight_decay.'.format(len(params[1]['params'])))
             del optim_args['without_weight_decay_params']
         else:
             params = model.parameters()

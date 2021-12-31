@@ -24,7 +24,7 @@ YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
   depthwise: False
-  yoloxmosaic_epoch: 285
+  mosaic_epoch: 285
   yolox_loss: YOLOXLoss
 
 YOLOXLoss:

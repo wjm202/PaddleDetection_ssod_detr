@@ -73,9 +73,10 @@ class DetDataset(Dataset):
             roidb = [roidb, copy.deepcopy(self.roidbs[idx])]
         elif self.mosaic_epoch == 0 or self._epoch < self.mosaic_epoch:
             n = len(self.roidbs)
+            assert self.mosaic_sample_num >= 4, "mosaic_sample_num should be set >= 4, default 4."
             roidb = [roidb, ] + [
                 copy.deepcopy(self.roidbs[np.random.randint(n)])
-                for _ in range(3)
+                for _ in range(self.mosaic_sample_num - 1)
             ]
         if isinstance(roidb, Sequence):
             for r in roidb:
@@ -94,6 +95,7 @@ class DetDataset(Dataset):
         self.mixup_epoch = kwargs.get('mixup_epoch', -1)
         self.cutmix_epoch = kwargs.get('cutmix_epoch', -1)
         self.mosaic_epoch = kwargs.get('mosaic_epoch', -1)
+        self.mosaic_sample_num = kwargs.get('mosaic_sample_num', 4)
 
     def set_transform(self, transform):
         self.transform = transform

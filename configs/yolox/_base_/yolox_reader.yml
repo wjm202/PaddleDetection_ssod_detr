@@ -16,7 +16,8 @@ TrainReader:
   batch_size: 8
   shuffle: true
   drop_last: true
-  yoloxmosaic_epoch: 285
+  mosaic_epoch: 285
+  mosaic_sample_num: 5
   use_shared_memory: true
 
 

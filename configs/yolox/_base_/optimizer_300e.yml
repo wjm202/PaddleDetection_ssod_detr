@@ -3,17 +3,20 @@ epoch: 300
 LearningRate:
   base_lr: 0.01
   schedulers:
-  - !CosineDecay
+  - !YOLOXCosineDecay
     max_epochs: 300
-  - !LinearWarmup
-    start_factor: 0.
-    steps: 500
+    no_aug_epochs: 15
+    min_lr_ratio: 0.2
+  - !ExpWarmup
+    start_lr: 0.
+    warmup_epochs: 5
 
 OptimizerBuilder:
   optimizer:
     momentum: 0.9
     type: Momentum
     use_nesterov: true
+    without_weight_decay_params: ['bn.weight', 'bn.bias']
   regularizer:
     factor: 0.0005
     type: L2

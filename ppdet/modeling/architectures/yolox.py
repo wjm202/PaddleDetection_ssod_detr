@@ -78,27 +78,10 @@ class YOLOX(BaseArch):
         neck_feats = self.neck(body_feats, self.for_mot)
 
         if self.training:
-            '''
-            gt_bbox = self.inputs['gt_bbox']     # [N, 120, 4]
-            gt_class = self.inputs['gt_class']   # [N, 120]
-            gt_class = gt_class.unsqueeze(2)     # [N, 120, 1]
-            gt_class = gt_class.astype(gt_bbox.dtype)
-            gt_class_bbox = paddle.concat([gt_class, gt_bbox], 2)
-            epoch_id = self.inputs['epoch_id']
-            '''
-            yolo_losses = self.yolox_head(neck_feats, self.inputs) #.get_loss(neck_feats, gt_class_bbox, epoch_id)
-            '''
-            loss = {}
-            loss.update(yolo_losses)
-            total_loss = paddle.add_n(list(loss.values()))
-            loss.update({'loss': total_loss})
-            '''
+            yolo_losses = self.yolox_head(neck_feats, self.inputs)
             return yolo_losses
         else:
             yolo_head_outs = self.yolox_head(neck_feats)
-
-            #scale_factor = self.inputs['scale_factor']
-            #yolo_head_outs = self.yolox_head.get_prediction(neck_feats, scale_factor)
             bbox, bbox_num = self.post_process(
                 yolo_head_outs, 
                 self.inputs['im_shape'], self.inputs['scale_factor'])

@@ -3530,9 +3530,8 @@ class YOLOXPadBox(BaseOperator):
 
 @register_op
 class SquareImage(BaseOperator):
-    def __init__(self, fill_value=0, is_channel_first=True):
+    def __init__(self, fill_value=114., is_channel_first=True):
         """
-        Pad zeros to bboxes if number of bboxes is less than num_max_boxes.
         Args:
             fill_value (int): the filled pixel value
             is_channel_first (bool): ...

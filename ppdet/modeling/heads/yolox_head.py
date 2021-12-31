@@ -29,7 +29,7 @@ __all__ = ['YOLOXHead']
 
 
 def bboxes_iou_batch(bboxes_a, bboxes_b, xyxy=True):
-    """计算两组矩形两两之间的iou
+    """
     Args:
         bboxes_a: (tensor) bounding boxes, Shape: [N, A, 4].
         bboxes_b: (tensor) bounding boxes, Shape: [N, B, 4].
@@ -42,7 +42,7 @@ def bboxes_iou_batch(bboxes_a, bboxes_b, xyxy=True):
     if xyxy:
         box_a = bboxes_a
         box_b = bboxes_b
-    else:  # cxcywh格式
+    else:  # cxcywh
         box_a = paddle.concat([bboxes_a[:, :, :2] - bboxes_a[:, :, 2:] * 0.5,
                                bboxes_a[:, :, :2] + bboxes_a[:, :, 2:] * 0.5], axis=-1)
         box_b = paddle.concat([bboxes_b[:, :, :2] - bboxes_b[:, :, 2:] * 0.5,
@@ -90,11 +90,10 @@ class YOLOXHead(nn.Layer):
                  strides=[8, 16, 32],
                  in_channels=[128, 256, 512],
                  channels=[256, 512, 1024],
-                 yoloxmosaic_epoch=285,
+                 mosaic_epoch=285,
                  act="silu",
                  yolox_loss='YOLOXLoss',
                  depthwise=False,
-                 nms_cfg=None,
                  prior_prob=0.01):
         """
         Head for YOLOX network
@@ -106,8 +105,8 @@ class YOLOXHead(nn.Layer):
         assert len(channels) > 0, "channels length should > 0"
         self.n_anchors = 1
         self.num_classes = num_classes
-        self.yoloxmosaic_epoch = yoloxmosaic_epoch
-        self.decode_in_inference = True  # for deploy, set to False ###
+        self.mosaic_epoch = mosaic_epoch
+        self.decode_in_inference = True  # for deploy, set to False
 
         self.cls_convs = nn.LayerList()
         self.reg_convs = nn.LayerList()
@@ -118,7 +117,6 @@ class YOLOXHead(nn.Layer):
         Conv = DWConv if depthwise else BaseConv
 
         self.prior_prob = prior_prob
-        # 类别分支最后的卷积。设置偏移的初始值使得各类别预测概率初始值为self.prior_prob (根据激活函数是sigmoid()时推导出，和RetinaNet中一样)
         bias_init_value = -math.log((1 - self.prior_prob) / self.prior_prob)
 
         for i in range(len(channels)):
@@ -171,151 +169,121 @@ class YOLOXHead(nn.Layer):
                     ]
                 )
             )
-            battr1 = ParamAttr(initializer=Constant(bias_init_value),
-                               regularizer=L2Decay(0.))   # 不可以加正则化的参数：norm层(比如bn层、affine_channel层、gn层)的scale、offset；卷积层的偏移参数。
+
+            battr = ParamAttr(
+                initializer=Constant(bias_init_value),
+                regularizer=L2Decay(0.))
             cls_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
                                       out_channels=self.n_anchors * self.num_classes,
                                       kernel_size=1,
                                       stride=1,
                                       padding=0,
-                                      bias_attr=battr1)
+                                      bias_attr=battr)
             self.cls_preds.append(cls_pred_conv)
-            battr2 = ParamAttr(initializer=Constant(bias_init_value),
-                               regularizer=L2Decay(0.))   # 不可以加正则化的参数：norm层(比如bn层、affine_channel层、gn层)的scale、offset；卷积层的偏移参数。
+
             reg_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
                                       out_channels=4,
                                       kernel_size=1,
                                       stride=1,
-                                      padding=0,
-                                      bias_attr=battr2)
+                                      padding=0)
             self.reg_preds.append(reg_pred_conv)
-            self.obj_preds.append(
-                nn.Conv2D(
-                    in_channels=int(256 * width_factor),
-                    out_channels=self.n_anchors * 1,
-                    kernel_size=1,
-                    stride=1,
-                    padding=0,
-                )
-            )
+
+            obj_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
+                                     out_channels=self.n_anchors * 1,
+                                     kernel_size=1,
+                                     stride=1,
+                                     padding=0,
+                                     bias_attr=battr)
+            self.obj_preds.append(obj_pred_conv)
 
         self.use_l1 = False
         self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
         self.strides = strides
         self.yolox_loss = yolox_loss
         self.grids = [paddle.zeros((1, ))] * len(channels)
-        self.nms_cfg = nms_cfg
 
     def forward(self, feats, targets=None):
+        outputs, x_shifts, y_shifts, expanded_strides, origin_preds = self.get_outputs(feats)
+
         if self.training:
             gt_bbox = targets['gt_bbox']     # [N, 120, 4]
             gt_class = targets['gt_class'].unsqueeze(2).astype(gt_bbox.dtype)   # [N, 120] # [N, 120, 1]
             gt_class_bbox = paddle.concat([gt_class, gt_bbox], axis=2)
-            epoch_id = targets['epoch_id']
-            return self.get_loss(feats, gt_class_bbox, epoch_id)
-        else:
-            return self.get_prediction(feats)
+            self.use_l1 = True if targets['epoch_id'] >= self.mosaic_epoch else False
 
-    def get_outputs(self, xin):
+            outputs = paddle.concat(outputs, axis=1)
+            yolox_losses = self.get_losses(
+                outputs,
+                x_shifts,
+                y_shifts,
+                expanded_strides,
+                origin_preds,
+                gt_class_bbox,
+                dtype=feats[0].dtype,
+            )
+            return yolox_losses
+        else:
+            self.hw = [x.shape[-2:] for x in outputs]
+            outputs = paddle.concat(
+                [paddle.reshape(x, (x.shape[0], x.shape[1], -1)) for x in outputs], axis=2
+            )
+            outputs = paddle.transpose(outputs, [0, 2, 1]) # [bs, 85, A] -> [bs, A, 85]
+
+            if self.decode_in_inference:
+                outputs = self.decode_outputs(outputs)
+            return outputs
+
+    def get_outputs(self, feats):
         outputs = []
         origin_preds = []
         x_shifts = []
         y_shifts = []
         expanded_strides = []
 
-        for k, (cls_conv, reg_conv, stride_this_level, x) in enumerate(
-            zip(self.cls_convs, self.reg_convs, self.strides, xin)
+        for i, (cls_conv, reg_conv, stride, x) in enumerate(
+            zip(self.cls_convs, self.reg_convs, self.strides, feats)
         ):
-            x = self.stems[k](x)
+            x = self.stems[i](x)
             cls_x = x
             reg_x = x
-
             cls_feat = cls_conv(cls_x)
-            cls_output = self.cls_preds[k](cls_feat)
-
+            cls_output = self.cls_preds[i](cls_feat)
             reg_feat = reg_conv(reg_x)
-            reg_output = self.reg_preds[k](reg_feat)
-            obj_output = self.obj_preds[k](reg_feat)
+            reg_output = self.reg_preds[i](reg_feat)
+            obj_output = self.obj_preds[i](reg_feat)
 
             if self.training:
                 output = paddle.concat([reg_output, obj_output, cls_output], 1)
-                # output.shape=[N, 1 * 80 * 80, 85]  output里面有解码后的xywh
-                # grid.shape=  [1, 1 * 80 * 80, 2]   格子左上角xy坐标，单位是这个特征图的stride
+                # output.shape=[N, 1 * 80 * 80, 85]  # xywh
+                # grid.shape=  [1, 1 * 80 * 80, 2]
                 output, grid = self.get_output_and_grid(
-                    output, k, stride_this_level
+                    output, i, stride
                 )
-                x_shifts.append(grid[:, :, 0])   # [1, 1 * 80 * 80]  格子左上角x坐标，单位是这个特征图的stride
-                y_shifts.append(grid[:, :, 1])   # [1, 1 * 80 * 80]  格子左上角y坐标，单位是这个特征图的stride
-                # [1, 1 * 80 * 80]  这个特征图的stride复制hsize*wsize份，意思是每个格子持有一个stride
-                expanded_stride = paddle.ones((1, grid.shape[1]), dtype=xin[0].dtype) * stride_this_level
+                x_shifts.append(grid[:, :, 0])   # [1, 1 * 80 * 80]
+                y_shifts.append(grid[:, :, 1])   # [1, 1 * 80 * 80]
+
+                expanded_stride = paddle.ones((1, grid.shape[1]), dtype=feats[0].dtype) * stride
                 expanded_strides.append(expanded_stride)
-                if self.use_l1:  # 如果使用L1损失。不使用马赛克增强后会使用L1损失。
-                    batch_size = reg_output.shape[0]      # 批大小
-                    hsize, wsize = reg_output.shape[-2:]  # 格子行数、列数
-                    # L1损失监督的是未解码的xywh
-                    reg_output = reg_output.reshape(
-                        (batch_size, self.n_anchors, 4, hsize, wsize)
-                    )
-                    reg_output = reg_output.transpose((0, 1, 3, 4, 2)).reshape(
-                        (batch_size, -1, 4)
-                    )
+
+                if self.use_l1:  # not use mosaic
+                    bs, _, hsize, wsize = reg_output.shape
+                    reg_output = reg_output.reshape((bs, self.n_anchors, 4, hsize, wsize)).transpose((0, 1, 3, 4, 2))
+
+                    reg_output = reg_output.reshape((bs, -1, 4))
                     origin_preds.append(reg_output.clone())
-
             else:
-                output = paddle.concat(
-                    [reg_output, F.sigmoid(obj_output), F.sigmoid(cls_output)], 1
-                )
-
+                objs = F.sigmoid(obj_output)
+                clses = F.sigmoid(cls_output)
+                output = paddle.concat([reg_output, objs, clses], axis=1)
+            
             outputs.append(output)
 
         return outputs, x_shifts, y_shifts, expanded_strides, origin_preds
 
-    def get_prediction(self, xin):
-        outputs, x_shifts, y_shifts, expanded_strides, origin_preds = self.get_outputs(xin)
-
-        # 设N=批大小
-        # 设A=n_anchors_all=每张图片输出的预测框数，当输入图片分辨率是640*640时，A=8400
-
-        self.hw = [x.shape[-2:] for x in outputs]
-        # [batch, 85, A]
-        outputs = paddle.concat(
-            [paddle.reshape(x, (x.shape[0], x.shape[1], -1)) for x in outputs], axis=2
-        )
-        # [batch, A, 85]
-        outputs = paddle.transpose(outputs, [0, 2, 1])
-
-        if self.decode_in_inference:
-            outputs = self.decode_outputs(outputs)
-
-        return outputs
-
-    def get_loss(self, xin, labels=None, epoch_id=0):
-        if epoch_id < self.yoloxmosaic_epoch:
-            self.use_l1 = False
-        else:
-            self.use_l1 = True
-        outputs, x_shifts, y_shifts, expanded_strides, origin_preds = self.get_outputs(xin)
-        outputs = paddle.concat(outputs, 1)
-        yolo_losses = self.get_losses(
-            x_shifts,
-            y_shifts,
-            expanded_strides,
-            labels,
-            outputs,
-            origin_preds,
-            dtype=xin[0].dtype,
-        )
-        loss = {}
-        loss.update(yolo_losses)
-        total_loss = paddle.add_n(list(loss.values()))
-        loss.update({'loss': total_loss})
-        return loss
-
     def get_output_and_grid(self, output, k, stride):
         grid = self.grids[k]
-
-        batch_size = output.shape[0]
-        n_ch = 5 + self.num_classes
+        bs = output.shape[0]
+        n_ch = self.num_classes + 5
         hsize, wsize = output.shape[-2:]
         if grid.shape[2:4] != output.shape[2:4]:
             yv, xv = paddle.meshgrid([paddle.arange(hsize), paddle.arange(wsize)])
@@ -324,14 +292,14 @@ class YOLOXHead(nn.Layer):
             grid = paddle.cast(grid, dtype=output.dtype)
             self.grids[k] = grid
 
-        output = paddle.reshape(output, (batch_size, self.n_anchors, n_ch, hsize, wsize))
+        output = paddle.reshape(output, (bs, self.n_anchors, n_ch, hsize, wsize))
         output = paddle.transpose(output, [0, 1, 3, 4, 2])
-        output = paddle.reshape(output, (batch_size, self.n_anchors * hsize * wsize, -1))   # [N, 1 * 80 * 80, 85]
+        output = paddle.reshape(output, (bs, self.n_anchors * hsize * wsize, -1))   # [N, 1 * 80 * 80, 85]
         grid = paddle.reshape(grid, (1, -1, 2))   # [1, 1 * 80 * 80, 2]
 
-        xy = (output[:, :, :2] + grid) * stride       # [N, 1 * 80 * 80, 2]  xy解码
-        wh = paddle.exp(output[:, :, 2:4]) * stride   # [N, 1 * 80 * 80, 2]  wh解码
-        output = paddle.concat([xy, wh, output[:, :, 4:]], 2)   # [N, 1 * 80 * 80, 85]   解码后的xywh放回output里面
+        xy = (output[:, :, :2] + grid) * stride       # [N, 1 * 80 * 80, 2]
+        wh = paddle.exp(output[:, :, 2:4]) * stride   # [N, 1 * 80 * 80, 2]
+        output = paddle.concat([xy, wh, output[:, :, 4:]], 2)   # [N, 1 * 80 * 80, 85]
         return output, grid
 
     def decode_outputs(self, outputs): # [1, 8400, 85]
@@ -349,38 +317,24 @@ class YOLOXHead(nn.Layer):
         outputs[:, :, 2:4] = paddle.exp(outputs[:, :, 2:4]) * strides
         return outputs
 
-    def get_losses(
-        self,
-        x_shifts,
-        y_shifts,
-        expanded_strides,
-        labels,
-        outputs,
-        origin_preds,
-        dtype):
-        # 设N=批大小
-        # 设A=n_anchors_all=每张图片输出的预测框数，当输入图片分辨率是640*640时，A=8400
-        N = outputs.shape[0]
-        A = outputs.shape[1]
-        # labels_numpy = labels.numpy()
 
-        # 1.把网络输出切分成预测框、置信度、类别概率
-        bbox_preds = outputs[:, :, :4]              # [N, A, 4]   这是解码后的xywh。
-        obj_preds = outputs[:, :, 4].unsqueeze(-1)  # [N, A, 1]   置信度。没有经过sigmoid()激活。
-        cls_preds = outputs[:, :, 5:]               # [N, A, n_cls]   n_cls个类别的条件概率。没有经过sigmoid()激活。
+    def get_losses(self, outputs, x_shifts, y_shifts, expanded_strides, origin_preds, labels, dtype):
+        N, A = outputs.shape[:2]
+        bbox_preds = outputs[:, :, :4]              # [N, A, 4] # xywh
+        obj_preds = outputs[:, :, 4:5]              # [N, A, 1]
+        cls_preds = outputs[:, :, 5:]               # [N, A, n_cls]
 
-        # 2.计算gt数目
+        # calculate targets
         labels = paddle.cast(labels, 'float32')  # [N, 120, 5]
         if_gt = labels.sum([2])    # [N, 120]
-        if_gt = paddle.cast(if_gt > 0, 'float32')  # [N, 120] 是gt处为1
-        nlabel = if_gt.sum([1])    # [N, ] 每张图片gt数量
+        if_gt = paddle.cast(if_gt > 0, 'float32')  # [N, 120]
+        nlabel = if_gt.sum([1])    # [N, ]
         nlabel = paddle.cast(nlabel, 'int32')
         nlabel.stop_gradient = True
-        G = nlabel.max()  # 每张图片最多的gt数
-
-        if G == 0:  # 所有图片都没有gt时
+        G = nlabel.max()  #
+        if G == 0:
             obj_targets = paddle.zeros((N, A, 1), 'float32')
-            num_fg = 1  # 所有图片都没有gt时，设为1
+            num_fg = 1
             loss_obj = self.bcewithlog_loss(obj_preds, obj_targets)
             loss_obj = loss_obj.sum() / num_fg
             losses = {
@@ -388,31 +342,26 @@ class YOLOXHead(nn.Layer):
             }
             return losses
 
-        labels = labels[:, :G, :]  # [N, G, 5] 从最多处截取
-        # labels_numpy = labels.numpy()  # [N, G, 5] 从最多处截取
+        labels = labels[:, :G, :]  # [N, G, 5]
+        is_gt = if_gt[:, :G]  # [N, G]
 
-        is_gt = if_gt[:, :G]  # [N, G] 是gt处为1。从最多处截取
-
-        # 3.拼接用到的常量张量x_shifts、y_shifts、expanded_strides
-        A = outputs.shape[1]  # 一张图片出8400个anchor
-        x_shifts = paddle.concat(x_shifts, 1)  # [1, A]  每个格子左上角的x坐标。单位是下采样步长。比如，第0个特征图的1代表的是8个像素，第2个特征图的1代表的是32个像素。
-        y_shifts = paddle.concat(y_shifts, 1)  # [1, A]  每个格子左上角的y坐标。单位是下采样步长。
-        expanded_strides = paddle.concat(expanded_strides, 1)  # [1, A]  每个anchor对应的下采样倍率。依次是8, 16, 32
+        A = outputs.shape[1]
+        x_shifts = paddle.concat(x_shifts, 1)  # [1, A]
+        y_shifts = paddle.concat(y_shifts, 1)  # [1, A]
+        expanded_strides = paddle.concat(expanded_strides, 1)  # [1, A]
         if self.use_l1:
             origin_preds = paddle.concat(origin_preds, 1)  # [N, A, 4]
 
-        # 4.对于每张图片，决定哪些样本作为正样本
-
-        # 4-1.将每张图片的gt的坐标宽高、类别id提取出来。
+        # gt2target
         gt_bboxes = labels[:, :, 1:5]  # [N, G, 4]
         gt_classes = labels[:, :, 0]   # [N, G]
 
-        # 4-2.get_assignments()确定正负样本，里面的张量不需要梯度。
+        # get_assignments
         (
-            gt_matched_classes,
-            fg_mask,
-            pred_ious_this_matching,
-            matched_gt_inds,
+            gt_matched_classes,        # [num_fg, ]
+            fg_mask,                   # [N, A]
+            pred_ious_this_matching,   # [num_fg, ]
+            matched_gt_inds,           # [num_fg, ]
             num_fg,
         ) = self.get_assignments(  # noqa
             N,
@@ -428,49 +377,41 @@ class YOLOXHead(nn.Layer):
             obj_preds,
             is_gt,
         )
-        # self.get_assignments()返回的结果：
-        # num_fg。                  [1, ]       所有图片前景（最终正样本）个数
-        # gt_matched_classes。      [num_fg, ]  最终正样本需要学习的类别id
-        # pred_ious_this_matching。 [num_fg, ]  最终正样本和所学gt的iou
-        # matched_gt_inds。         [num_fg, ]  最终正样本是匹配到了第几个gt（在gt_classes.shape=[N*G, ]中的坐标）
-        # fg_mask。                 [N, A]      最终正样本处为1
 
-        # 5.准备监督信息
-        # 第一步，准备 各类别概率 需要的监督信息。
-        eye = paddle.eye(self.num_classes, dtype='float32')  # [80, 80]  对角线位置全是1，其余位置全为0的矩阵。
-        one_hot = paddle.gather(eye, gt_matched_classes)  # [num_fg, 80]  num_fg个最终正样本需要学习的类别one_hot向量。
-        cls_targets = one_hot * pred_ious_this_matching.unsqueeze(-1)  # [num_fg, 80]  num_fg个最终正样本需要学习的类别one_hot向量需乘以其与所学gt的iou。
+        eye = paddle.eye(self.num_classes, dtype='float32')
+        one_hot = paddle.gather(eye, gt_matched_classes)  # [num_fg, 80]
+        # one_hot = F.one_hot(gt_matched_classes, self.num_classes)
+        cls_targets = one_hot * pred_ious_this_matching.unsqueeze(-1)  # [num_fg, 80]
+        obj_targets = fg_mask.reshape((N * A, 1))
+        reg_targets = paddle.gather(gt_bboxes.reshape((N * G, 4)), matched_gt_inds)  # [num_fg, 4]
 
-        # 第二步，准备 置信度obj-ness 需要的监督信息。
-        obj_targets = fg_mask.reshape((N*A, 1))  # [N*A, 1]   每个anchor obj-ness处需要学习的目标。
-        # 第三步，准备 回归分支 需要的监督信息。
-        reg_targets = paddle.gather(gt_bboxes.reshape((N*G, 4)), matched_gt_inds)  # [num_fg, 4]  num_fg个最终正样本需要学习的预测框xywh。
-        # 第四步，如果使用L1损失，准备 L1损失 需要的监督信息。
         l1_targets = []
         if self.use_l1:
-            pos_index_ = paddle.nonzero(fg_mask > 0)   # [num_fg, 2]   最终正样本在fg_mask.shape=[N, A]中的坐标。
-            pos_index2 = pos_index_[:, 1]              # [num_fg, ]    最终正样本在fg_mask.shape=[N, A]中第1维（A那维）的坐标。
-            # L1损失监督的是最终正样本未解码的xywh，所以把reg_targets编码成未解码的状态，得到l1_targets。
+            pos_idx = paddle.nonzero(fg_mask > 0)[:, 1]   # [num_fg, 2] fg_mask.shape=[N, A]
+
             l1_targets = self.get_l1_target(
                 paddle.zeros((num_fg, 4), 'float32'),
                 reg_targets,
-                paddle.gather(expanded_strides[0], pos_index2),
-                x_shifts=paddle.gather(x_shifts[0], pos_index2),
-                y_shifts=paddle.gather(y_shifts[0], pos_index2),
+                stride=paddle.gather(expanded_strides[0], pos_idx),
+                x_shifts=paddle.gather(x_shifts[0], pos_idx),
+                y_shifts=paddle.gather(y_shifts[0], pos_idx),
             )
 
-        # 监督信息停止梯度
+        # stop_gradient
         fg_masks = fg_mask.reshape((N*A, ))   # [N*A, ]
         cls_targets.stop_gradient = True  # [num_fg, 80]
         reg_targets.stop_gradient = True  # [num_fg, 4]
         obj_targets.stop_gradient = True  # [N*A, 1]
         fg_masks.stop_gradient = True     # [N*A, ]
 
-
-        # 6.计算损失
-        losses = self.yolox_loss(num_fg, bbox_preds, obj_preds, cls_preds, origin_preds,
+        yolox_losses = self.yolox_loss(num_fg, bbox_preds, obj_preds, cls_preds, origin_preds,
                                  fg_masks, reg_targets, obj_targets, cls_targets, l1_targets, self.num_classes, self.use_l1)
-        return losses
+        loss_yolox = {}
+        loss_yolox.update(yolox_losses)
+        total_loss = paddle.add_n(list(loss_yolox.values()))
+        loss_yolox.update({'loss': total_loss})
+        
+        return loss_yolox
 
     def get_l1_target(self, l1_target, gt, stride, x_shifts, y_shifts, eps=1e-8):
         l1_target[:, 0] = gt[:, 0] / stride - x_shifts
@@ -495,7 +436,7 @@ class YOLOXHead(nn.Layer):
         cls_preds,
         obj_preds,
         is_gt):
-        # 4-2.get_assignments()确定正负样本，里面的张量不需要梯度。
+        # 4-2.get_assignments确定正负样本，里面的张量不需要梯度。
         # 4-2-1.确定 候选正样本。
 
         # is_in_boxes_or_center。  [N, A] 每个格子是否是在 任意gt内部 或 任意gt的镜像gt内部（不要求同一个gt）
@@ -513,10 +454,6 @@ class YOLOXHead(nn.Layer):
             G,
         )
 
-        '''
-        gt_bboxes     [N, G, 4]
-        bbox_preds    [N, A, 4]
-        '''
         # 4-2-2.计算每张图片 所有gt 和 所有预测框 两两之间的iou 的cost，iou越大cost越小，越有可能成为最终正样本。
         pair_wise_ious = bboxes_iou_batch(gt_bboxes, bbox_preds, False)  # [N, G, A]  两两之间的iou。
         # 假gt 和 任意预测框 的iou置为0
@@ -608,7 +545,7 @@ class YOLOXHead(nn.Layer):
         gt_bboxes_l = paddle.tile(gt_bboxes_l, [1, 1, A])  # [N, G, A]   重复A次
 
         gt_bboxes_r = (gt_bboxes[:, :, 0] + 0.5 * gt_bboxes[:, :, 2]).unsqueeze(2)   # [N, G, 1]   cx + w/2   gt右下角x坐标
-        gt_bboxes_r = paddle.tile(gt_bboxes_r, [1, 1, A])  # [N, G, A]   重复A次
+        gt_bboxes_r = paddle.tile(gt_bboxes_r, [1, 1, A])  # [N, G, A]
 
         gt_bboxes_t = (gt_bboxes[:, :, 1] - 0.5 * gt_bboxes[:, :, 3]).unsqueeze(2)   # [N, G, 1]   cy - h/2   gt左上角y坐标
         gt_bboxes_t = paddle.tile(gt_bboxes_t, [1, 1, A])  # [N, G, A]   重复A次
@@ -616,7 +553,7 @@ class YOLOXHead(nn.Layer):
         gt_bboxes_b = (gt_bboxes[:, :, 1] + 0.5 * gt_bboxes[:, :, 3]).unsqueeze(2)   # [N, G, 1]   cy + h/2   gt右下角y坐标
         gt_bboxes_b = paddle.tile(gt_bboxes_b, [1, 1, A])  # [N, G, A]   重复A次
 
-        # 每个格子的中心点是否在gt内部。
+        # 每个格子的中心点是否在gt内部
         b_l = x_centers - gt_bboxes_l  # [N, G, A]  格子的中心点x - gt左上角x坐标
         b_r = gt_bboxes_r - x_centers  # [N, G, A]  gt右下角x坐标 - 格子的中心点x
         b_t = y_centers - gt_bboxes_t  # [N, G, A]  格子的中心点y - gt左上角y坐标
