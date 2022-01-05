@@ -6,7 +6,7 @@ LearningRate:
   - !YOLOXCosineDecay
     max_epochs: 300
     no_aug_epochs: 15
-    min_lr_ratio: 0.2
+    min_lr_ratio: 0.05
   - !ExpWarmup
     start_lr: 0.
     warmup_epochs: 5
@@ -16,7 +16,9 @@ OptimizerBuilder:
     momentum: 0.9
     type: Momentum
     use_nesterov: true
-    without_weight_decay_params: ['bn.weight', 'bn.bias']
+    param_groups:
+      - params: ['bias', 'bn']
+        weight_decay: 0.
   regularizer:
     factor: 0.0005
     type: L2

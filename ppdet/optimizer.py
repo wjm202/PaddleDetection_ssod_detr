@@ -94,7 +94,7 @@ class YOLOXCosineDecay(object):
                  value=None,
                  step_per_epoch=None):
         assert base_lr is not None, "either base LR or values should be provided"
-        assert self.no_aug_epochs < self.max_epochs, "no_aug_epochs is {}, should be smaller than max_epochs {}".format(self.no_aug_epochs, self.max_epochs)
+        assert self.no_aug_epochs <= self.max_epochs, "no_aug_epochs is {}, should be smaller than max_epochs {}".format(self.no_aug_epochs, self.max_epochs)
         assert self.no_aug_epochs > 0, "YOLOXCosineDecay should set no_aug_epochs > 0"
 
         max_iters = self.max_epochs * int(step_per_epoch)
@@ -104,7 +104,7 @@ class YOLOXCosineDecay(object):
             warmup_iters = int(boundary[-1]) # len(boundary)
 
             min_lr = base_lr * self.min_lr_ratio
-            for i in range(warmup_iters, max_iters):
+            for i in range(warmup_iters + 1, max_iters):
                 boundary.append(i)
                 if i < max_iters - no_aug_iters:
                     lr = min_lr + (base_lr - min_lr) * 0.5 * (math.cos(
@@ -241,8 +241,8 @@ class ExpWarmup(object):
         boundary = []
         value = []
         warmup_total_iters = self.warmup_epochs * int(step_per_epoch)
-        for i in range(warmup_total_iters + 1):
-            factor = pow(i * 1.0 / warmup_total_iters, 2)
+        for i in range(warmup_total_iters):
+            factor = pow((i + 1) * 1.0 / warmup_total_iters, 2)
             lr = (base_lr - self.start_lr) * factor + self.start_lr
             value.append(lr)
             if i > 0:
@@ -324,23 +324,38 @@ class OptimizerBuilder():
             optim_args['weight_decay'] = regularization
         op = getattr(optimizer, optim_type)
 
-        if 'without_weight_decay_params' in optim_args:
-            keys = optim_args['without_weight_decay_params']
-            params = [{
-                'params': [
-                    p for n, p in model.named_parameters()
-                    if any([k in n for k in keys])
-                ],
-                'weight_decay': 0.
-            }, {
-                'params': [
-                    p for n, p in model.named_parameters()
-                    if all([k not in n for k in keys])
-                ]
-            }]
-            logger.info('Totally {} params without weight_decay, they are {}.'.format(len(params[0]['params']), keys))
-            logger.info('Totally {} params with weight_decay.'.format(len(params[1]['params'])))
-            del optim_args['without_weight_decay_params']
+        if 'param_groups' in optim_args:
+            assert isinstance(optim_args['param_groups'], list), ''
+
+            param_groups = optim_args.pop('param_groups')
+
+            params, visited = [], []
+            for group in param_groups:
+                assert isinstance(group,
+                                  dict) and 'params' in group and isinstance(
+                                      group['params'], list), ''
+                
+                _params = {
+                    n: p
+                    for n, p in model.named_parameters()
+                    if any([k in n for k in group['params']])
+                }
+                _group = group.copy()
+                _group.update({'params': list(_params.values())})
+                logger.info('There are {} params have weight_decay of {}, they are {}.'.format(len(_params), group['weight_decay'], group['params']))
+
+                params.append(_group)
+                visited.extend(list(_params.keys()))
+
+            ext_params = [
+                p for n, p in model.named_parameters() if n not in visited
+            ]
+
+            if len(ext_params) < len(model.parameters()):
+                params.append({'params': ext_params})
+
+            elif len(ext_params) > len(model.parameters()):
+                raise RuntimeError
         else:
             params = model.parameters()
 

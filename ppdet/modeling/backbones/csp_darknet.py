@@ -24,13 +24,13 @@ from ..shape_spec import ShapeSpec
 __all__ = ['CSPDarkNet', 'BaseConv', 'DWConv', 'Bottleneck', 'SPPLayer', 'SPPFLayer']
 
 
-def get_activation(name="silu"):
+def get_activation(name="silu", inplace=True):
     if name == "silu":
-        module = nn.Silu()
+        module = nn.Silu() #(inplace=inplace)
     elif name == "relu":
-        module = nn.ReLU()
+        module = nn.ReLU(inplace=inplace)
     elif name == "lrelu":
-        module = nn.LeakyReLU(0.1)
+        module = nn.LeakyReLU(0.1, inplace=inplace)
     else:
         raise AttributeError("Unsupported act type: {}".format(name))
     return module
@@ -99,9 +99,10 @@ class BaseConv(nn.Layer):
             learning_rate=norm_lr,
             regularizer=L2Decay(norm_decay))
 
-        self.bn = nn.BatchNorm2D(out_channels, weight_attr=pattr, bias_attr=battr, momentum=0.97, epsilon=1e-3) 
+        #self.bn = nn.BatchNorm2D(out_channels) #, weight_attr=pattr, bias_attr=battr) #, momentum=0.97, epsilon=1e-3)
+        self.bn = nn.BatchNorm2D(out_channels, weight_attr=pattr, bias_attr=battr, momentum=0.03, epsilon=1e-3) 
         # bn not eps=1e-5, momentum=0.1
-        self.act = get_activation(act)
+        self.act = get_activation(act, inplace=True)
 
     def forward(self, x):
         if self.training:
