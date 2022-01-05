@@ -212,6 +212,33 @@ class BurninWarmup(object):
         return boundary, value
 
 
+@serializable
+class ExpWarmup(object):
+    """
+    Warm up learning rate in exponential mode, used in YOLOX
+    Args:
+        warmup_epochs (int): warm up epochs
+    """
+
+    def __init__(self, start_lr=0., warmup_epochs=5):
+        super(ExpWarmup, self).__init__()
+        self.start_lr = start_lr
+        self.warmup_epochs = warmup_epochs
+
+    def __call__(self, base_lr, step_per_epoch):
+        boundary = []
+        value = []
+        warmup_total_iters = self.warmup_epochs * int(step_per_epoch)
+        for i in range(warmup_total_iters + 1):
+            factor = pow(i * 1.0 / warmup_total_iters, 2)
+            lr = (base_lr - self.start_lr) * factor + self.start_lr
+            value.append(lr)
+            if i > 0:
+                boundary.append(i)
+
+        return boundary, value
+
+
 @register
 class LearningRate(object):
     """
@@ -302,6 +329,7 @@ class OptimizerBuilder():
                 }
                 _group = group.copy()
                 _group.update({'params': list(_params.values())})
+                logger.info('There are {} params have weight_decay of {}, they are {}.'.format(len(_params), group['weight_decay'], group['params']))
 
                 params.append(_group)
                 visited.extend(list(_params.keys()))

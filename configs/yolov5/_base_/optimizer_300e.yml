@@ -6,12 +6,18 @@ LearningRate:
     - !OneCycle
       max_epochs: 300
       use_warmup: True
-    - !LinearWarmup
-      start_factor: 0.1
-      steps: 100
+    - !ExpWarmup
+      start_lr: 0.
+      warmup_epochs: 3
 
 OptimizerBuilder:
   optimizer:
     type: "Momentum"
     momentum: 0.937
     use_nesterov: True
+    param_groups:
+      - params: ['bias', 'bn']
+        weight_decay: 0.0
+  regularizer:
+    factor: 0.0005
+    type: L2
