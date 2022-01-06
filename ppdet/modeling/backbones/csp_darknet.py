@@ -159,7 +159,7 @@ class Focus(nn.Layer):
             ],
             axis=1,
         )
-        out = self.conv2(y)
+        out = self.conv(y)
         return out
 
 
@@ -369,7 +369,7 @@ class CSPDarkNet(nn.Layer):
             self.csp_dark_blocks.append(nn.Sequential(*stage))
 
         self._out_channels = [_out_channels[i] for i in self.return_idx]
-        self.strides = [[2, 4, 8, 16, 32][i] for i in self.return_idx]
+        self.strides = [[2, 4, 8, 16, 32, 64][i] for i in self.return_idx] # add 64 for P6
 
     def forward(self, inputs):
         x = inputs['image']

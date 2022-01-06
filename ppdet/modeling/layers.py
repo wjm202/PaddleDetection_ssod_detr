@@ -556,7 +556,6 @@ class YOLOv5Box(object):
                  num_classes=80,
                  conf_thresh=0.25,
                  downsample_ratio=32,
-                 anchor_levels=3,
                  multi_label=True,
                  max_wh=4096):
         self.num_classes = num_classes
@@ -565,8 +564,7 @@ class YOLOv5Box(object):
         self.multi_label = multi_label
         self.max_wh = max_wh
         self.agnostic = False if num_classes > 1 else True
-
-        self.na = anchor_levels
+        self.na = 3
         self.no = num_classes + 4 + 1
 
     def make_grid(self, nx, ny, anchor):
@@ -608,11 +606,12 @@ class YOLOv5Box(object):
 
     def __call__(self, yolo_head_out, anchors):
         boxes_scores_list = []
-        self.strides = [self.downsample_ratio // 2**i for i in range(self.na)][::-1]
+        num_levels = len(yolo_head_out)
+        self.strides = [self.downsample_ratio // 2**i for i in range(num_levels)][::-1]
         self.anchors = anchors[::-1]
 
         for i, head_out in enumerate(yolo_head_out):
-            boxes_scores = self.postprocessing_by_level(head_out, self.strides[i], self.anchors[i] )
+            boxes_scores = self.postprocessing_by_level(head_out, self.strides[i], self.anchors[i])
             boxes_scores_list.append(boxes_scores)
 
         boxes_scores_concats = paddle.concat(boxes_scores_list, axis=0)

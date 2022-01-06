@@ -1,0 +1,52 @@
+worker_num: 2
+TrainReader:
+  inputs_def:
+    num_max_boxes: 120
+  sample_transforms:
+    - Decode: {}
+    - RGBReverse: {}
+    - MosaicPerspective: {target_size: 1280} #  # x y w h
+    - BboxPixelXYXY2NormCXCYWH: {}
+    #- LetterBox: {target_size: 640, auto: False, scaleup: False}
+    #- Albumentations: {}
+    - RandomHSV: {hgain: 0.015, sgain: 0.7, vgain: 0.4}
+    - RandomFlip: {}
+    - BboxXYXY2XYWH: {}
+    - NormalizeBox: {}
+    - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
+    - RGBReverse: {}
+    - Permute: {}
+  batch_transforms:
+    - Gt2Yolov5Target: 
+        anchor_masks: [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]]
+        anchors: [[19, 27], [44, 40], [38, 94],
+                  [96, 68], [86, 152], [180, 137],
+                  [140, 301], [303, 264], [238, 542],
+                  [436, 615], [739, 380], [925, 792]]
+        downsample_ratios: [8, 16, 32, 64]
+  batch_size: 8
+  shuffle: True
+  drop_last: True
+  use_shared_memory: True
+  collate_batch: True # False TODO
+  mosaic_epoch: 300
+
+
+EvalReader:
+  sample_transforms:
+    - Decode: {}
+    - LetterBox: {target_size: 1280, auto: True, scaleup: True}
+    - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
+    - Permute: {}
+  batch_size: 1
+
+
+TestReader:
+  inputs_def:
+    image_shape: [3, 1280, 1280]
+  sample_transforms:
+    - Decode: {}
+    - LetterBox: {target_size: [1280, 1280], auto: False, scaleup: False}
+    - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
+    - Permute: {}
+  batch_size: 1

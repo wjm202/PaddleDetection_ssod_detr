@@ -213,17 +213,15 @@ class YOLOv5Loss(nn.Layer):
 
     def __init__(self,
                  num_classes=80,
-                 downsample=[32, 16, 8],
-                 label_smooth=False,
-                 balance=[4., 1., 0.4],
+                 balance=[4.0, 1.0, 0.4],
                  box_weight=0.05,
                  obj_weight=1.0,
-                 cls_weght=0.5):
+                 cls_weght=0.5,
+                 label_smooth_eps=0.):
         super(YOLOv5Loss, self).__init__()
         self.num_classes = num_classes
         self.balance = balance
-        self.downsample = downsample
-        self.na = len(downsample)
+        self.na = 3
         self.no = self.num_classes + 4 + 1
         self.gr = 1.0
 
@@ -236,8 +234,7 @@ class YOLOv5Loss(nn.Layer):
             'cls': cls_weght,
         }
 
-        # Class label smoothing https://arxiv.org/pdf/1902.04103.pdf
-        eps = 0.
+        eps = label_smooth_eps if label_smooth_eps > 0 else 0.
         self.cp = 1.0 - 0.5 * eps
         self.cn = 0.5 * eps
 

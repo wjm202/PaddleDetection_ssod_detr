@@ -2,10 +2,10 @@ _BASE_: [
   '../datasets/coco_detection.yml',
   '../runtime.yml',
   '_base_/optimizer_300e.yml',
-  '_base_/yolov5_cspdarknet.yml',
-  '_base_/yolov5_reader.yml',
+  '_base_/yolov5p6_cspdarknet.yml',
+  '_base_/yolov5p6_reader.yml',
 ]
-weights: output/yolov5_s_coco/model_final
+weights: output/yolov5_p6_s_coco/model_final
 
 depth_factor: 0.33
 width_factor: 0.50
@@ -21,8 +21,8 @@ TrainDataset:
 EvalDataset:
   !COCODataSet
     image_dir: val2017
-    #anno_path: annotations/instances_val2017.json
-    anno_path: annotations/instances_val2017_im8.json
+    anno_path: annotations/instances_val2017.json
+    #anno_path: annotations/instances_val2017_im8.json
     dataset_dir: dataset/coco
 
 log_iter: 1 #20
@@ -35,9 +35,9 @@ TrainReader:
   sample_transforms:
     - Decode: {}
     - RGBReverse: {}
-    - MosaicPerspective: {target_size: 640} #  # x y w h
+    - MosaicPerspective: {target_size: 1280} #  # x y w h
     - BboxPixelXYXY2NormCXCYWH: {}
-    #- LetterBox: {target_size: 640, auto: False, scaleup: False}
+    #- LetterBox: {target_size: 1280, auto: False, scaleup: False}
     #- Albumentations: {}
     - RandomHSV: {hgain: 0.015, sgain: 0.7, vgain: 0.4}
     - RandomFlip: {}
@@ -48,11 +48,12 @@ TrainReader:
     - Permute: {}
   batch_transforms:
     - Gt2Yolov5Target: 
-        anchor_masks: [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
-        anchors: [[10, 13], [16, 30], [33, 23],
-                  [30, 61], [62, 45], [59, 119],
-                  [116, 90], [156, 198], [373, 326]]
-        downsample_ratios: [8, 16, 32]
+        anchor_masks: [[0, 1, 2], [3, 4, 5], [6, 7, 8], [9, 10, 11]]
+        anchors: [[19, 27], [44, 40], [38, 94],
+                  [96, 68], [86, 152], [180, 137],
+                  [140, 301], [303, 264], [238, 542],
+                  [436, 615], [739, 380], [925, 792]]
+        downsample_ratios: [8, 16, 32, 64]
   batch_size: 4
   shuffle: False
   drop_last: True
@@ -64,7 +65,7 @@ TrainReader:
 EvalReader:
   sample_transforms:
     - Decode: {}
-    - LetterBox: {target_size: 640, auto: True, scaleup: True}
+    - LetterBox: {target_size: 1280, auto: True, scaleup: True}
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
     - Permute: {}
   batch_size: 1
@@ -72,14 +73,13 @@ EvalReader:
 
 TestReader:
   inputs_def:
-    image_shape: [3, 640, 640]
+    image_shape: [3, 1280, 1280]
   sample_transforms:
     - Decode: {}
-    - LetterBox: {target_size: [640, 640], auto: False, scaleup: False}
+    - LetterBox: {target_size: [1280, 1280], auto: False, scaleup: False}
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
     - Permute: {}
   batch_size: 1
-
 
 
 epoch: 10

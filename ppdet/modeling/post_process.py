@@ -758,11 +758,11 @@ class YOLOv5PostProcess(object):
         coords[:, 1::2] = paddle.clip(coords[:, 1::2], min=0, max=img0_shape[0])
         return coords
 
-    def __call__(self, yolox_head_outs, anchors, im_shape, scale_factor):
+    def __call__(self, yolo_head_outs, anchors, im_shape, scale_factor):
         """
         Decode the bbox and do NMS in YOLOX.
         """
-        bboxes_maxwh, score, out_clses, out_scores, out_boxes = self.decode(yolox_head_outs, anchors)
+        bboxes_maxwh, score, out_clses, out_scores, out_boxes = self.decode(yolo_head_outs, anchors)
         bbox_pred_maxwh, bbox_num, nms_keep_idx = self.nms(bboxes_maxwh, score)
         '''
         if len(nms_keep_idx) == 0:

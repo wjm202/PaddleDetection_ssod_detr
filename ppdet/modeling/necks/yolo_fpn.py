@@ -21,7 +21,7 @@ from ..backbones.darknet import ConvBNLayer
 from ..backbones.csp_darknet import BaseConv, DWConv, CSPLayer
 from ..shape_spec import ShapeSpec
 
-__all__ = ['YOLOv3FPN', 'PPYOLOFPN', 'PPYOLOTinyFPN', 'PPYOLOPAN', 'YOLOPAFPN']
+__all__ = ['YOLOv3FPN', 'PPYOLOFPN', 'PPYOLOTinyFPN', 'PPYOLOPAN', 'YOLOCSPPAN']
 
 
 def add_coord(x, data_format):
@@ -991,110 +991,93 @@ class PPYOLOPAN(nn.Layer):
 
 @register
 @serializable
-class YOLOPAFPN(nn.Layer):
+class YOLOCSPPAN(nn.Layer):
     """
-    YOLOPAFPN, used in YOLOv5 and YOLOX.
+    YOLO CSP-PAN, used in YOLOv5 and YOLOX.
     """
     __shared__ = ['depth_factor', 'width_factor', 'act']
 
     def __init__(self,
                  depth_factor=1.0,
                  width_factor=1.0,
-                 in_channels=[128, 256, 512],
-                 channels=[256, 512, 1024],
+                 in_channels=[256, 512, 1024],
                  depthwise=False,
-                 bias=False,
                  act='silu'):
-        super(YOLOPAFPN, self).__init__()
-        assert len(channels) > 0, "channels length should > 0"
-        self.channels = channels
-        self.num_blocks = len(channels)
+        super(YOLOCSPPAN, self).__init__()
+        self.in_channels = in_channels
+        self._out_channels = [int(x * width_factor) for x in in_channels]
         Conv = DWConv if depthwise else BaseConv
-        self._out_channels = []
 
-        self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
-        self.lateral_conv0 = Conv(
-            int(channels[2] * width_factor), int(channels[1] * width_factor), 1, 1, bias=bias, act=act
-        )
-        self.C3_p4 = CSPLayer(
-            int(2 * channels[1] * width_factor),
-            int(channels[1] * width_factor),
-            round(3 * depth_factor),
-            shortcut=False,
-            bias=bias,
-            depthwise=depthwise,
-            act=act,
-        )
+        # top-down fpn
+        self.lateral_convs = nn.LayerList()
+        self.fpn_blocks = nn.LayerList()
+        for idx in range(len(in_channels) - 1, 0, -1):
+            self.lateral_convs.append(
+                Conv(
+                    int(in_channels[idx] * width_factor),
+                    int(in_channels[idx - 1] * width_factor),
+                    1,
+                    1,
+                    act=act))
+            self.fpn_blocks.append(
+                CSPLayer(
+                    int(in_channels[idx - 1] * 2 * width_factor),
+                    int(in_channels[idx - 1] * width_factor),
+                    round(3 * depth_factor),
+                    shortcut=False,
+                    depthwise=depthwise,
+                    act=act))
 
-        self.reduce_conv1 = Conv(
-            int(channels[1] * width_factor), int(channels[0] * width_factor), 1, 1, bias=bias, act=act
-        )
-        self.C3_p3 = CSPLayer(
-            int(2 * channels[0] * width_factor),
-            int(channels[0] * width_factor),
-            round(3 * depth_factor),
-            shortcut=False,
-            bias=bias,
-            depthwise=depthwise,
-            act=act,
-        )
-        self._out_channels.append(int(channels[0] * width_factor))
+        # bottom-up pan
+        self.downsample_convs = nn.LayerList()
+        self.pan_blocks = nn.LayerList()
+        for idx in range(len(in_channels) - 1):
+            self.downsample_convs.append(
+                Conv(
+                    int(in_channels[idx] * width_factor),
+                    int(in_channels[idx] * width_factor),
+                    3,
+                    stride=2,
+                    act=act))
+            self.pan_blocks.append(
+                CSPLayer(
+                    int(in_channels[idx] * 2 * width_factor),
+                    int(in_channels[idx + 1] * width_factor),
+                    round(3 * depth_factor),
+                    shortcut=False,
+                    depthwise=depthwise,
+                    act=act))
 
-        # bottom-up conv
-        self.bu_conv2 = Conv(
-            int(channels[0] * width_factor), int(channels[0] * width_factor), 3, 2, bias=bias, act=act
-        )
-        self.C3_n3 = CSPLayer(
-            int(2 * channels[0] * width_factor),
-            int(channels[1] * width_factor),
-            round(3 * depth_factor),
-            shortcut=False,
-            bias=bias,
-            depthwise=depthwise,
-            act=act,
-        )
-        self._out_channels.append(int(channels[1] * width_factor))
+    def forward(self, feats, for_mot=False):
+        assert len(feats) == len(self.in_channels)
+        # top-down fpn
+        inner_outs = [feats[-1]]
+        for idx in range(len(self.in_channels) - 1, 0, -1):
+            feat_heigh = inner_outs[0]
+            feat_low = feats[idx - 1]
+            feat_heigh = self.lateral_convs[len(self.in_channels) - 1 - idx](
+                feat_heigh)
+            inner_outs[0] = feat_heigh
 
-        # bottom-up conv
-        self.bu_conv1 = Conv(
-            int(channels[1] * width_factor), int(channels[1] * width_factor), 3, 2, bias=bias, act=act
-        )
-        self.C3_n4 = CSPLayer(
-            int(2 * channels[1] * width_factor),
-            int(channels[2] * width_factor),
-            round(3 * depth_factor),
-            shortcut=False,
-            bias=bias,
-            depthwise=depthwise,
-            act=act,
-        )
-        self._out_channels.append(int(channels[2] * width_factor))
+            # upsample_feat = self.upsample(feat_heigh) # can not work if odd
+            upsample_feat = F.interpolate(feat_heigh, size=[feat_low.shape[2], feat_low.shape[3]], mode='nearest')
 
-    def forward(self, blocks, for_mot=False):
-        assert len(blocks) == self.num_blocks
-        [x2, x1, x0] = blocks
+            inner_out = self.fpn_blocks[len(self.in_channels) - 1 - idx](
+                paddle.concat([upsample_feat, feat_low], axis=1))
+            inner_outs.insert(0, inner_out)
 
-        fpn_out0 = self.lateral_conv0(x0)  # 1024->512/32
-        f_out0 = self.upsample(fpn_out0)  # 512/16
-        f_out0 = paddle.concat([f_out0, x1], 1)  # 512->1024/16
-        f_out0 = self.C3_p4(f_out0)  # 1024->512/16
+        # bottom-up pan
+        outs = [inner_outs[0]]
+        for idx in range(len(self.in_channels) - 1):
+            feat_low = outs[-1]
+            feat_height = inner_outs[idx + 1]
+            downsample_feat = self.downsample_convs[idx](feat_low)
+            out = self.pan_blocks[idx](
+                paddle.concat([downsample_feat, feat_height], axis=1))
+            outs.append(out)
 
-        fpn_out1 = self.reduce_conv1(f_out0)  # 512->256/16
-        f_out1 = self.upsample(fpn_out1)  # 256/8
-        f_out1 = paddle.concat([f_out1, x2], 1)  # 256->512/8
-        pan_out2 = self.C3_p3(f_out1)  # 512->256/8
-
-        p_out1 = self.bu_conv2(pan_out2)  # 256->256/16
-        p_out1 = paddle.concat([p_out1, fpn_out1], 1)  # 256->512/16
-        pan_out1 = self.C3_n3(p_out1)  # 512->512/16
-
-        p_out0 = self.bu_conv1(pan_out1)  # 512->512/32
-        p_out0 = paddle.concat([p_out0, fpn_out0], 1)  # 512->1024/32
-        pan_out0 = self.C3_n4(p_out0)  # 1024->1024/32
-
-        yolo_feats = [pan_out2, pan_out1, pan_out0]
-        return yolo_feats
-
+        return outs
+    
     @classmethod
     def from_config(cls, cfg, input_shape):
         return {'in_channels': [i.channels for i in input_shape], }
