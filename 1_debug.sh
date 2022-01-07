@@ -1,14 +1,34 @@
-#python3.7 dygraph_print.py -c configs/yolox/yolox_darknet53_coco.yml 2>&1 | tee ppdet_yolox_darknet53_print.txt
+name=m
+#python3.7 dygraph_print.py -c configs/yolox/yolox_${name}_coco.yml 2>&1 | tee paddle_yolox_${name}_print.txt
+
+name=l
+#python3.7 dygraph_print.py -c configs/yolox/yolox_${name}_coco.yml 2>&1 | tee paddle_yolox_${name}_print.txt
+
+name=x
+#python3.7 dygraph_print.py -c configs/yolox/yolox_${name}_coco.yml 2>&1 | tee paddle_yolox_${name}_print.txt
 
 name=s
+#python3.7 dygraph_print.py -c configs/yolox/yolox_${name}_coco.yml 2>&1 | tee paddle_yolox_${name}_print.txt
+
+name=darknet53
+#python3.7 dygraph_print.py -c configs/yolox/yolox_${name}_coco.yml 2>&1 | tee paddle_yolox_${name}_print.txt
+
+name=tiny
+#python3.7 dygraph_print.py -c configs/yolox/yolox_${name}_coco.yml 2>&1 | tee paddle_yolox_${name}_print.txt
+
+name=nano
+python3.7 dygraph_print.py -c configs/yolox/yolox_${name}_coco.yml 2>&1 | tee paddle_yolox_${name}_print.txt
+
+
+name=x
 export FLAGS_allocator_strategy=auto_growth
 model_type=yolox
-job_name=yolox_${name}_coco_debug
+job_name=yolox_${name}_coco
 config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
 
 # 1. training
-CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config}
+#CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config}
 #python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1,2,3,4,5,6,7 tools/train.py -c ${config} --eval  # &> ${job_name}.log &
 
 # 2. eval

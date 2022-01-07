@@ -7,7 +7,7 @@ act: silu
 
 YOLOX:
   backbone: DarkNet
-  neck: YOLOPAFPN
+  neck: YOLOCSPPAN
   yolox_head: YOLOXHead
   post_process: YOLOXPostProcess
 
@@ -16,8 +16,7 @@ DarkNet:
   return_idx: [2, 3, 4]
   freeze_at: -1
 
-YOLOPAFPN:
-  channels: [256, 512, 1024]
+YOLOCSPPAN:
   depthwise: False
 
 YOLOXHead:

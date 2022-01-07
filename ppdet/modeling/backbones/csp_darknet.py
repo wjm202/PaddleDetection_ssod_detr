@@ -76,8 +76,7 @@ class BaseConv(nn.Layer):
         bias_init = None
 
         if bias:
-            blr = 1.0
-            conv_battr = ParamAttr(learning_rate=blr,
+            conv_battr = ParamAttr(learning_rate=1.0,
                                    initializer=bias_init,
                                    regularizer=L2Decay(0.))
         self.conv = nn.Conv2D(
@@ -90,19 +89,16 @@ class BaseConv(nn.Layer):
             bias_attr=conv_battr,
         )
 
-        norm_lr = 1.0
-        norm_decay = 0.0
         pattr = ParamAttr(
-            learning_rate=norm_lr,
-            regularizer=L2Decay(norm_decay))
+            learning_rate=1.0,
+            regularizer=L2Decay(0.0))
         battr = ParamAttr(
-            learning_rate=norm_lr,
-            regularizer=L2Decay(norm_decay))
+            learning_rate=1.0,
+            regularizer=L2Decay(0.0))
 
-        #self.bn = nn.BatchNorm2D(out_channels) #, weight_attr=pattr, bias_attr=battr) #, momentum=0.97, epsilon=1e-3)
         self.bn = nn.BatchNorm2D(out_channels, weight_attr=pattr, bias_attr=battr, momentum=0.03, epsilon=1e-3) 
         # bn not eps=1e-5, momentum=0.1
-        self.act = get_activation(act, inplace=True)
+        self.act = get_activation(act)
 
     def forward(self, x):
         if self.training:
@@ -121,7 +117,7 @@ class DWConv(nn.Layer):
 
     def __init__(self, in_channels, out_channels, ksize, stride=1, bias=False, act="silu"):
         super(DWConv, self).__init__()
-        self.dconv = BaseConv(
+        self.dw_conv = BaseConv(
             in_channels,
             in_channels,
             ksize=ksize,
@@ -130,12 +126,12 @@ class DWConv(nn.Layer):
             bias=bias,
             act=act,
         )
-        self.pconv = BaseConv(
+        self.pw_conv = BaseConv(
             in_channels, out_channels, ksize=1, stride=1, groups=1, bias=bias, act=act
         )
 
     def forward(self, x):
-        return self.pconv(self.dconv(x))
+        return self.pw_conv(self.dw_conv(x))
 
 
 class Focus(nn.Layer):
@@ -170,7 +166,7 @@ class Bottleneck(nn.Layer):
         super(Bottleneck, self).__init__()
         hidden_channels = int(out_channels * expansion)
         Conv = DWConv if depthwise else BaseConv
-        self.conv1 = Conv(in_channels, hidden_channels, ksize=1, stride=1, bias=bias, act=act)
+        self.conv1 = BaseConv(in_channels, hidden_channels, ksize=1, stride=1, bias=bias, act=act)
         self.conv2 = Conv(hidden_channels, out_channels, ksize=3, stride=1, bias=bias, act=act)
         self.add_shortcut = shortcut and in_channels == out_channels
 
@@ -370,7 +366,7 @@ class CSPDarkNet(nn.Layer):
             self.csp_dark_blocks.append(nn.Sequential(*stage))
 
         self._out_channels = [_out_channels[i] for i in self.return_idx]
-        self.strides = [[2, 4, 8, 16, 32][i] for i in self.return_idx]
+        self.strides = [[2, 4, 8, 16, 32, 64][i] for i in self.return_idx] # add 64 for P6
 
     def forward(self, inputs):
         x = inputs['image']

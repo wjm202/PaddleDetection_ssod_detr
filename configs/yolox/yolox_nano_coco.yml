@@ -1,0 +1,72 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  './_base_/yolox_cspdarknet.yml',
+  './_base_/optimizer_300e.yml',
+  './_base_/yolox_reader.yml',
+]
+
+snapshot_epoch: 5
+weights: output/yolox_nano_coco/model_final
+
+depth_factor: 0.33
+width_factor: 0.25
+
+CSPDarkNet:
+  arch: "X"
+  return_idx: [2, 3, 4]
+  depthwise: True
+
+YOLOCSPPAN:
+  depthwise: True
+
+YOLOXHead:
+  strides: [8, 16, 32]
+  channels: [256, 512, 1024]
+  depthwise: True
+  mosaic_epoch: 285
+  yolox_loss: YOLOXLoss
+
+worker_num: 2
+TrainReader:
+  inputs_def:
+    num_max_boxes: 120
+  sample_transforms:
+    - Decode: {}
+    - YOLOXMosaic: {prob: 0.5, degrees: 10.0, translate: 0.1, scale: [0.5, 1.5], shear: 2.0, perspective: 0.0, input_dim: [416, 416]}
+    # no mixup
+    - RandomDistort: {}
+    - RandomFlip: {}
+  batch_transforms:
+    - BboxXYXY2XYWH: {}
+    - BatchRandomResize: {target_size: [256, 288, 320, 352, 384, 416, 448, 480, 512, 644, 676], random_size: True, random_interp: True, keep_ratio: True}
+    - YOLOXPadBox: {num_max_boxes: 120, init_bbox: [-9999.0, -9999.0, 10.0, 10.0]}
+    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - Permute: {}
+  batch_size: 8
+  shuffle: true
+  drop_last: true
+  mosaic_epoch: 285
+  mosaic_sample_num: 5
+  use_shared_memory: true
+
+
+EvalReader:
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [416, 416], keep_ratio: True, interp: 1}
+  batch_transforms:
+    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - Permute: {}
+  batch_size: 8
+
+
+TestReader:
+  inputs_def:
+    image_shape: [3, 416, 416]
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [416, 416], keep_ratio: True, interp: 1}
+    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - Permute: {}
+  batch_size: 1

@@ -7,17 +7,15 @@ act: silu
 
 YOLOX:
   backbone: CSPDarkNet
-  neck: YOLOPAFPN
+  neck: YOLOCSPPAN
   yolox_head: YOLOXHead
   post_process: YOLOXPostProcess
 
 CSPDarkNet:
   arch: "X"
   return_idx: [2, 3, 4]
-  #freeze_at: -1
 
-YOLOPAFPN:
-  channels: [256, 512, 1024]
+YOLOCSPPAN:
   depthwise: False
 
 YOLOXHead:
