@@ -74,8 +74,15 @@ class YOLOX(BaseArch):
         }
 
     def _forward(self):
+        #print('self.inputs ', self.inputs['image'].shape, self.inputs['image'].sum())
         body_feats = self.backbone(self.inputs)
+        #print('body_feats ', [x.shape for x in body_feats])
+        #print('body_feats sum ', [x.sum() for x in body_feats])
+
         neck_feats = self.neck(body_feats, self.for_mot)
+
+        #print('neck_feats ', [x.shape for x in neck_feats])
+        #print('neck_feats sum ', [x.sum() for x in neck_feats])
 
         if self.training:
             yolo_losses = self.yolox_head(neck_feats, self.inputs)

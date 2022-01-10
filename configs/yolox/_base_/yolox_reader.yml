@@ -1,10 +1,10 @@
-worker_num: 2
+worker_num: 4
 TrainReader:
   inputs_def:
     num_max_boxes: 120
   sample_transforms:
     - Decode: {}
-    - YOLOXMosaic: {prob: 1.0, degrees: 10.0, translate: 0.1, scale: [0.1, 2], shear: 2.0, perspective: 0.0, input_dim: [640, 640]}
+    - YOLOXMosaic: {prob: 1.0, input_dim: [640, 640], enable_mixup: True}
     - RandomDistort: {}
     - RandomFlip: {}
   batch_transforms:

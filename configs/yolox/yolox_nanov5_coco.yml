@@ -7,13 +7,13 @@ _BASE_: [
 ]
 
 snapshot_epoch: 5
-weights: output/yolox_nano_coco/model_final
+weights: output/yolox_nanov5_coco/model_final
 
 depth_factor: 0.33
 width_factor: 0.25
 
 CSPDarkNet:
-  arch: "X"
+  arch: "P5"
   return_idx: [2, 3, 4]
   depthwise: True
 

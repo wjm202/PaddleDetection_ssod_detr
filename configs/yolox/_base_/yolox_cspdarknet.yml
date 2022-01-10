@@ -1,6 +1,6 @@
 architecture: YOLOX
 use_ema: true
-ema_decay: 0.9998
+ema_decay: 0.9999
 depth_factor: 0.33
 width_factor: 0.50
 act: silu
@@ -35,5 +35,5 @@ YOLOXPostProcess:
     name: MultiClassNMS
     nms_top_k: 1000
     keep_top_k: 100
-    score_threshold: 0.01
+    score_threshold: 0.001
     nms_threshold: 0.65

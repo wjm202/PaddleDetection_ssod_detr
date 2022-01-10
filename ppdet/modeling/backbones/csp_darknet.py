@@ -26,11 +26,11 @@ __all__ = ['CSPDarkNet', 'BaseConv', 'DWConv', 'Bottleneck', 'SPPLayer', 'SPPFLa
 
 def get_activation(name="silu", inplace=True):
     if name == "silu":
-        module = nn.Silu() #(inplace=inplace)
+        module = nn.Silu()
     elif name == "relu":
-        module = nn.ReLU(inplace=inplace)
-    elif name == "lrelu":
-        module = nn.LeakyReLU(0.1, inplace=inplace)
+        module = nn.ReLU()
+    elif name == "leakyrelu":
+        module = nn.LeakyReLU(0.1)
     else:
         raise AttributeError("Unsupported act type: {}".format(name))
     return module

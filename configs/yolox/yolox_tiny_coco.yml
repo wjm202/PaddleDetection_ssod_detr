@@ -12,26 +12,18 @@ weights: output/yolox_tiny_coco/model_final
 depth_factor: 0.33
 width_factor: 0.375
 
-CSPDarkNet:
-  arch: "X"
-  return_idx: [2, 3, 4]
-
-YOLOCSPPAN:
-  depthwise: False
-
-worker_num: 2
+worker_num: 4
 TrainReader:
   inputs_def:
     num_max_boxes: 120
   sample_transforms:
     - Decode: {}
-    - YOLOXMosaic: {prob: 1.0, degrees: 10.0, translate: 0.1, scale: [0.5, 1.5], shear: 2.0, perspective: 0.0, input_dim: [416, 416]}
-    # no mixup
+    - YOLOXMosaic: {prob: 1.0, scale: [0.5, 1.5], input_dim: [416, 416], enable_mixup: False} # different: mosaic scale, no mixup
     - RandomDistort: {}
     - RandomFlip: {}
   batch_transforms:
-    - BboxXYXY2XYWH: {}
-    - BatchRandomResize: {target_size: [256, 288, 320, 352, 384, 416, 448, 480, 512, 644, 676], random_size: True, random_interp: True, keep_ratio: True}
+    - BboxXYXY2XYWH: {} # 416 
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640], random_size: True, random_interp: True, keep_ratio: True}
     - YOLOXPadBox: {num_max_boxes: 120, init_bbox: [-9999.0, -9999.0, 10.0, 10.0]}
     - SquareImage: {fill_value: 114, is_channel_first: false}
     - Permute: {}
