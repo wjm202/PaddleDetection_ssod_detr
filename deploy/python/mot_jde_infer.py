@@ -81,10 +81,14 @@ class JDE_Detector(Detector):
         assert batch_size == 1, "The JDE Detector only supports batch size=1 now"
         assert pred_config.tracker, "Tracking model should have tracker"
         tp = pred_config.tracker
+        min_box_area = tp['min_box_area'] if 'min_box_area' in tp else 200
+        vertical_ratio = tp['vertical_ratio'] if 'vertical_ratio' in tp else 1.6
         conf_thres = tp['conf_thres'] if 'conf_thres' in tp else 0.
         tracked_thresh = tp['tracked_thresh'] if 'tracked_thresh' in tp else 0.7
         metric_type = tp['metric_type'] if 'metric_type' in tp else 'euclidean'
         self.tracker = JDETracker(
+            min_box_area=min_box_area,
+            vertical_ratio=vertical_ratio,
             conf_thres=conf_thres,
             tracked_thresh=tracked_thresh,
             metric_type=metric_type)
@@ -100,11 +104,13 @@ class JDE_Detector(Detector):
             tid = t.track_id
             tscore = t.score
             if tscore < threshold: continue
-            vertical = tlwh[2] / tlwh[3] > 1.6
-            if tlwh[2] * tlwh[3] > self.tracker.min_box_area and not vertical:
-                online_tlwhs.append(tlwh)
-                online_ids.append(tid)
-                online_scores.append(tscore)
+            if tlwh[2] * tlwh[3] <= self.tracker.min_box_area: continue
+            if self.tracker.vertical_ratio > 0 and tlwh[2] / tlwh[
+                    3] > self.tracker.vertical_ratio:
+                continue
+            online_tlwhs.append(tlwh)
+            online_ids.append(tid)
+            online_scores.append(tscore)
         return online_tlwhs, online_scores, online_ids
 
     def predict(self, image_list, threshold=0.5, warmup=0, repeats=1):
@@ -251,8 +257,7 @@ def predict_video(detector, camera_id):
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
             cv2.imwrite(
-                os.path.join(save_dir, '{:05d}.jpg'.format(frame_id)),
-                im)
+                os.path.join(save_dir, '{:05d}.jpg'.format(frame_id)), im)
         else:
             writer.write(im)
         frame_id += 1
@@ -268,7 +273,7 @@ def predict_video(detector, camera_id):
 
     if FLAGS.save_images:
         save_dir = os.path.join(FLAGS.output_dir, video_name.split('.')[-2])
-        cmd_str = 'ffmpeg -f image2 -i {}/%05d.jpg -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" {}'.format(
+        cmd_str = 'ffmpeg -f image2 -i {}/%05d.jpg {}'.format(
             save_dir, out_path)
         os.system(cmd_str)
         print('Save video in {}.'.format(out_path))

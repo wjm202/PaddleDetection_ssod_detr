@@ -144,11 +144,13 @@ class Tracker(object):
                 tid = t.track_id
                 tscore = t.score
                 if tscore < draw_threshold: continue
-                vertical = tlwh[2] / tlwh[3] > 1.6
-                if tlwh[2] * tlwh[3] > tracker.min_box_area and not vertical:
-                    online_tlwhs.append(tlwh)
-                    online_ids.append(tid)
-                    online_scores.append(tscore)
+                if tlwh[2] * tlwh[3] <= tracker.min_box_area: continue
+                if tracker.vertical_ratio > 0 and tlwh[2] / tlwh[
+                        3] > tracker.vertical_ratio:
+                    continue
+                online_tlwhs.append(tlwh)
+                online_ids.append(tid)
+                online_scores.append(tscore)
             timer.toc()
 
             # save results
@@ -331,7 +333,7 @@ class Tracker(object):
             if save_videos:
                 output_video_path = os.path.join(save_dir, '..',
                                                  '{}_vis.mp4'.format(seq))
-                cmd_str = 'ffmpeg -f image2 -i {}/%05d.jpg -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" {}'.format(
+                cmd_str = 'ffmpeg -f image2 -i {}/%05d.jpg {}'.format(
                     save_dir, output_video_path)
                 os.system(cmd_str)
                 logger.info('Save video in {}.'.format(output_video_path))
@@ -449,7 +451,7 @@ class Tracker(object):
         if save_videos:
             output_video_path = os.path.join(save_dir, '..',
                                              '{}_vis.mp4'.format(seq))
-            cmd_str = 'ffmpeg -f image2 -i {}/%05d.jpg "scale=trunc(iw/2)*2:trunc(ih/2)*2" {}'.format(
+            cmd_str = 'ffmpeg -f image2 -i {}/%05d.jpg {}'.format(
                 save_dir, output_video_path)
             os.system(cmd_str)
             logger.info('Save video in {}'.format(output_video_path))
