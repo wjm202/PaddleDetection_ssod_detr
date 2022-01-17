@@ -17,12 +17,14 @@ from __future__ import division
 from __future__ import print_function
 
 import typing
+import random
 from IPython import embed
 try:
     from collections.abc import Sequence
 except Exception:
     from collections import Sequence
 
+import paddle.nn as nn
 import cv2
 import math
 import numpy as np
@@ -47,6 +49,7 @@ __all__ = [
     'PadMaskBatch',
     'Gt2GFLTarget',
     'Gt2CenterNetTarget',
+    'RecBatchRandomResize',
     #'Gt2YolovXTarget',
 ]
 
@@ -168,6 +171,59 @@ class BatchRandomResize(BaseOperator):
 
         resizer = Resize(target_size, keep_ratio=self.keep_ratio, interp=interp)
         return resizer(samples, context=context)
+
+
+@register_op
+class RecBatchRandomResize(BaseOperator):
+    def __init__(self,
+                 input_size=[640, 640],
+                 size_divisor=32,
+                 multiscale_range=5,
+                 random_size_factor=None):
+        super(RecBatchRandomResize, self).__init__()
+        self.input_size = input_size
+        self.size_divisor = size_divisor
+        self.multiscale_range = multiscale_range
+        self.random_size_factor = random_size_factor
+
+    def nn_resize(self, inputs, targets, tsize):
+        scale_y = tsize[0] / self.input_size[0]
+        scale_x = tsize[1] / self.input_size[1]
+        if scale_x != 1 or scale_y != 1:
+            inputs = nn.functional.interpolate(  ### TODO:must be tensor resize?
+                inputs, size=tsize, mode="bilinear", align_corners=False
+            )
+            targets[..., 1::2] = targets[..., 1::2] * scale_x
+            targets[..., 2::2] = targets[..., 2::2] * scale_y
+        return inputs, targets
+
+    def __call__(self, samples, context=None):
+        # always keep retio
+        image_ratio = self.input_size[1] * 1.0 / self.input_size[0]
+
+        if not self.random_size_factor:
+            assert self.multiscale_range >= 0
+            min_factor = int(self.input_size[0] / self.size_divisor) - self.multiscale_range
+            max_factor = int(self.input_size[0] / self.size_divisor) + self.multiscale_range
+            self.random_size_factor = (min_factor, max_factor)
+
+        size_factor = random.randint(*self.random_size_factor)
+        target_size = [int(self.size_divisor * size_factor), int(self.size_divisor * int(size_factor * image_ratio))]
+        target_size = np.asarray(target_size, dtype=np.float32)
+        
+        ## resizer = Resize(target_size, keep_ratio=True, interp=cv2.INTER_LINEAR)
+        ## return resizer(samples, context=context)
+
+        ''' must be F.interpolate?
+        for sample in samples:
+            inps, targets = self.nn_resize(inputs=sample['image'], targets=sample['gt_bbox'], tsize=target_size)
+            sample['image'] = inps
+            sample['gt_bbox'] = targets
+        '''
+
+        for sample in samples:
+            sample['target_size'] = target_size
+        return samples
 
 
 @register_op

@@ -15,7 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from IPython import embed
 import os
 import sys
 import copy
@@ -46,6 +46,7 @@ from ppdet.utils import profiler
 
 from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator
 from .export_utils import _dump_infer_config, _prune_input_spec
+from ppdet.modeling.ops import yolox_resize
 
 from ppdet.utils.logger import setup_logger
 logger = setup_logger('ppdet.engine')
@@ -94,6 +95,7 @@ class Trainer(object):
         else:
             self.model = self.cfg.model
             self.is_loaded_weights = True
+        #print(self.model)
 
         #normalize params for deploy
         if 'slim' in cfg and cfg['slim_type'] == 'OFA':
@@ -129,7 +131,33 @@ class Trainer(object):
         if self.mode == 'train':
             steps_per_epoch = len(self.loader)
             self.lr = create('LearningRate')(steps_per_epoch)
-            self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
+            #self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
+            '''
+            self.optimizer = paddle.optimizer.Momentum(
+                parameters=self.model.parameters(), learning_rate=self.lr,
+                momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005)
+            #)
+            '''
+            pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
+            for k, v in self.model.named_sublayers():
+                if hasattr(v, "bias") and isinstance(v.bias, paddle.fluid.framework.ParamBase):
+                    pg2.append(v.bias)  # biases
+                if isinstance(v, paddle.nn.BatchNorm2D) or "bn" in k:
+                    pg0.append(v.weight)  # no decay
+                elif hasattr(v, "weight") and isinstance(v.weight, paddle.fluid.framework.ParamBase):
+                    pg1.append(v.weight)  # apply decay
+            optimizer = paddle.optimizer.Momentum(
+                parameters=[{'params': pg0}], learning_rate=self.lr, grad_clip=None,
+                momentum=0.9, use_nesterov=True, weight_decay=0.0
+            )
+            optimizer._add_param_group(
+                {"params": pg1, "weight_decay": 0.0005, 'grad_clip': None})
+                # add pg1 with weight_decay
+            optimizer._add_param_group({"params": pg2, "weight_decay": 0.0, 'grad_clip': None})
+            logger.info(f"optimizer: {type(optimizer).__name__} with parameter groups "
+                f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
+            self.optimizer = optimizer
+
 
         if self.cfg.get('unstructured_prune'):
             self.pruner = create('UnstructuredPruner')(self.model,
@@ -394,6 +422,22 @@ class Trainer(object):
             model.train()
             iter_tic = time.time()
             for step_id, data in enumerate(self.loader):
+                
+                # YOLOX random resizing
+                intv = 10
+                if (step_id + 1) % intv == 0:
+                    #assert 'RecBatchRandomResize' in self.cfg.TrainReader
+                    assert 'target_size' in data
+                    inputs_dim = data['im_shape'][0].numpy()
+                    target_dim = data['target_size'][0].numpy()
+                    try:
+                        #print(' 1 ', data['image'].shape, data['image'].sum(), data['gt_bbox'].sum())
+                        data['image'], data['gt_bbox'] = yolox_resize(data['image'], data['gt_bbox'], tuple(inputs_dim), tuple(target_dim))
+                        #print(' 2 ', data['image'].shape, data['image'].sum(), data['gt_bbox'].sum())
+                        #new_shape = data['im_shape'][0].numpy()
+                    except:
+                        embed()
+
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
@@ -405,12 +449,18 @@ class Trainer(object):
                         # model forward
                         outputs = model(data)
                         loss = outputs['loss']
-
+                    '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
                     # in dygraph mode, optimizer.minimize is equal to optimizer.step
                     scaler.minimize(self.optimizer, scaled_loss)
+                    '''
+                    self.optimizer.clear_grad()
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                    #'''
                 else:
                     # model forward
                     outputs = model(data)

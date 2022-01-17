@@ -24,18 +24,6 @@ from ..shape_spec import ShapeSpec
 __all__ = ['CSPDarkNet', 'BaseConv', 'DWConv', 'Bottleneck', 'SPPLayer', 'SPPFLayer']
 
 
-def get_activation(name="silu", inplace=True):
-    if name == "silu":
-        module = nn.Silu()
-    elif name == "relu":
-        module = nn.ReLU()
-    elif name == "leakyrelu":
-        module = nn.LeakyReLU(0.1)
-    else:
-        raise AttributeError("Unsupported act type: {}".format(name))
-    return module
-
-
 def fuse_conv_and_bn(conv, bn):
     # Fuse convolution and batchnorm layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/
     fusedconv = (
@@ -68,17 +56,22 @@ def fuse_conv_and_bn(conv, bn):
     return fusedconv
 
 
+def get_activation(name="silu", inplace=True):
+    if name == "silu":
+        module = nn.Silu()
+    elif name == "relu":
+        module = nn.ReLU()
+    elif name == "leakyrelu":
+        module = nn.LeakyReLU(0.1)
+    else:
+        raise AttributeError("Unsupported act type: {}".format(name))
+    return module
+
+
 class BaseConv(nn.Layer):
     def __init__(self, in_channels, out_channels, ksize, stride, groups=1, bias=False, act="silu"):
-        super(BaseConv, self).__init__()
+        super().__init__()
         pad = (ksize - 1) // 2
-        conv_battr = False
-        bias_init = None
-
-        if bias:
-            conv_battr = ParamAttr(learning_rate=1.0,
-                                   initializer=bias_init,
-                                   regularizer=L2Decay(0.))
         self.conv = nn.Conv2D(
             in_channels,
             out_channels,
@@ -86,27 +79,33 @@ class BaseConv(nn.Layer):
             stride=stride,
             padding=pad,
             groups=groups,
-            bias_attr=conv_battr,
+            bias_attr=bias,
         )
 
-        pattr = ParamAttr(
-            learning_rate=1.0,
-            regularizer=L2Decay(0.0))
-        battr = ParamAttr(
-            learning_rate=1.0,
-            regularizer=L2Decay(0.0))
-
-        self.bn = nn.BatchNorm2D(out_channels, weight_attr=pattr, bias_attr=battr, momentum=0.03, epsilon=1e-3) 
+        self.bn = nn.BatchNorm2D(out_channels, momentum=0.97, epsilon=1e-3) 
+        #self.bn = nn.BatchNorm2D(out_channels, momentum=0.03, epsilon=1e-3) 
         # bn not eps=1e-5, momentum=0.1
         self.act = get_activation(act)
 
     def forward(self, x):
+        '''
+        if x.shape[-1]==320:
+            print('  320  ppdet  ///////////.............', x.shape, self.conv.weight.shape)
+            print('  320  ppdet  ///////////.............', self.conv.weight.sum())
+        '''
+        return self.act(self.bn(self.conv(x)))
+
+        '''
+        if x.shape[-1]==720:
+            print('  720    ///////////.............', x.shape, self.conv.weight.shape)
+            print('  720    ///////////.............', self.conv.weight.sum())
         if self.training:
             return self.act(self.bn(self.conv(x)))
         else:
             #self.conv = fuse_conv_and_bn(self.conv, self.bn)
             #return self.act(self.conv(x))
             return self.act(self.bn(self.conv(x)))
+        '''
 
     def fuse_forward(self, x):
         return self.act(self.conv(x))
@@ -141,23 +140,31 @@ class Focus(nn.Layer):
         super(Focus, self).__init__()
         self.conv = BaseConv(in_channels * 4, out_channels, ksize=ksize, stride=stride, bias=bias, act=act)
 
-    def forward(self, x):
-        # x: [bs, c, w, h] -> y: [b, 4c, w/2, h/2]
-        patch_top_left = x[:, :, 0::2, 0::2]
-        patch_top_right = x[:, :, 0::2, 1::2]
-        patch_bot_left = x[:, :, 1::2, 0::2]
-        patch_bot_right = x[:, :, 1::2, 1::2]
 
-        y = paddle.concat([
-                patch_top_left,
-                patch_bot_left,
-                patch_top_right,
-                patch_bot_right,
-            ],
-            axis=1,
-        )
-        out = self.conv(y)
-        return out
+    def forward(self, inputs):
+        # x: [bs, c, w, h] -> y: [b, 4c, w/2, h/2]
+        patch_top_left = inputs[:, :, 0::2, 0::2]
+        patch_top_right = inputs[:, :, 0::2, 1::2]
+        patch_bot_left = inputs[:, :, 1::2, 0::2]
+        patch_bot_right = inputs[:, :, 1::2, 1::2]
+
+        try:
+            x = paddle.concat([
+                    patch_top_left,
+                    patch_bot_left,
+                    patch_top_right,
+                    patch_bot_right,
+                ],
+                axis=1,
+            )
+        except:
+            print('  before Focus ///////////.............', inputs.sum(), inputs.shape)
+            embed()
+
+        #print('  after trans ///////////.............', x.sum(), x.shape)
+        x = self.conv(x)
+        #print('  after  Focus ///////////.............', x.sum(), x.shape)
+        return x
 
 
 class Bottleneck(nn.Layer):

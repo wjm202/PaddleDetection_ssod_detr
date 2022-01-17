@@ -9,13 +9,13 @@ config=configs/yolox/byte_x_mot_ablation.yml #configs/${model_type}/${job_name}.
 log_dir=log_dir/${job_name}
 
 # 1. training
-CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ../byte_x_mot_ablation_paddle.pdparams
+CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ../../byte_x_mot_ablation_paddle.pdparams
 #python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1,2,3,4,5,6,7 tools/train.py -c ${config} --eval  # &> ${job_name}.log &
 
 # 2. eval
 #CUDA_VISIBLE_DEVICES=0 python3.7 tools/eval.py -c ${config} -o weights=https://paddledet.bj.bcebos.com/models/${job_name}.pdparams
 #CUDA_VISIBLE_DEVICES=6 python3.7 tools/eval.py -c ${config} -o weights=../${job_name}_paddle.pdparams
-#CUDA_VISIBLE_DEVICES=2 python3.7 tools/eval.py -c ${config} -o weights=../byte_x_mot_ablation_paddle.pdparams #../../../paddle_${job_name}.pdparams
+#CUDA_VISIBLE_DEVICES=5 python3.7 tools/eval.py -c ${config} -o weights=../../byte_x_mot_ablation_paddle_rgb.pdparams #../../../paddle_${job_name}.pdparams
 
 # 3. tools infer
 #CUDA_VISIBLE_DEVICES=0 python3.7 tools/infer.py -c ${config} -o weights=https://paddledet.bj.bcebos.com/models/${job_name}.pdparams --infer_img=demo/000000014439.jpg

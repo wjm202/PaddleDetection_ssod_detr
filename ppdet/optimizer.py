@@ -283,7 +283,7 @@ class LearningRate(object):
                                       step_per_epoch)
         return decay_lr
 
-
+from IPython import embed
 @register
 class OptimizerBuilder():
     """

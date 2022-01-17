@@ -11,14 +11,14 @@ LearningRate:
     start_lr: 0.
     warmup_epochs: 5
 
-OptimizerBuilder:
+OptimizerBuilder: # but no use, rewrite in trainer.py
   optimizer:
     momentum: 0.9
     type: Momentum
     use_nesterov: true
-    param_groups:
-      - params: ['bias', 'bn']
-        weight_decay: 0.
+    #param_groups:
+    #  - params: ['bias', 'bn']
+    #    weight_decay: 0.
   regularizer:
     factor: 0.0005
     type: L2

@@ -29,7 +29,7 @@ from IPython import embed
 __all__ = [
     'BBoxPostProcess', 'MaskPostProcess', 'FCOSPostProcess',
     'S2ANetBBoxPostProcess', 'JDEBBoxPostProcess', 'CenterNetPostProcess',
-    'DETRBBoxPostProcess', 'SparsePostProcess', 'YOLOXPostProcess',
+    'DETRBBoxPostProcess', 'SparsePostProcess', 'YOLOXPostProcess', 'YOLOXPostProcess2',
 ]
 
 
@@ -745,3 +745,92 @@ class YOLOXPostProcess(object):
         bboxes, score = self.decode(yolox_head_outs, scale_factor)
         bbox_pred, bbox_num, _ = self.nms(bboxes, score)
         return bbox_pred, bbox_num
+
+
+from IPython import embed
+@register
+class YOLOXPostProcess2(object):
+    __shared__ = ['num_classes']
+    __inject__ = ['decode', 'nms']
+
+    def __init__(self, num_classes=80, conf_thres=0.001, decode=None, nms=None):
+        super(YOLOXPostProcess2, self).__init__()
+        self.decode = decode
+        self.nms = nms
+        self.num_classes = num_classes
+        self.conf_thres = conf_thres # 0.01 in mot
+        self.class_agnostic = False
+
+    #def __call__(self, yolox_head_outs, anchors, im_shape, scale_factor):
+    def __call__(self, yolox_head_outs, im_shape, scale_factor):
+        """
+        Decode the bbox and do NMS in YOLOX.
+        """
+        #bboxes, score = self.postprocess(yolox_head_outs, scale_factor)
+        #bbox_pred, bbox_num, _ = self.nms(bboxes, score)
+        bbox_pred, bbox_num = self.postprocess(yolox_head_outs, scale_factor)
+        return bbox_pred, bbox_num
+
+    def postprocess(self, prediction, scale_factor, num_classes=80, conf_thres=0.001, class_agnostic=False):
+        yolo_boxes = prediction[:, :, :4]  # [N, A, 4]  cxcywh
+        yolo_boxes = paddle.concat([yolo_boxes[:, :, :2] - yolo_boxes[:, :, 2:] / 2,
+                                    yolo_boxes[:, :, :2] + yolo_boxes[:, :, 2:] / 2], axis=-1)
+        prediction[:, :, :4] = yolo_boxes[:, :, :4]
+
+        out_bbox_pred = [None for _ in range(len(prediction))]
+        out_bbox_num = [None for _ in range(len(prediction))]
+        # TODO: only support bs=1, usually in MOT(ByteTrack)
+        for i, image_pred in enumerate(prediction):
+            if len(image_pred) == 0:
+                continue
+            
+            scale = paddle.min(scale_factor[i])
+
+            # Get score and class with highest confidence
+            class_conf = paddle.max(image_pred[:, 5: 5 + self.num_classes], 1, keepdim=True)
+            class_pred = paddle.argmax(image_pred[:, 5: 5 + self.num_classes], 1, keepdim=True)
+            class_pred = paddle.cast(class_pred, class_conf.dtype)
+
+            conf_mask = (image_pred[:, 4] * class_conf.squeeze() >= self.conf_thres).squeeze()
+            # Detections ordered as (x1, y1, x2, y2, obj_conf, class_conf, class_pred)
+            detections = paddle.concat((image_pred[:, :5], class_conf, class_pred), 1)
+            detections = detections[conf_mask]
+            keep_num = len(detections)
+            if not keep_num:
+                continue
+
+            if self.class_agnostic:
+                # infer
+                yolo_boxes = paddle.reshape(detections[:, :4], shape=[1, keep_num, 4])
+                yolo_scores = paddle.reshape(detections[:, 4] * detections[:, 5], shape=[1, 1, keep_num])
+                bbox_pred, bbox_num, nms_keep_idx = self.nms(yolo_boxes, yolo_scores) 
+                # [1, 686, 4] [1, 1, 686] -> 196
+            else:
+                # eval
+                cats = detections[:, 6]
+                boxes = detections[:, :4]
+                max_coordinate = boxes.max()
+                offsets = cats * (max_coordinate + 1.0)
+                boxes_for_nms = boxes + offsets[:, None]
+
+                yolo_boxes_for_nms = paddle.reshape(boxes_for_nms, shape=[1, keep_num, 4])
+                yolo_scores = paddle.reshape(detections[:, 4] * detections[:, 5], shape=[1, 1, keep_num])
+                
+                #print(' before nms  ', detections.shape, detections.sum()) # [421, 7]) tensor(870347)
+
+                bbox_pred_for_nms, bbox_num, nms_keep_idx = self.nms(yolo_boxes_for_nms, yolo_scores)
+                # [1, 686, 4] [1, 1, 686] -> 223
+                if len(nms_keep_idx) == 0:
+                    continue
+                bboxes_ = paddle.gather_nd(boxes, nms_keep_idx) / scale
+                cats_ = paddle.gather_nd(cats.unsqueeze(-1), nms_keep_idx)
+                bbox_pred = paddle.concat((cats_, bbox_pred_for_nms[:, 1:2], bboxes_), 1)
+
+            if out_bbox_pred[i] is None:
+                out_bbox_pred[i] = bbox_pred
+                out_bbox_num[i] = bbox_num
+            else:
+                out_bbox_pred[i] = paddle.concat((out_bbox_pred[i], bbox_pred))
+                out_bbox_num[i] = paddle.concat((out_bbox_num[i], bbox_num))
+
+        return out_bbox_pred[-1], out_bbox_num[-1]

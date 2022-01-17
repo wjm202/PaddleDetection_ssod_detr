@@ -989,6 +989,31 @@ class PPYOLOPAN(nn.Layer):
         return [ShapeSpec(channels=c) for c in self._out_channels]
 
 
+class Upsample(nn.Layer):
+    # Upsampleing the layer
+    def __init__(self, size=None, scale_factor=None,
+                 mode='nearest', align_corners=False) -> None:
+        super(Upsample, self).__init__()
+        self.name = type(self).__name__
+        self.size = size
+        if isinstance(scale_factor, tuple):
+            self.scale_factor = tuple(float(factor) for factor in scale_factor)
+        else:
+            self.scale_factor = float(scale_factor) if scale_factor else None
+        self.mode = mode
+        self.align_corners = align_corners
+
+    def forward(self, input):
+        return F.interpolate(input, self.size, self.scale_factor, self.mode, self.align_corners)
+
+    def extra_repr(self) -> str:
+        if self.scale_factor is not None:
+            info = 'scale_factor=' + str(self.scale_factor)
+        else:
+            info = 'size=' + str(self.size)
+        info += ', mode=' + self.mode
+        return info
+
 @register
 @serializable
 class YOLOCSPPAN(nn.Layer):
@@ -1008,6 +1033,8 @@ class YOLOCSPPAN(nn.Layer):
         self._out_channels = [int(x * width_factor) for x in in_channels]
         Conv = DWConv if depthwise else BaseConv
 
+        #self.upsample = #nn.Upsample(scale_factor=2, mode="nearest")
+        self.upsample = Upsample(scale_factor=2, mode="nearest") #F.interpolate(input, self.size, self.scale_factor, self.mode, self.align_corners)
         # top-down fpn
         self.lateral_convs = nn.LayerList()
         self.fpn_blocks = nn.LayerList()
@@ -1059,8 +1086,8 @@ class YOLOCSPPAN(nn.Layer):
                 feat_heigh)
             inner_outs[0] = feat_heigh
 
-            # upsample_feat = self.upsample(feat_heigh) # can not work if odd
-            upsample_feat = F.interpolate(feat_heigh, size=[feat_low.shape[2], feat_low.shape[3]], mode='nearest')
+            upsample_feat = self.upsample(feat_heigh) # can not work if odd
+            #upsample_feat = F.interpolate(feat_heigh, size=[feat_low.shape[2], feat_low.shape[3]], mode='nearest')
 
             inner_out = self.fpn_blocks[len(self.in_channels) - 1 - idx](
                 paddle.concat([upsample_feat, feat_low], axis=1))

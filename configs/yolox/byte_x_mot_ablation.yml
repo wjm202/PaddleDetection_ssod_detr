@@ -5,10 +5,10 @@ _BASE_: [
   './_base_/optimizer_300e.yml',
   './_base_/yolox_reader.yml',
 ]
-pretrain_weights: https://paddledet.bj.bcebos.com/models/mot/yolox/torch2paddle_final_yolox/yolox_x_coco_paddle.pdparams
+pretrain_weights: https://paddledet.bj.bcebos.com/models/mot/yolox/torch2paddle_final_yolox/yolox_x_coco_paddle_rgb.pdparams
 
-snapshot_epoch: 5
-weights: output/yolox_x_mot/model_final
+snapshot_epoch: 2
+weights: output/byte_x_mot_ablation/model_final
 
 depth_factor: 1.33
 width_factor: 1.25
@@ -17,6 +17,12 @@ metric: COCO
 num_classes: 1
 
 ##### model
+YOLOX:
+  backbone: CSPDarkNet
+  neck: YOLOCSPPAN
+  yolox_head: YOLOXHead
+  post_process: YOLOXPostProcess2
+
 YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
@@ -24,19 +30,28 @@ YOLOXHead:
   mosaic_epoch: 70
   yolox_loss: YOLOXLoss
 
-YOLOXLoss:
-  loss_type: "iou"
+YOLOXPostProcess2: # slow but more accurate
+  conf_thres: 0.01
+  decode:
+    name: YOLOXBox
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 30000
+    keep_top_k: 1000
+    score_threshold: 0.01
+    nms_threshold: 0.7
+    return_index: true
 
 YOLOXPostProcess:
   decode:
     name: YOLOXBox
   nms:
     name: MultiClassNMS
-    nms_top_k: 1000
-    keep_top_k: 100
-    score_threshold: 0.001
+    nms_top_k: 30000
+    keep_top_k: 1000
+    score_threshold: 0.01 ###
     nms_threshold: 0.7
-
+    return_index: true
 
 ##### optimizer
 epoch: 80
@@ -49,64 +64,69 @@ LearningRate:
     min_lr_ratio: 0.05
   - !ExpWarmup
     start_lr: 0.
-    warmup_epochs: 1
+    warmup_epochs: 5
 
-OptimizerBuilder:
+OptimizerBuilder: # no use now
   optimizer:
     momentum: 0.9
     type: Momentum
     use_nesterov: true
-    param_groups:
-      - params: ['bias', 'bn']
-        weight_decay: 0.
+    #param_groups:
+    #  - params: ['bias', 'bn']
+    #    weight_decay: 0.
   regularizer:
     factor: 0.0005
     type: L2
 
-##### reader: bytetrack use legacy YOLOX
-worker_num: 4
+##### reader: bytetrack use legacy YOLOX, can remove all NormalizeImage
+worker_num: 0 #4
 TrainReader:
   inputs_def:
     num_max_boxes: 120
   sample_transforms:
-    - Decode: {}
-    - YOLOXMosaic: {prob: 1.0, input_dim: [800, 1440], enable_mixup: True}
-    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
-    - RandomDistort: {}
-    - RandomFlip: {}
-    - BboxXYXY2XYWH: {} # [18,32]*32, [int(18*1.8), int(32*1.8)]*32
-    #- RandomResize: {target_size: [[576, 1024], [608, 1088], [640, 1152], [672, 1216], [704, 1280], [736, 1344], [768, 1376], [800, 1440], [832, 1504], [864, 1568], [896, 1600], [928, 1664], [960, 1728], [992, 1792], [1024, 1856]], interp: 2, keep_ratio: True}
-    #- RandomResize: {target_size: [[576, 1024], [608, 1088]], interp: 2, keep_ratio: True}
+    - DecodeResize: {target_size: [800, 1440], keep_ratio: True, hsv_prob: 1.0, flip_prob: 0.5, fill_value: 114}
+    - YOLOXMosaic: {prob: 1.0, degrees: 10.0, translate: 0.1, scale: [0.1, 2], shear: 2.0, perspective: 0.0, input_dim: [800, 1440]}
   batch_transforms:
-    - BatchRandomResize: {target_size: [608, 640, 672, 704, 736, 768, 800], random_size: True, random_interp: True, keep_ratio: True}
-    - YOLOXPadBox: {num_max_boxes: 120, init_bbox: [-9999.0, -9999.0, 10.0, 10.0]}
-    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - RecBatchRandomResize: {input_size: [800, 1440], random_size_factor: [18, 26]}
+    #- RecBatchRandomResize: {input_size: [800, 1440], random_size_factor: [18, 32]}
+    - PadBox: {num_max_boxes: 120}
     - Permute: {}
-  batch_size: 8
-  shuffle: true
-  drop_last: true
-  mosaic_epoch: 70 #
+  batch_size: 2 #8
+  shuffle: False #True
+  drop_last: True
+  collate_batch: True 
+  use_shared_memory: True
+  mosaic_epoch: 70
   mosaic_sample_num: 5
-  use_shared_memory: true
 
 EvalReader:
   sample_transforms:
-    - Decode: {}
-    - Resize: {target_size: [1440, 1440], keep_ratio: True, interp: 1}
-    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
+    - DecodeResize: {target_size: [800, 1440], keep_ratio: True, fill_value: 114}
+    #- DecodeResize: {target_size: [800, 1440], keep_ratio: True, legacy: True, fill_value: 114}
+    #- NormalizeImage: {is_scale: true, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
   batch_transforms:
-    - SquareImage: {fill_value: 114, is_channel_first: false}
     - Permute: {}
   batch_size: 1
 
 TestReader:
   inputs_def:
+    image_shape: [3, 800, 1440]
+  sample_transforms:
+    - DecodeResize: {target_size: [800, 1440], keep_ratio: True, legacy: True, fill_value: 114}
+    #- NormalizeImage: {is_scale: true, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+  batch_transforms:
+    - Permute: {}
+  batch_size: 1
+
+TestReader0: # old
+  inputs_def:
     image_shape: [3, 800, 800]
   sample_transforms:
     - Decode: {}
-    - Resize: {target_size: [800, 800], keep_ratio: True, interp: 1}
-    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
-    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - Resize: {target_size: [800, 1440], keep_ratio: True, interp: 2}
+    - SquareImage: {fill_value: 114, is_channel_first: false, target_size: [800, 1440]}
+    #- NormalizeImage: {is_scale: true, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+  batch_transforms:
     - Permute: {}
   batch_size: 1
 
@@ -122,7 +142,7 @@ TrainDataset:
 EvalDataset:
   !COCODataSet
     image_dir: train
-    anno_path: annotations/val_half.json
+    anno_path: annotations/val_im2.json
     dataset_dir: dataset/MOT
 
 TestDataset:

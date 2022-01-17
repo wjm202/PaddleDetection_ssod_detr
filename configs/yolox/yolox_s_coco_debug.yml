@@ -17,6 +17,7 @@ TrainDataset:
   !COCODataSet
     image_dir: val2017
     #anno_path: annotations/instances_val2017.json
+    #anno_path: annotations/instances_val2017_im1.json
     anno_path: annotations/instances_val2017_im4.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
@@ -33,37 +34,46 @@ TrainReader:
   inputs_def:
     num_max_boxes: 120
   sample_transforms:
-    - Decode: {}
-    - RandomResize: {target_size: [640, 640], interp: 1, keep_ratio: True, random_size: False}
-    #- Resize: {target_size: [640, 640], keep_ratio: True, interp: 1}
-    #- YOLOXMosaic: {prob: 1.0, degrees: 10.0, translate: 0.1, scale: [0.1, 2], shear: 2.0, perspective: 0.0, input_dim: [640, 640]}
-    #- RandomDistort: {}
-    #- RandomFlip: {}
+    - DecodeResize: {target_size: [640, 640], keep_ratio: True, hsv_prob: 1.0, flip_prob: 0.5, fill_value: 114}
+    - YOLOXMosaic: {prob: 1.0, degrees: 10.0, translate: 0.1, scale: [0.1, 2], shear: 2.0, perspective: 0.0, input_dim: [640, 640]}
   batch_transforms:
-    - BboxXYXY2XYWH: {}
-    #- BatchRandomResize: {target_size: [448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800, 832], random_size: True, random_interp: True, keep_ratio: True}
-    - YOLOXPadBox: {num_max_boxes: 120, init_bbox: [-9999.0, -9999.0, 10.0, 10.0]}
-    - SquareImage: {fill_value: 114, is_channel_first: false}
+    - RecBatchRandomResize: {input_size: [640, 640], multiscale_range: 5}
+    - PadBox: {num_max_boxes: 120}
     - Permute: {}
   batch_size: 4
-  shuffle: False #true
-  drop_last: true
-  mosaic_epoch: -1
+  shuffle: False #True
+  drop_last: True
+  collate_batch: True 
+  use_shared_memory: True
+  mosaic_epoch: 1
   mosaic_sample_num: 5
-  use_shared_memory: true
-
 
 EvalReader:
+  sample_transforms:
+    - DecodeResize: {target_size: [640, 640], keep_ratio: True, fill_value: 114}
+  batch_transforms:
+    - Permute: {}
+  batch_size: 1
+
+TestReader:
+  inputs_def:
+    image_shape: [3, 640, 640]
+  sample_transforms:
+    - DecodeResize: {target_size: [640, 640], keep_ratio: True, fill_value: 114}
+    - Permute: {}
+  batch_size: 1
+
+
+EvalReader0:
   sample_transforms:
     - Decode: {}
     - Resize: {target_size: [640, 640], keep_ratio: True, interp: 1}
   batch_transforms:
     - SquareImage: {fill_value: 114, is_channel_first: false}
     - Permute: {}
-  batch_size: 8
+  batch_size: 1
 
-
-TestReader:
+TestReader0:
   inputs_def:
     image_shape: [3, 640, 640]
   sample_transforms:
@@ -73,20 +83,19 @@ TestReader:
     - Permute: {}
   batch_size: 1
 
-
-epoch: 10
-LearningRate:
-  base_lr: 0.000625 #float(0.01 / 64.0 * 4) # 0.01
+epoch: 3
+LearningRate0:
+  base_lr: 0.000625
   schedulers:
   - !YOLOXCosineDecay
-    max_epochs: 10
+    max_epochs: 3
     no_aug_epochs: 3
     min_lr_ratio: 0.05
   - !ExpWarmup
     start_lr: 0.
     warmup_epochs: 3
 
-OptimizerBuilder:
+OptimizerBuilder0:
   optimizer:
     momentum: 0.9
     type: Momentum
@@ -94,15 +103,34 @@ OptimizerBuilder:
     param_groups:
       - params: ['bias', 'bn']
         weight_decay: 0.
-      #- params: ['weight']
-      #  weight_decay: 0.0005
   regularizer:
-    factor: 0.0005
-    type: L2
+    None
+    #factor: 0.0005
+    #type: L2
+
+
+LearningRate:
+  base_lr: 0.000625
+  schedulers:
+  - !PiecewiseDecay
+    gamma: 0.1
+    milestones: [2]
+    use_warmup: False
+
+OptimizerBuilder:
+  optimizer:
+    momentum: 0.9
+    type: Momentum
+    use_nesterov: true
+  regularizer:
+    None
+  #  factor: 0.0005
+  #  type: L2
+
 
 ######################## model 
 architecture: YOLOX
-use_ema: true
+use_ema: False #true
 ema_decay: 0.9998
 depth_factor: 0.33
 width_factor: 0.50
@@ -112,31 +140,33 @@ YOLOX:
   backbone: CSPDarkNet
   neck: YOLOCSPPAN
   yolox_head: YOLOXHead
-  post_process: YOLOXPostProcess
-
-CSPDarkNet:
-  arch: "X"
-  return_idx: [2, 3, 4]
-
-YOLOCSPPAN:
-  depthwise: False
+  post_process: YOLOXPostProcess2
 
 YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
   depthwise: False
-  #mosaic_epoch: 285
+  mosaic_epoch: 1
   yolox_loss: YOLOXLoss
 
-YOLOXLoss:
-  loss_type: "iou"
+YOLOXPostProcess2: # slow but more accurate
+  decode:
+    name: YOLOXBox # no use
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 30000
+    keep_top_k: 1000
+    score_threshold: 0.001
+    nms_threshold: 0.65
+    return_index: true
 
 YOLOXPostProcess:
   decode:
     name: YOLOXBox
   nms:
     name: MultiClassNMS
-    nms_top_k: 1000
-    keep_top_k: 100
+    nms_top_k: 30000
+    keep_top_k: 1000
     score_threshold: 0.001
     nms_threshold: 0.65
+    return_index: true

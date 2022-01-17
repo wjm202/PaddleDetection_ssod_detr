@@ -88,7 +88,6 @@ class YOLOX(BaseArch):
         '''
         body_feats = self.backbone(self.inputs)
         neck_feats = self.neck(body_feats, self.for_mot)
-        #'''
 
         if self.training:
             yolo_losses = self.yolox_head(neck_feats, self.inputs)
@@ -99,7 +98,7 @@ class YOLOX(BaseArch):
                 yolo_head_outs, 
                 self.inputs['im_shape'], self.inputs['scale_factor'])
             output = {'bbox': bbox, 'bbox_num': bbox_num}
-            #print(bbox.shape, bbox[:10])
+
             return output
 
     def get_loss(self):
