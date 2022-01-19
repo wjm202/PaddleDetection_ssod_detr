@@ -729,8 +729,9 @@ class Resize(BaseOperator):
                 "Type of target_size is invalid. Must be Integer or List or Tuple, now is {}".
                 format(type(target_size)))
         if isinstance(target_size, Integral):
-            target_size = [target_size, target_size]
-        self.target_size = target_size
+            self.target_size = [target_size, target_size]
+        else:
+            self.target_size = [target_size[0], target_size[1]]
 
     def apply_image(self, image, scale):
         im_scale_x, im_scale_y = scale

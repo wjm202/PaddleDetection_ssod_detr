@@ -131,32 +131,34 @@ class Trainer(object):
         if self.mode == 'train':
             steps_per_epoch = len(self.loader)
             self.lr = create('LearningRate')(steps_per_epoch)
-            #self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
-            '''
-            self.optimizer = paddle.optimizer.Momentum(
-                parameters=self.model.parameters(), learning_rate=self.lr,
-                momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005)
-            #)
-            '''
-            pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
-            for k, v in self.model.named_sublayers():
-                if hasattr(v, "bias") and isinstance(v.bias, paddle.fluid.framework.ParamBase):
-                    pg2.append(v.bias)  # biases
-                if isinstance(v, paddle.nn.BatchNorm2D) or "bn" in k:
-                    pg0.append(v.weight)  # no decay
-                elif hasattr(v, "weight") and isinstance(v.weight, paddle.fluid.framework.ParamBase):
-                    pg1.append(v.weight)  # apply decay
-            optimizer = paddle.optimizer.Momentum(
-                parameters=[{'params': pg0}], learning_rate=self.lr, grad_clip=None,
-                momentum=0.9, use_nesterov=True, weight_decay=0.0
-            )
-            optimizer._add_param_group(
-                {"params": pg1, "weight_decay": 0.0005, 'grad_clip': None})
-                # add pg1 with weight_decay
-            optimizer._add_param_group({"params": pg2, "weight_decay": 0.0, 'grad_clip': None})
-            logger.info(f"optimizer: {type(optimizer).__name__} with parameter groups "
-                f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
-            self.optimizer = optimizer
+            if self.cfg.architecture not in ['YOLOX']:
+                self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
+            else:
+                '''
+                self.optimizer = paddle.optimizer.Momentum(
+                    parameters=self.model.parameters(), learning_rate=self.lr,
+                    momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005)
+                #)
+                '''
+                pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
+                for k, v in self.model.named_sublayers():
+                    if hasattr(v, "bias") and isinstance(v.bias, paddle.fluid.framework.ParamBase):
+                        pg2.append(v.bias)  # biases
+                    if isinstance(v, paddle.nn.BatchNorm2D) or "bn" in k:
+                        pg0.append(v.weight)  # no decay
+                    elif hasattr(v, "weight") and isinstance(v.weight, paddle.fluid.framework.ParamBase):
+                        pg1.append(v.weight)  # apply decay
+                optimizer = paddle.optimizer.Momentum(
+                    parameters=[{'params': pg0}], learning_rate=self.lr, grad_clip=None,
+                    momentum=0.9, use_nesterov=True, weight_decay=0.0
+                )
+                optimizer._add_param_group(
+                    {"params": pg1, "weight_decay": 0.0005, 'grad_clip': None})
+                    # add pg1 with weight_decay
+                optimizer._add_param_group({"params": pg2, "weight_decay": 0.0, 'grad_clip': None})
+                logger.info(f"optimizer: {type(optimizer).__name__} with parameter groups "
+                    f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
+                self.optimizer = optimizer
 
 
         if self.cfg.get('unstructured_prune'):
@@ -425,7 +427,7 @@ class Trainer(object):
                 
                 # YOLOX random resizing
                 intv = 10
-                if (step_id + 1) % intv == 0:
+                if 0: #(step_id + 1) % intv == 0:
                     #assert 'RecBatchRandomResize' in self.cfg.TrainReader
                     assert 'target_size' in data
                     inputs_dim = data['im_shape'][0].numpy()
@@ -443,13 +445,14 @@ class Trainer(object):
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
                 data['epoch_id'] = epoch_id
+                data['step_id'] = step_id # new add
 
                 if self.cfg.get('fp16', False):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
                         outputs = model(data)
                         loss = outputs['loss']
-                    '''
+                    #'''
                     # model backward
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
@@ -460,7 +463,7 @@ class Trainer(object):
                     scaler.scale(loss).backward()
                     scaler.step(self.optimizer)
                     scaler.update()
-                    #'''
+                    '''
                 else:
                     # model forward
                     outputs = model(data)

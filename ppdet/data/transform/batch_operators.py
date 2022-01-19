@@ -50,6 +50,7 @@ __all__ = [
     'Gt2GFLTarget',
     'Gt2CenterNetTarget',
     'RecBatchRandomResize',
+    'RecMSResize',
     #'Gt2YolovXTarget',
 ]
 
@@ -177,28 +178,20 @@ class BatchRandomResize(BaseOperator):
 class RecBatchRandomResize(BaseOperator):
     def __init__(self,
                  input_size=[640, 640],
+                 nn_resize=True,
+                 keep_ratio=True,
                  size_divisor=32,
                  multiscale_range=5,
                  random_size_factor=None):
         super(RecBatchRandomResize, self).__init__()
         self.input_size = input_size
+        self.nn_resize = nn_resize
+        self.keep_ratio = keep_ratio
         self.size_divisor = size_divisor
         self.multiscale_range = multiscale_range
         self.random_size_factor = random_size_factor
 
-    def nn_resize(self, inputs, targets, tsize):
-        scale_y = tsize[0] / self.input_size[0]
-        scale_x = tsize[1] / self.input_size[1]
-        if scale_x != 1 or scale_y != 1:
-            inputs = nn.functional.interpolate(  ### TODO:must be tensor resize?
-                inputs, size=tsize, mode="bilinear", align_corners=False
-            )
-            targets[..., 1::2] = targets[..., 1::2] * scale_x
-            targets[..., 2::2] = targets[..., 2::2] * scale_y
-        return inputs, targets
-
     def __call__(self, samples, context=None):
-        # always keep retio
         image_ratio = self.input_size[1] * 1.0 / self.input_size[0]
 
         if not self.random_size_factor:
@@ -209,21 +202,16 @@ class RecBatchRandomResize(BaseOperator):
 
         size_factor = random.randint(*self.random_size_factor)
         target_size = [int(self.size_divisor * size_factor), int(self.size_divisor * int(size_factor * image_ratio))]
-        target_size = np.asarray(target_size, dtype=np.float32)
-        
-        ## resizer = Resize(target_size, keep_ratio=True, interp=cv2.INTER_LINEAR)
-        ## return resizer(samples, context=context)
-
-        ''' must be F.interpolate?
-        for sample in samples:
-            inps, targets = self.nn_resize(inputs=sample['image'], targets=sample['gt_bbox'], tsize=target_size)
-            sample['image'] = inps
-            sample['gt_bbox'] = targets
-        '''
-
+        #target_size = np.asarray(target_size, dtype=np.float32)
         for sample in samples:
             sample['target_size'] = target_size
-        return samples
+
+        if self.nn_resize: # do resize by F.interpolate before model input
+            return samples
+
+        # rectangle should set keep_ratio=False
+        resizer = Resize(target_size, keep_ratio=self.keep_ratio, interp=cv2.INTER_LINEAR)
+        return resizer(samples, context=context)
 
 
 @register_op

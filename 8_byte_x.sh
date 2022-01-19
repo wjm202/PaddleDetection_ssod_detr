@@ -1,11 +1,9 @@
 #python3.7 dygraph_print.py -c configs/yolox/yolox_darknet53_coco.yml 2>&1 | tee ppdet_yolox_darknet53_print.txt
 
-name=x #nano
 export FLAGS_allocator_strategy=auto_growth
 model_type=yolox
-job_name=yolox_${name}_coco
-config=configs/yolox/byte_x_mot_ablation.yml #configs/${model_type}/${job_name}.yml
-#config=configs/${model_type}/${job_name}_debug.yml
+job_name=byte_x_mot_ablation
+config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
 
 # 1. training

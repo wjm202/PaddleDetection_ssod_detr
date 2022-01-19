@@ -16,11 +16,12 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import paddle
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 from ..post_process import JDEBBoxPostProcess
+from ppdet.modeling.ops import yolox_resize
 from IPython import embed
+
 __all__ = ['YOLOX']
 
 
@@ -74,6 +75,22 @@ class YOLOX(BaseArch):
         }
 
     def _forward(self):
+
+        # YOLOX random resizing
+        if self.training:
+            intv = 1
+            step_id = self.inputs['step_id']
+            if (step_id + 1) % intv == 0:
+                assert 'target_size' in self.inputs
+                inputs_dim = self.inputs['im_shape'][0].numpy()
+                target_dim = self.inputs['target_size'][0].numpy()
+                #print(' 1 ', self.inputs['image'].shape, self.inputs['image'].sum(), self.inputs['gt_bbox'].sum())
+                self.inputs['image'], self.inputs['gt_bbox'] = yolox_resize(
+                    self.inputs['image'], self.inputs['gt_bbox'],
+                    tuple(inputs_dim), tuple(target_dim))
+                #print(' 2 ', self.inputs['image'].shape, self.inputs['image'].sum(), self.inputs['gt_bbox'].sum())
+                #new_shape = self.inputs['im_shape'][0].numpy()
+
         '''
         print('self.inputs ', self.inputs['image'].shape, self.inputs['image'].sum())
         print('self.inputs  sum 0 ',  self.inputs['image'][:,0,:,:].sum())

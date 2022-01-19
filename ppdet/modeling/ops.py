@@ -45,7 +45,7 @@ def yolox_resize(inputs, targets, inputs_dim, tsize):
     scale_y = tsize[0] / inputs_dim[0]
     scale_x = tsize[1] / inputs_dim[1]
     if scale_x != 1 or scale_y != 1:
-        inputs = paddle.nn.functional.interpolate(
+        inputs = F.interpolate(
             inputs, size=tsize, mode="bilinear", align_corners=False
         )
         targets[:, :, 1::2] = targets[:, :, 1::2] * scale_x

@@ -761,6 +761,10 @@ class YOLOXPostProcess2(object):
         self.conf_thres = conf_thres # 0.01 in mot
         self.class_agnostic = False
 
+        self.fake_bbox_pred = paddle.to_tensor(
+            np.array([[-1, 0.0, 0.0, 0.0, 0.0, 0.0]], dtype='float32'))
+        self.fake_bbox_num = paddle.to_tensor(np.array([1], dtype='int32'))
+
     #def __call__(self, yolox_head_outs, anchors, im_shape, scale_factor):
     def __call__(self, yolox_head_outs, im_shape, scale_factor):
         """
@@ -832,5 +836,7 @@ class YOLOXPostProcess2(object):
             else:
                 out_bbox_pred[i] = paddle.concat((out_bbox_pred[i], bbox_pred))
                 out_bbox_num[i] = paddle.concat((out_bbox_num[i], bbox_num))
-
+        if out_bbox_pred[-1] is None:
+            out_bbox_pred[-1] = self.fake_bbox_pred
+            out_bbox_num[-1] = self.fake_bbox_num
         return out_bbox_pred[-1], out_bbox_num[-1]
