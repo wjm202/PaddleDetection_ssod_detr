@@ -3122,7 +3122,7 @@ class LetterBox(BaseOperator):
 
         return sample
 
-
+from .op_helper import random_affine
 @register_op
 class YOLOXMosaic(BaseOperator):
     def __init__(self,
@@ -3135,7 +3135,8 @@ class YOLOXMosaic(BaseOperator):
                  input_dim=[640, 640],
                  enable_mixup=True,
                  mixup_prob=1.0,
-                 mixup_scale=[0.5, 1.5]):
+                 mixup_scale=[0.5, 1.5],
+                 remove_outside_box=False):
         """ YOLOXMosaic image and gt_bbbox/gt_score
         Args:
             alpha (float): alpha parameter of beta distribute
@@ -3152,6 +3153,7 @@ class YOLOXMosaic(BaseOperator):
         self.enable_mixup = enable_mixup
         self.mixup_prob = mixup_prob
         self.mixup_scale = mixup_scale
+        self.remove_outside_box = remove_outside_box
 
     def get_mosaic_coordinate(self, mosaic_image, mosaic_index, xc, yc, w, h, input_h, input_w):
         # TODO update doc
@@ -3173,110 +3175,6 @@ class YOLOXMosaic(BaseOperator):
             small_coord = 0, 0, min(w, x2 - x1), min(y2 - y1, h)
         return (x1, y1, x2, y2), small_coord
 
-    def random_perspective(
-            self,
-            img,
-            targets=(),
-            degrees=10,
-            translate=0.1,
-            scale=0.1,
-            shear=10,
-            perspective=0.0,
-            border=(0, 0)):
-        # targets = [xyxy, cls, is_crowd]
-        height = img.shape[0] + border[0] * 2  # shape(h,w,c)
-        width = img.shape[1] + border[1] * 2
-
-        # Center
-        C = np.eye(3)
-        C[0, 2] = -img.shape[1] / 2  # x translation (pixels)
-        C[1, 2] = -img.shape[0] / 2  # y translation (pixels)
-
-        # Rotation and Scale
-        R = np.eye(3)
-        a = random.uniform(-degrees, degrees)
-        # a += random.choice([-180, -90, 0, 90])  # add 90deg rotations to small rotations
-        s = random.uniform(scale[0], scale[1])
-        # s = 2 ** random.uniform(-scale, scale)
-        R[:2] = cv2.getRotationMatrix2D(angle=a, center=(0, 0), scale=s)
-
-        # Shear
-        S = np.eye(3)
-        S[0, 1] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # x shear (deg)
-        S[1, 0] = math.tan(random.uniform(-shear, shear) * math.pi / 180)  # y shear (deg)
-
-        # Translation
-        T = np.eye(3)
-        T[0, 2] = (
-                random.uniform(0.5 - translate, 0.5 + translate) * width
-        )  # x translation (pixels)
-        T[1, 2] = (
-                random.uniform(0.5 - translate, 0.5 + translate) * height
-        )  # y translation (pixels)
-
-        # Combined rotation matrix
-        M = T @ S @ R @ C  # order of operations (right to left) is IMPORTANT
-
-        ###########################
-        # For Aug out of Mosaic
-        # s = 1.
-        # M = np.eye(3)
-        ###########################
-
-        if (border[0] != 0) or (border[1] != 0) or (M != np.eye(3)).any():  # image changed
-            if perspective:
-                img = cv2.warpPerspective(
-                    img, M, dsize=(width, height), borderValue=(114, 114, 114)
-                )
-            else:  # affine
-                img = cv2.warpAffine(
-                    img, M[:2], dsize=(width, height), borderValue=(114, 114, 114)
-                )
-
-        # Transform label coordinates
-        n = len(targets)
-        if n:
-            # warp points
-            xy = np.ones((n * 4, 3))
-            xy[:, :2] = targets[:, [0, 1, 2, 3, 0, 3, 2, 1]].reshape(
-                n * 4, 2
-            )  # x1y1, x2y2, x1y2, x2y1
-            xy = xy @ M.T  # transform
-            if perspective:
-                xy = (xy[:, :2] / xy[:, 2:3]).reshape(n, 8)  # rescale
-            else:  # affine
-                xy = xy[:, :2].reshape(n, 8)
-
-            # create new boxes
-            x = xy[:, [0, 2, 4, 6]]
-            y = xy[:, [1, 3, 5, 7]]
-            xy = np.concatenate((x.min(1), y.min(1), x.max(1), y.max(1))).reshape(4, n).T
-
-            # clip boxes
-            xy[:, [0, 2]] = xy[:, [0, 2]].clip(0, width)
-            xy[:, [1, 3]] = xy[:, [1, 3]].clip(0, height)
-
-            # filter candidates
-            i = self.box_candidates(box1=targets[:, :4].T * s, box2=xy.T)
-            targets = targets[i]
-            targets[:, :4] = xy[i]
-
-        return img, targets
-
-    def box_candidates(self, box1, box2, wh_thr=2, ar_thr=20, area_thr=0.2):
-        # box1(4,n), box2(4,n)
-        # Compute candidate boxes which include follwing 5 things:
-        # box1 before augment, box2 after augment, wh_thr (pixels), aspect_ratio_thr, area_ratio
-        w1, h1 = box1[2] - box1[0], box1[3] - box1[1]
-        w2, h2 = box2[2] - box2[0], box2[3] - box2[1]
-        ar = np.maximum(w2 / (h2 + 1e-16), h2 / (w2 + 1e-16))  # aspect ratio
-        return (
-                (w2 > wh_thr)
-                & (h2 > wh_thr)
-                & (w2 * h2 / (w1 * h1 + 1e-16) > area_thr)
-                & (ar < ar_thr)
-        )  # candidates
-
     def __call__(self, sample, context=None):
         if not isinstance(sample, Sequence):
             #logger.info('YOLOXMosaic not work!')
@@ -3287,11 +3185,11 @@ class YOLOXMosaic(BaseOperator):
         if np.random.uniform(0., 1.) > self.prob:
             return sample[0]
 
+        sample0 = sample[0]
         sample1 = sample[1]
         sample2 = sample[2]
         sample3 = sample[3]
         sample_mixup = sample[4]
-        sample0 = sample[0]
 
         mosaic_is_crowd = []
         mosaic_gt_class = []
@@ -3306,10 +3204,10 @@ class YOLOXMosaic(BaseOperator):
         for i_mosaic, sp in enumerate([sample0, sample1, sample2, sample3]):
             # img, _labels, _, img_id = self._dataset.pull_item(index)
             img = sp['image']
-            im_id = sp['im_id']  # [1, ]
-            is_crowd = sp['is_crowd']  # [?, 1]
-            gt_class = sp['gt_class']  # [?, 1]
-            gt_bbox = sp['gt_bbox']  # [?, 4]
+            im_id = sp['im_id']
+            is_crowd = sp['is_crowd']
+            gt_class = sp['gt_class']
+            gt_bbox = sp['gt_bbox']
             h0, w0 = img.shape[:2]  # orig hw
             scale = min(1. * input_h / h0, 1. * input_w / w0)
             img = cv2.resize(
@@ -3338,32 +3236,53 @@ class YOLOXMosaic(BaseOperator):
             mosaic_gt_bbox.append(_gt_bbox)
             mosaic_gt_class.append(gt_class)
             mosaic_is_crowd.append(is_crowd)
-        # cv2.imwrite('%d.jpg'%im_id, mosaic_img)
-        # print()
 
         if len(mosaic_gt_bbox):
             mosaic_gt_bbox = np.concatenate(mosaic_gt_bbox, 0)
             mosaic_gt_class = np.concatenate(mosaic_gt_class, 0)
             mosaic_is_crowd = np.concatenate(mosaic_is_crowd, 0)
-            np.clip(mosaic_gt_bbox[:, 0], 0, 2 * input_w, out=mosaic_gt_bbox[:, 0])
-            np.clip(mosaic_gt_bbox[:, 1], 0, 2 * input_h, out=mosaic_gt_bbox[:, 1])
-            np.clip(mosaic_gt_bbox[:, 2], 0, 2 * input_w, out=mosaic_gt_bbox[:, 2])
-            np.clip(mosaic_gt_bbox[:, 3], 0, 2 * input_h, out=mosaic_gt_bbox[:, 3])
+            
+            if self.remove_outside_box:
+                mosaic_labels = np.concatenate([mosaic_gt_bbox,
+                    mosaic_gt_class.astype(mosaic_gt_bbox.dtype),
+                    mosaic_is_crowd.astype(mosaic_gt_bbox.dtype)], 1)
 
-        mosaic_labels = np.concatenate([mosaic_gt_bbox, mosaic_gt_class.astype(mosaic_gt_bbox.dtype),
-                                        mosaic_is_crowd.astype(mosaic_gt_bbox.dtype)], 1)
-        mosaic_img, mosaic_labels = self.random_perspective(
+                ### for_mot
+                mosaic_labels = np.concatenate([mosaic_gt_bbox, mosaic_gt_class.astype(mosaic_gt_bbox.dtype),
+                                                mosaic_is_crowd.astype(mosaic_gt_bbox.dtype)], 1)
+                flag1 = mosaic_gt_bbox[:, 0] < 2 * input_w
+                flag2 = mosaic_gt_bbox[:, 2] > 0
+                flag3 = mosaic_gt_bbox[:, 1] < 2 * input_h
+                flag4 = mosaic_gt_bbox[:, 3] > 0
+                flag_all = flag1*flag2*flag3*flag4
+                mosaic_labels = mosaic_labels[flag_all]
+            else:
+                np.clip(mosaic_gt_bbox[:, 0], 0, 2 * input_w, out=mosaic_gt_bbox[:, 0])
+                np.clip(mosaic_gt_bbox[:, 1], 0, 2 * input_h, out=mosaic_gt_bbox[:, 1])
+                np.clip(mosaic_gt_bbox[:, 2], 0, 2 * input_w, out=mosaic_gt_bbox[:, 2])
+                np.clip(mosaic_gt_bbox[:, 3], 0, 2 * input_h, out=mosaic_gt_bbox[:, 3])
+                mosaic_labels = np.concatenate([mosaic_gt_bbox, mosaic_gt_class.astype(mosaic_gt_bbox.dtype),
+                                                mosaic_is_crowd.astype(mosaic_gt_bbox.dtype)], 1)
+        else:
+            mosaic_labels = np.zeros((1, 6))
+
+        #print(' after pinjie ', mosaic_img.shape)
+        #mosaic_img = visbox(mosaic_img, mosaic_labels)
+        #cv2.imwrite('%d_1_pinjie.jpg'%im_id, mosaic_img)
+
+        ### for_mot
+        mosaic_img, mosaic_labels = random_affine(
             mosaic_img,
             mosaic_labels,
+            target_size=(input_w, input_h),
             degrees=self.degrees,
             translate=self.translate,
-            scale=self.scale,
+            scales=self.scale,
             shear=self.shear,
-            perspective=self.perspective,
-            border=[-input_h // 2, -input_w // 2],
-        )  # border to remove
-        # cv2.imwrite('%d2.jpg'%im_id, mosaic_img)
-        # print()
+        )
+        #print(' caijian ', mosaic_img.shape)
+        #mosaic_img = visbox(mosaic_img, mosaic_labels)
+        #cv2.imwrite('%d_2_caijian.jpg'%im_id, mosaic_img)
 
         # -----------------------------------------------------------------
         # CopyPaste: https://arxiv.org/abs/2012.07177
@@ -3378,17 +3297,19 @@ class YOLOXMosaic(BaseOperator):
                 [sample_mixup['gt_bbox'], sample_mixup['gt_class'].astype(mosaic_labels.dtype),
                  sample_mixup['is_crowd'].astype(mosaic_labels.dtype)], 1)
             mosaic_img, mosaic_labels = self.mixup(mosaic_img, mosaic_labels, self.input_dim, cp_labels, img_mixup)
-            # mosaic_img_bgr = cv2.cvtColor(mosaic_img, cv2.COLOR_RGB2BGR)
-            # cv2.imwrite('%d3.jpg' % im_id, mosaic_img_bgr)
-            # print()
-        sample0['image'] = mosaic_img.astype(np.float32) ###
+            #mosaic_img_bgr = cv2.cvtColor(mosaic_img, cv2.COLOR_RGB2BGR)
+            #print(' mixup ', mosaic_img.shape)
+            #mosaic_img = visbox(mosaic_img, mosaic_labels)
+            #cv2.imwrite('%d_3_mixup.jpg' % im_id, mosaic_img)
+
+        sample0['image'] = mosaic_img.astype(np.float32) #
         sample0['h'] = float(mosaic_img.shape[0])
         sample0['w'] = float(mosaic_img.shape[1])
         sample0['im_shape'][0] = sample0['h']
         sample0['im_shape'][1] = sample0['w']
+        sample0['gt_bbox'] = mosaic_labels[:, :4].astype(np.float32)
         sample0['gt_class'] = mosaic_labels[:, 4:5].astype(np.float32)
         sample0['is_crowd'] = mosaic_labels[:, 5:6].astype(np.float32)
-        sample0['gt_bbox'] = mosaic_labels[:, :4].astype(np.float32)
         return sample0
 
     def adjust_box_anns(self, bbox, scale_ratio, padw, padh, w_max, h_max):
@@ -3443,8 +3364,8 @@ class YOLOXMosaic(BaseOperator):
         if padded_img.shape[1] > target_w:
             x_offset = random.randint(0, padded_img.shape[1] - target_w - 1)
         padded_cropped_img = padded_img[
-                             y_offset: y_offset + target_h, x_offset: x_offset + target_w
-                             ]
+            y_offset: y_offset + target_h, x_offset: x_offset + target_w
+        ]
 
         cp_bboxes_origin_np = self.adjust_box_anns(
             cp_labels[:, :4].copy(), cp_scale_ratio, 0, 0, origin_w, origin_h
@@ -3460,16 +3381,19 @@ class YOLOXMosaic(BaseOperator):
         cp_bboxes_transformed_np[:, 1::2] = np.clip(
             cp_bboxes_transformed_np[:, 1::2] - y_offset, 0, target_h
         )
-        keep_list = self.box_candidates(cp_bboxes_origin_np.T, cp_bboxes_transformed_np.T, 5)
 
-        if keep_list.sum() >= 1.0:
-            cls_labels = cp_labels[keep_list, 4:5].copy()
-            crd_labels = cp_labels[keep_list, 5:6].copy()
-            box_labels = cp_bboxes_transformed_np[keep_list]
-            labels = np.hstack((box_labels, cls_labels, crd_labels))
-            origin_labels = np.vstack((origin_labels, labels))
-            origin_img = origin_img.astype(np.float32)
-            origin_img = 0.5 * origin_img + 0.5 * padded_cropped_img.astype(np.float32)
+        if self.remove_outside_box:
+            cp_bboxes_transformed_np[:, 0::2] = cp_bboxes_transformed_np[:, 0::2] - x_offset
+            cp_bboxes_transformed_np[:, 1::2] = cp_bboxes_transformed_np[:, 1::2] - y_offset
+
+        cls_labels = cp_labels[:, 4:5].copy()
+        crd_labels = cp_labels[:, 5:6].copy()
+        box_labels = cp_bboxes_transformed_np
+        labels = np.hstack((box_labels, cls_labels, crd_labels))
+
+        origin_labels = np.vstack((origin_labels, labels))
+        origin_img = origin_img.astype(np.float32)
+        origin_img = 0.5 * origin_img + 0.5 * padded_cropped_img.astype(np.float32)
 
         return origin_img.astype(np.uint8), origin_labels
 
@@ -3584,14 +3508,9 @@ class RandomHSV(BaseOperator):
 
 @register_op
 class DecodeResize(BaseOperator):
-    def __init__(self, target_size, keep_ratio=True, hsv_prob=0, flip_prob=0, legacy=False, fill_value=114, max_labels=120):
+    def __init__(self, target_size, keep_ratio=True):
         super(DecodeResize, self).__init__()
         self.keep_ratio = keep_ratio
-        self.legacy = legacy
-        self.max_labels = max_labels
-        self.hsv_prob = hsv_prob
-        self.flip_prob = flip_prob
-
         if not isinstance(target_size, (Integral, Sequence)):
             raise TypeError(
                 "Type of target_size is invalid. Must be Integer or List or Tuple, now is {}".
@@ -3600,18 +3519,15 @@ class DecodeResize(BaseOperator):
             target_size = [target_size, target_size]
         self.target_size = target_size
 
-        if not isinstance(fill_value, int):
-            raise ValueError('fill_value must be int!')
-        if fill_value < 0 or fill_value > 255:
-            raise ValueError('fill_value must in 0 ~ 255')
-        self.fill_value = fill_value
-
     def load_resized_img(self, sample, target_size):
         if 'image' not in sample:
             img_file = sample['im_file']
             sample['image'] = cv2.imread(img_file)
             sample.pop('im_file')
         im = sample['image']
+
+        if 'keep_ori_im' in sample and sample['keep_ori_im']:
+            sample['ori_image'] = im
 
         if 'h' not in sample:
             sample['h'] = im.shape[0]
@@ -3632,7 +3548,7 @@ class DecodeResize(BaseOperator):
 
         sample['im_shape'] = np.array(im.shape[:2], dtype=np.float32) # original shape
 
-        # resized 
+        # get resized img
         r = min(target_size[0] / im.shape[0], target_size[1] / im.shape[1])
         resized_img = cv2.resize(
             im,
@@ -3640,9 +3556,75 @@ class DecodeResize(BaseOperator):
             interpolation=cv2.INTER_LINEAR,
         ).astype(np.uint8)
         #print('  im  load_resized_img   ',im.shape, im.sum(), resized_img.shape, resized_img.sum())
+        
+        resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
+        
         sample['image'] = resized_img
         sample['scale_factor'] = np.array([r, r], dtype=np.float32)
         return sample, r
+
+    def apply(self, sample, context=None):
+        sample, before_r = self.load_resized_img(sample, self.target_size)
+        image = sample['image']
+        im_shape = image.shape
+        if self.keep_ratio: # always true
+            im_size_min = np.min(im_shape[0:2])
+            im_size_max = np.max(im_shape[0:2])
+
+            target_size_min = np.min(self.target_size)
+            target_size_max = np.max(self.target_size)
+
+            im_scale = min(target_size_min / im_size_min,
+                           target_size_max / im_size_max)
+
+            resize_h = im_scale * float(im_shape[0])
+            resize_w = im_scale * float(im_shape[1])
+
+            im_scale_x = im_scale
+            im_scale_y = im_scale
+        else:
+            resize_h, resize_w = self.target_size
+            im_scale_y = resize_h / im_shape[0]
+            im_scale_x = resize_w / im_shape[1]
+
+        sample['im_shape'] = np.asarray([resize_h, resize_w], dtype=np.float32)
+        if 'scale_factor' in sample:
+            scale_factor = sample['scale_factor']
+            sample['scale_factor'] = np.asarray(
+                [scale_factor[0] * im_scale_y, scale_factor[1] * im_scale_x],
+                dtype=np.float32)
+        else:
+            sample['scale_factor'] = np.asarray(
+                [im_scale_y, im_scale_x], dtype=np.float32)
+        
+        # train reader
+        if 'gt_bbox' in sample:
+            sample['gt_bbox'] *= before_r
+
+        return sample
+
+
+@register_op
+class PadResize(BaseOperator):
+    def __init__(self, target_size, hsv_prob=0, flip_prob=0, legacy=False, fill_value=114, max_labels=120):
+        super(PadResize, self).__init__()
+        self.hsv_prob = hsv_prob
+        self.flip_prob = flip_prob
+        self.legacy = legacy
+        self.max_labels = max_labels
+        if not isinstance(target_size, (Integral, Sequence)):
+            raise TypeError(
+                "Type of target_size is invalid. Must be Integer or List or Tuple, now is {}".
+                format(type(target_size)))
+        if isinstance(target_size, Integral):
+            target_size = [target_size, target_size]
+        self.target_size = target_size
+
+        if not isinstance(fill_value, int):
+            raise ValueError('fill_value must be int!')
+        if fill_value < 0 or fill_value > 255:
+            raise ValueError('fill_value must in 0 ~ 255')
+        self.fill_value = fill_value
 
     def pad_resize(self, img, input_size, fill_value=114):
         if len(img.shape) == 3:
@@ -3694,42 +3676,8 @@ class DecodeResize(BaseOperator):
         return bboxes
 
     def apply(self, sample, context=None):
-        sample, before_r = self.load_resized_img(sample, self.target_size)
         image = sample['image']
 
-        im_shape = image.shape
-        if self.keep_ratio: # always true
-            im_size_min = np.min(im_shape[0:2])
-            im_size_max = np.max(im_shape[0:2])
-
-            target_size_min = np.min(self.target_size)
-            target_size_max = np.max(self.target_size)
-
-            im_scale = min(target_size_min / im_size_min,
-                           target_size_max / im_size_max)
-
-            resize_h = im_scale * float(im_shape[0])
-            resize_w = im_scale * float(im_shape[1])
-
-            im_scale_x = im_scale
-            im_scale_y = im_scale
-        else:
-            resize_h, resize_w = self.target_size
-            im_scale_y = resize_h / im_shape[0]
-            im_scale_x = resize_w / im_shape[1]
-
-        sample['im_shape'] = np.asarray([resize_h, resize_w], dtype=np.float32)
-        if 'scale_factor' in sample:
-            scale_factor = sample['scale_factor']
-            sample['scale_factor'] = np.asarray(
-                [scale_factor[0] * im_scale_y, scale_factor[1] * im_scale_x],
-                dtype=np.float32)
-        else:
-            sample['scale_factor'] = np.asarray(
-                [im_scale_y, im_scale_x], dtype=np.float32)
-
-        
-        #image = sample['image']
         # val reader
         if 'gt_bbox' not in sample:
             image, ratio = self.pad_resize(image, self.target_size)
@@ -3739,26 +3687,35 @@ class DecodeResize(BaseOperator):
 
         # train reader
         boxes = sample['gt_bbox'].copy() # xywh
-        boxes *= before_r
         labels = sample['gt_class'].copy()
-        targets = np.concatenate([boxes, labels], 1)
+        is_crowds = sample['is_crowd'].copy()
+        targets = np.concatenate([boxes, labels, is_crowds], 1)
+
+        '''
+        image_vis = visbox(image, targets) # (427, 640, 3)
+        cv2.imwrite('%d_padresize.jpg' % sample['im_id'], image)
+        print('    dui  ')
+        embed()
+        exit()
+        '''
+
 
         input_dim = self.target_size
         if len(boxes) == 0:
-            targets = np.zeros((1, 5), dtype=np.float32) #
-            #targets = np.zeros((self.max_labels, 5), dtype=np.float32) #
+            #targets = np.zeros((1, 6), dtype=np.float32) #
             image, r_o = self.pad_resize(image, input_dim)
-            
             sample['image'] = image
-            sample['gt_class'] = targets[:, :1]
-            sample['gt_bbox'] = targets[:, 1:]
+            sample['gt_class'] = np.zeros((1, 1), dtype=np.float32)
+            sample['gt_bbox'] = np.zeros((1, 4), dtype=np.float32)
+            sample['is_crowd'] = np.zeros((1, 1), dtype=np.float32)
             #sample['gt_class_bbox'] = targets
             return sample
 
         image_o = image.copy()
         targets_o = targets.copy()
         boxes_o = targets_o[:, :4]
-        labels_o = targets_o[:, 4:]
+        labels_o = targets_o[:, 4:5]
+        is_crowds_o = targets_o[:, 5:6]
         # bbox_o: [xyxy] to [c_x,c_y,w,h]
         boxes_o = self.xyxy2cxcywh(boxes_o)
         
@@ -3774,18 +3731,22 @@ class DecodeResize(BaseOperator):
         boxes = self.xyxy2cxcywh(boxes)
         boxes *= r_
 
+        #print('    dui  r_  boxes ', boxes.shape, boxes.sum(), boxes)
+        #embed()
+
         mask_b = np.minimum(boxes[:, 2], boxes[:, 3]) > 1
         boxes_t = boxes[mask_b]
         labels_t = labels[mask_b]
+        is_crowd_t = is_crowds[mask_b]
 
         if len(boxes_t) == 0:
             image_t, r_o = self.pad_resize(image_o, input_dim)
             boxes_o *= r_o
             boxes_t = boxes_o
             labels_t = labels_o
+            is_crowd_t = is_crowds_o
         
-        #labels_t = np.expand_dims(labels_t, 1)
-        targets_t = np.hstack((labels_t, boxes_t))
+        targets_t = np.hstack((boxes_t, labels_t, is_crowd_t))
 
         padded_labels = np.ascontiguousarray(targets_t, dtype=np.float32)
 
@@ -3796,37 +3757,31 @@ class DecodeResize(BaseOperator):
         ]
         padded_labels = np.ascontiguousarray(padded_labels, dtype=np.float32)
         '''
+         # shourld cxcywh -> xyxy
+        #image_t_vis = visbox(image_t, padded_labels)
+        #cv2.imwrite('%d_padresize.jpg' % sample['im_id'], image_t_vis)
 
-        sample['image'] = image_t
-        sample['gt_class'] = padded_labels[:, :1]
-        sample['gt_bbox'] = padded_labels[:, 1:]
-        #sample['gt_class_bbox'] = padded_labels
-
-        #sample.pop('is_crowd')
-        #sample.pop('gt_score')
-        #sample.pop('difficult')
-        '''
-        gt_num = len(boxes_t)
-        num_max = self.max_labels
-        if 'is_crowd' in sample:
-            pad_is_crowd = np.zeros((num_max, 1), dtype=np.int32)
-            if gt_num > 0:
-                pad_is_crowd[:gt_num] = sample['is_crowd'][:gt_num]
-            sample['is_crowd'] = pad_is_crowd
-        if 'gt_score' in sample:
-            pad_score = np.zeros((num_max, 1), dtype=np.float32)
-            if gt_num > 0:
-                pad_score[:gt_num] = sample['gt_score'][:gt_num]
-            sample['gt_score'] = pad_score
-        if 'difficult' in sample:
-            pad_diff = np.zeros((num_max, 1), dtype=np.int32)
-            if gt_num > 0:
-                pad_diff[:gt_num] = sample['difficult'][:gt_num]
-            sample['difficult'] = pad_diff
-        if 'gt_ide' in sample:
-            pad_ide = np.zeros((num_max, 1), dtype=np.int32)
-            if gt_num > 0:
-                pad_ide[:gt_num] = sample['gt_ide'][:gt_num]
-            sample['gt_ide'] = pad_ide
-        '''
+        sample['image'] = image_t # (640, 640, 3)
+        sample['gt_bbox'] = padded_labels[:, :4]
+        sample['gt_class'] = padded_labels[:, 4:5]
+        sample['is_crowd'] = padded_labels[:, 5:6]
         return sample
+
+
+def visbox(image, tlbr_cls_crds):
+    for i, tlbr_cls_crd in enumerate(tlbr_cls_crds):
+        x1, y1, x2, y2, cls_, crd = tlbr_cls_crd
+        intbox = tuple(map(int, (x1, y1, x2, y2)))
+
+        id_text = 'cls_{}'.format(int(cls_))
+        cv2.rectangle(
+            image, intbox[0:2], intbox[2:4], color=(255,255,0), thickness=1)
+        cv2.putText(
+            image,
+            id_text,
+            (intbox[0], intbox[1] - 10),
+            cv2.FONT_HERSHEY_PLAIN,
+            1,
+            (0, 0, 255),
+            thickness=1)
+    return image

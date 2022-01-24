@@ -50,8 +50,6 @@ __all__ = [
     'Gt2GFLTarget',
     'Gt2CenterNetTarget',
     'RecBatchRandomResize',
-    'RecMSResize',
-    #'Gt2YolovXTarget',
 ]
 
 
@@ -202,9 +200,9 @@ class RecBatchRandomResize(BaseOperator):
 
         size_factor = random.randint(*self.random_size_factor)
         target_size = [int(self.size_divisor * size_factor), int(self.size_divisor * int(size_factor * image_ratio))]
-        #target_size = np.asarray(target_size, dtype=np.float32)
+
         for sample in samples:
-            sample['target_size'] = target_size
+            sample['target_size'] = np.asarray(target_size, dtype=np.float32)
 
         if self.nn_resize: # do resize by F.interpolate before model input
             return samples

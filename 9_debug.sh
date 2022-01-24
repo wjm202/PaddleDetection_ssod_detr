@@ -10,12 +10,13 @@ config=configs/${model_type}/${job_name}_debug.yml
 log_dir=log_dir/${job_name}
 
 # 1. training
-CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ../../${job_name}_paddle_rgb.pdparams #--fp16
+#CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ../../${job_name}_paddle_rgb.pdparams #--fp16
+CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ../../${job_name}_paddle.pdparams #--fp16
 #python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1 tools/train.py -c ${config} #--eval  # &> ${job_name}.log &
 
 # 2. eval
 #CUDA_VISIBLE_DEVICES=0 python3.7 tools/eval.py -c ${config} -o weights=https://paddledet.bj.bcebos.com/models/${job_name}.pdparams
-#CUDA_VISIBLE_DEVICES=6 python3.7 tools/eval.py -c ${config} -o weights=../../${job_name}_paddle_rgb.pdparams
+#CUDA_VISIBLE_DEVICES=6 python3.7 tools/eval.py -c ${config} -o weights=../../${job_name}_paddle.pdparams
 # im8 59.6
 #CUDA_VISIBLE_DEVICES=2 python3.7 tools/eval.py -c ${config} -o weights=output/yolox_s_coco/9.pdparams #../../../paddle_${job_name}.pdparams
 

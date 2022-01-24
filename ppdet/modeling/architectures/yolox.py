@@ -77,8 +77,8 @@ class YOLOX(BaseArch):
     def _forward(self):
 
         # YOLOX random resizing
-        if self.training:
-            intv = 1
+        if 0: #self.training:
+            intv = 10
             step_id = self.inputs['step_id']
             if (step_id + 1) % intv == 0:
                 assert 'target_size' in self.inputs

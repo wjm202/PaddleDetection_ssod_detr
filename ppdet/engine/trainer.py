@@ -137,8 +137,7 @@ class Trainer(object):
                 '''
                 self.optimizer = paddle.optimizer.Momentum(
                     parameters=self.model.parameters(), learning_rate=self.lr,
-                    momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005)
-                #)
+                    momentum=0.9) #, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
                 '''
                 pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
                 for k, v in self.model.named_sublayers():
@@ -424,22 +423,6 @@ class Trainer(object):
             model.train()
             iter_tic = time.time()
             for step_id, data in enumerate(self.loader):
-                
-                # YOLOX random resizing
-                intv = 10
-                if 0: #(step_id + 1) % intv == 0:
-                    #assert 'RecBatchRandomResize' in self.cfg.TrainReader
-                    assert 'target_size' in data
-                    inputs_dim = data['im_shape'][0].numpy()
-                    target_dim = data['target_size'][0].numpy()
-                    try:
-                        #print(' 1 ', data['image'].shape, data['image'].sum(), data['gt_bbox'].sum())
-                        data['image'], data['gt_bbox'] = yolox_resize(data['image'], data['gt_bbox'], tuple(inputs_dim), tuple(target_dim))
-                        #print(' 2 ', data['image'].shape, data['image'].sum(), data['gt_bbox'].sum())
-                        #new_shape = data['im_shape'][0].numpy()
-                    except:
-                        embed()
-
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
@@ -452,7 +435,7 @@ class Trainer(object):
                         # model forward
                         outputs = model(data)
                         loss = outputs['loss']
-                    #'''
+                    '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
@@ -463,7 +446,7 @@ class Trainer(object):
                     scaler.scale(loss).backward()
                     scaler.step(self.optimizer)
                     scaler.update()
-                    '''
+                    #'''
                 else:
                     # model forward
                     outputs = model(data)
