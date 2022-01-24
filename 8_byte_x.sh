@@ -7,12 +7,12 @@ config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
 
 # 1. training
-#CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ../../byte_x_mot_ablation_paddle.pdparams
-python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1,2,3,4,5,6,7 tools/train.py -c ${config} --eval --fp16 # &> ${job_name}.log &
+CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} --eval --fp16 -r ../../byte_x_mot_ablation_paddle.pdparams
+#python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1,2,3,4,5,6,7 tools/train.py -c ${config} --eval --fp16 -r output/byte_x_mot_ablation/0 # &> ${job_name}.log &
 
 # 2. eval
 #CUDA_VISIBLE_DEVICES=0 python3.7 tools/eval.py -c ${config} -o weights=https://paddledet.bj.bcebos.com/models/${job_name}.pdparams
-#CUDA_VISIBLE_DEVICES=6 python3.7 tools/eval.py -c ${config} -o weights=../../${job_name}_paddle.pdparams
+#CUDA_VISIBLE_DEVICES=6 python3.7 tools/eval.py -c ${config} -o weights=output/byte_x_mot_ablation/best_model.pdparams
 #CUDA_VISIBLE_DEVICES=5 python3.7 tools/eval.py -c ${config} -o weights=../../byte_x_mot_ablation_paddle_rgb.pdparams #../../../paddle_${job_name}.pdparams
 
 # 3. tools infer
