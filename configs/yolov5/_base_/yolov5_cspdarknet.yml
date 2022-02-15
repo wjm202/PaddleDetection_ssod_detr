@@ -1,8 +1,8 @@
 architecture: YOLOv3
-use_ema: true
+use_ema: True
 ema_decay: 0.9998
 act: silu
-fuse_model: False # TODO
+#find_unused_parameters: True
 
 depth_factor: 0.33
 width_factor: 0.50

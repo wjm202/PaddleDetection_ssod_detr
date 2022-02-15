@@ -15,7 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from IPython import embed
 import math
 import paddle
 import paddle.nn as nn
@@ -105,6 +105,54 @@ class OneCycle(object):
             return optimizer.lr.PiecewiseDecay(boundary, value)
 
         return optimizer.lr.CosineAnnealingDecay(base_lr, T_max=max_iters)
+
+
+@serializable
+class YOLOXCosineDecay(object):
+    """
+    Cosine learning rate decay with no_aug_iter in YOLOX, 
+    Args:
+        max_epochs (int): max epochs for the training process.
+            if you commbine cosine decay with warmup, it is recommended that
+            the max_iters is much larger than the warmup iter
+    """
+
+    def __init__(self, max_epochs=300, no_aug_epochs=15, min_lr_ratio=0.2, use_warmup=True, eta_min=0):
+        self.max_epochs = max_epochs
+        self.no_aug_epochs = no_aug_epochs
+        self.min_lr_ratio = min_lr_ratio
+        self.use_warmup = use_warmup
+        self.eta_min = eta_min
+
+    def __call__(self,
+                 base_lr=None,
+                 boundary=None,
+                 value=None,
+                 step_per_epoch=None):
+        assert base_lr is not None, "either base LR or values should be provided"
+        assert self.no_aug_epochs <= self.max_epochs, "no_aug_epochs is {}, should be smaller than max_epochs {}".format(self.no_aug_epochs, self.max_epochs)
+        assert self.no_aug_epochs > 0, "YOLOXCosineDecay should set no_aug_epochs > 0"
+
+        max_iters = self.max_epochs * int(step_per_epoch)
+        no_aug_iters = self.no_aug_epochs * int(step_per_epoch)
+
+        if boundary is not None and value is not None and self.use_warmup:
+            warmup_iters = int(boundary[-1]) # len(boundary)
+
+            min_lr = base_lr * self.min_lr_ratio
+            for i in range(warmup_iters + 1, max_iters):
+                boundary.append(i)
+                if i < max_iters - no_aug_iters:
+                    lr = min_lr + (base_lr - min_lr) * 0.5 * (math.cos(
+                        (i - warmup_iters) * math.pi /
+                        (max_iters - warmup_iters - no_aug_iters)) + 1.0)
+                else:
+                    lr = min_lr
+                value.append(lr)
+            return optimizer.lr.PiecewiseDecay(boundary, value)
+
+        return optimizer.lr.CosineAnnealingDecay(
+            base_lr, T_max=max_iters, eta_min=self.eta_min)
 
 
 @serializable
@@ -229,8 +277,8 @@ class ExpWarmup(object):
         boundary = []
         value = []
         warmup_total_iters = self.warmup_epochs * int(step_per_epoch)
-        for i in range(warmup_total_iters + 1):
-            factor = pow(i * 1.0 / warmup_total_iters, 2)
+        for i in range(warmup_total_iters):
+            factor = pow((i + 1) * 1.0 / warmup_total_iters, 2)
             lr = (base_lr - self.start_lr) * factor + self.start_lr
             value.append(lr)
             if i > 0:

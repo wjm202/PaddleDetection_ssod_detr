@@ -1,16 +1,18 @@
 worker_num: 2
+input_height: &input_height 640
+input_width: &input_width 640
+input_size: &input_size [*input_height, *input_width]
+
 TrainReader:
   inputs_def:
     num_max_boxes: 120
   sample_transforms:
-    - Decode: {}
-    - RGBReverse: {}
-    - MosaicPerspective: {target_size: 640} #  # x y w h
+    - DecodeNormResize:
+        target_size: *input_size
+        keep_ratio: True
     - BboxPixelXYXY2NormCXCYWH: {}
-    #- LetterBox: {target_size: 640, auto: False, scaleup: False}
-    #- Albumentations: {}
-    - RandomHSV: {hgain: 0.015, sgain: 0.7, vgain: 0.4}
-    - RandomFlip: {}
+    - MosaicPerspective: {mosaic_prob: 1.0, target_size: 640} #  # x y w h
+    # - LetterBox: {target_size: 640, auto: False, scaleup: False}
     - BboxXYXY2XYWH: {}
     - NormalizeBox: {}
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
@@ -23,13 +25,12 @@ TrainReader:
                   [30, 61], [62, 45], [59, 119],
                   [116, 90], [156, 198], [373, 326]]
         downsample_ratios: [8, 16, 32]
-  batch_size: 8
-  shuffle: True
+  batch_size: 4
+  shuffle: False
   drop_last: True
   use_shared_memory: True
   collate_batch: True # False TODO
   mosaic_epoch: 300
-
 
 EvalReader:
   sample_transforms:

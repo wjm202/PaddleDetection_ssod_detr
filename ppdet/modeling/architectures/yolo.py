@@ -76,8 +76,24 @@ class YOLOv3(BaseArch):
         }
 
     def _forward(self):
+        
+        '''
+        print('self.inputs ', self.inputs['image'].shape, self.inputs['image'].sum())
+        print('self.inputs  sum 0 ',  self.inputs['image'][:,0,:,:].sum())
+        print('self.inputs  sum 1 ',  self.inputs['image'][:,1,:,:].sum())
+        print('self.inputs  sum 2 ',  self.inputs['image'][:,2,:,:].sum())
+        body_feats = self.backbone(self.inputs)
+        print('body_feats ', [x.shape for x in body_feats])
+        print('body_feats sum ', [x.sum() for x in body_feats])
+        neck_feats = self.neck(body_feats, self.for_mot)
+        print('neck_feats ', [x.shape for x in neck_feats])
+        print('neck_feats sum ', [x.sum() for x in neck_feats])
+        '''
+
+        #'''
         body_feats = self.backbone(self.inputs)
         neck_feats = self.neck(body_feats, self.for_mot)
+        #'''
 
         if isinstance(neck_feats, dict):
             assert self.for_mot == True

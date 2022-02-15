@@ -16,3 +16,26 @@ worker_num: 4
 TrainReader:
   batch_size: 64
   use_shared_memory: true
+
+epoch: 150
+LearningRate:
+  base_lr: 0.01
+  schedulers:
+    - !OneCycle
+      max_epochs: 150
+      use_warmup: True
+    - !ExpWarmup
+      start_lr: 0.
+      warmup_epochs: 3
+
+OptimizerBuilder:
+  optimizer:
+    type: "Momentum"
+    momentum: 0.937
+    use_nesterov: True
+    param_groups:
+      - params: ['bias', 'bn']
+        weight_decay: 0.0
+  regularizer:
+    factor: 0.0005
+    type: L2

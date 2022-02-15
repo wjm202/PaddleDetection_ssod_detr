@@ -5,16 +5,16 @@ _BASE_: [
   '_base_/yolov5_cspdarknet.yml',
   '_base_/yolov5_reader.yml',
 ]
-weights: output/yolov5_s_coco_debug/model_final
+weights: output/yolov5_l_coco_debug/model_final
 
-depth_factor: 0.33
-width_factor: 0.50
+depth_factor: 1.0
+width_factor: 1.0
 
 ############   for debug  ############
 TrainDataset:
   !COCODataSet
-    image_dir: train2017
-    anno_path: annotations/instances_train2017.json
+    image_dir: val2017
+    anno_path: annotations/instances_val2017_im4.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
@@ -25,46 +25,55 @@ EvalDataset:
     anno_path: annotations/instances_val2017_im8.json
     dataset_dir: dataset/coco
 
-log_iter: 20
-snapshot_epoch: 1
+log_iter: 1
+snapshot_epoch: 10
+
+YOLOv3Head:
+  anchors: [[10, 13], [16, 30], [33, 23],
+            [30, 61], [62, 45], [59, 119],
+            [116, 90], [156, 198], [373, 326]]
+  anchor_masks: [[6, 7, 8], [3, 4, 5], [0, 1, 2]]
+  loss: YOLOv5Loss
+
+YOLOv5Loss:
+  balance: [4.0, 1.0, 0.4]
+  box_weight: 0.05
+  obj_weight: 1.0
+  cls_weght: 0.5
 
 input_height: &input_height 640
 input_width: &input_width 640
 input_size: &input_size [*input_height, *input_width]
 
-worker_num: 4
+worker_num: 0 #4
 TrainReader:
   inputs_def:
     num_max_boxes: 120
   sample_transforms:
-    - DecodeNormResize:
-        target_size: *input_size
-        keep_ratio: True
+    - DecodeNormResize: {target_size: *input_size, keep_ratio: True, to_rgb: True} # to_rgb
     - BboxPixelXYXY2NormCXCYWH: {}
-    #- MosaicPerspective: {mosaic_prob: 1.0, target_size: 640} #  # x y w h
+    - MosaicPerspective: {mosaic_prob: 0.0, target_size: 640} #  # x y w h
     - LetterBox: {target_size: 640, auto: False, scaleup: False}
-    #- Albumentations: {}
-    - RandomHSV: {hgain: 0.015, sgain: 0.7, vgain: 0.4}
-    - RandomFlip: {}
+    #- RGBReverse: {} # bgr to rgb
+  batch_transforms:
     - BboxXYXY2XYWH: {}
     - NormalizeBox: {}
+    - PadBox: {num_max_boxes: 50}
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
-    - RGBReverse: {}
     - Permute: {}
-  batch_transforms:
-    - Gt2Yolov5Target: 
-        anchor_masks: [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
-        anchors: [[10, 13], [16, 30], [33, 23],
-                  [30, 61], [62, 45], [59, 119],
-                  [116, 90], [156, 198], [373, 326]]
-        downsample_ratios: [8, 16, 32]
-  batch_size: 8
+    #- Gt2Yolov5Target: 
+    #    anchor_masks: [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    #    anchors: [[10, 13], [16, 30], [33, 23],
+    #              [30, 61], [62, 45], [59, 119],
+    #              [116, 90], [156, 198], [373, 326]]
+    #    downsample_ratios: [8, 16, 32]
+    #- Permute: {}
+  batch_size: 4 #8
   shuffle: False
   drop_last: True
   use_shared_memory: True
   collate_batch: True # False TODO
   mosaic_epoch: -1 #300
-
 
 EvalReader:
   sample_transforms:
@@ -73,7 +82,6 @@ EvalReader:
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
     - Permute: {}
   batch_size: 1
-
 
 TestReader:
   inputs_def:
@@ -87,8 +95,28 @@ TestReader:
 
 
 
-epoch: 150
+epoch: 2
 LearningRate:
+  base_lr: 0.01
+  schedulers:
+  - !PiecewiseDecay
+    gamma: 0.1
+    milestones: [2]
+    use_warmup: False
+
+OptimizerBuilder:
+  optimizer:
+    momentum: 0.9
+    type: Momentum
+  regularizer:
+    factor: 0.0005
+    type: L2
+
+
+
+
+#epoch: 3
+LearningRate2:
   base_lr: 0.01
   schedulers:
   - !YOLOXCosineDecay
@@ -99,7 +127,7 @@ LearningRate:
     start_lr: 0.
     warmup_epochs: 5
 
-OptimizerBuilder: # but no use, rewrite in trainer.py
+OptimizerBuilder2: # but no use, rewrite in trainer.py
   optimizer:
     momentum: 0.9
     type: Momentum
@@ -107,3 +135,4 @@ OptimizerBuilder: # but no use, rewrite in trainer.py
   regularizer:
     factor: 0.0005
     type: L2
+

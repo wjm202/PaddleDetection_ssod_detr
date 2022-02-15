@@ -92,6 +92,9 @@ class YOLOv3Head(nn.Layer):
                 yolo_output = paddle.transpose(yolo_output, [0, 3, 1, 2])
             yolo_outputs.append(yolo_output)
 
+        #print('yolo_outputs ', [x.shape for x in yolo_outputs])
+        #print('yolo_outputs sum ', [x.sum() for x in yolo_outputs])
+
         if self.training:
             return self.loss(yolo_outputs, targets, self.anchors)
         else:

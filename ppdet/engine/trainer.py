@@ -15,7 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from IPython import embed
 import os
 import sys
 import copy
@@ -102,7 +102,7 @@ class Trainer(object):
         else:
             self.model.load_meanstd(cfg['TestReader']['sample_transforms'])
 
-        self.use_ema = ('use_ema' in cfg and cfg['use_ema'])
+        self.use_ema = False #('use_ema' in cfg and cfg['use_ema'])
         if self.use_ema:
             ema_decay = self.cfg.get('ema_decay', 0.9998)
             cycle_epoch = self.cfg.get('cycle_epoch', -1)
@@ -129,7 +129,35 @@ class Trainer(object):
         if self.mode == 'train':
             steps_per_epoch = len(self.loader)
             self.lr = create('LearningRate')(steps_per_epoch)
-            self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
+            if 0: #self.cfg.architecture not in ['YOLOX']:
+                self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
+            else:
+                '''
+                self.optimizer = paddle.optimizer.Momentum(
+                    parameters=self.model.parameters(), learning_rate=self.lr,
+                    momentum=0.9) # , use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
+                '''
+                pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
+                for k, v in self.model.named_sublayers():
+                    if hasattr(v, "bias") and isinstance(v.bias, paddle.fluid.framework.ParamBase):
+                        pg2.append(v.bias)  # biases
+                    if isinstance(v, paddle.nn.BatchNorm2D) or "bn" in k:
+                        pg0.append(v.weight)  # no decay
+                    elif hasattr(v, "weight") and isinstance(v.weight, paddle.fluid.framework.ParamBase):
+                        pg1.append(v.weight)  # apply decay
+                optimizer = paddle.optimizer.Momentum(
+                    parameters=[{'params': pg0}], learning_rate=self.lr, grad_clip=None,
+                    momentum=0.937, use_nesterov=True, weight_decay=0.0
+                ) #0.937
+
+                optimizer._add_param_group(
+                    {"params": pg1, "weight_decay": 0.0005, 'grad_clip': None})
+                    # add pg1 with weight_decay
+                optimizer._add_param_group({"params": pg2, "weight_decay": 0.0, 'grad_clip': None})
+                logger.info(f"optimizer: {type(optimizer).__name__} with parameter groups "
+                    f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
+                self.optimizer = optimizer
+
 
         if self.cfg.get('unstructured_prune'):
             self.pruner = create('UnstructuredPruner')(self.model,
@@ -399,20 +427,35 @@ class Trainer(object):
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
                 data['epoch_id'] = epoch_id
+                data['step_id'] = step_id # new add
 
                 if self.cfg.get('fp16', False):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
+                        if 1:
+                            new_img = np.load('imgs.npy')
+                            data['image'] = paddle.to_tensor(new_img)
+                            #data['image'] = paddle.ones((4,3,640,640))
                         outputs = model(data)
                         loss = outputs['loss']
-
+                    '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
                     # in dygraph mode, optimizer.minimize is equal to optimizer.step
                     scaler.minimize(self.optimizer, scaled_loss)
+                    '''
+                    self.optimizer.clear_grad()
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                    #'''
                 else:
                     # model forward
+                    if 1:
+                        new_img = np.load('imgs.npy')
+                        data['image'] = paddle.to_tensor(new_img)
+                        #data['image'] = paddle.ones((4,3,640,640))
                     outputs = model(data)
                     loss = outputs['loss']
                     # model backward

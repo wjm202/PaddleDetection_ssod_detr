@@ -1,14 +1,26 @@
 epoch: 300
 
+LearningRate0:
+  base_lr: 0.01
+  schedulers:
+  - !YOLOXCosineDecay
+    max_epochs: 150
+    no_aug_epochs: 10
+    min_lr_ratio: 0.05
+  - !ExpWarmup
+    start_lr: 0.
+    warmup_epochs: 3
+
 LearningRate:
   base_lr: 0.01
   schedulers:
-    - !OneCycle
-      max_epochs: 300
-      use_warmup: True
-    - !ExpWarmup
-      start_lr: 0.
-      warmup_epochs: 3
+  - !YOLOXCosineDecay
+    max_epochs: 150
+    no_aug_epochs: 10
+    min_lr_ratio: 0.05
+  - !ExpWarmup
+    start_lr: 0.
+    warmup_epochs: 3
 
 OptimizerBuilder:
   optimizer:
