@@ -122,12 +122,40 @@ class YOLOXHead(nn.Layer):
             battr = ParamAttr(
                 initializer=Constant(bias_init_value),
                 regularizer=L2Decay(0.))
+            self.cls_preds.append(
+                nn.Conv2D(
+                    in_channels=int(256 * width_factor),
+                    out_channels=self.n_anchors * self.num_classes,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                )
+            )
+            self.reg_preds.append(
+                nn.Conv2D(
+                    in_channels=int(256 * width_factor),
+                    out_channels=4,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                )
+            )
+            self.obj_preds.append(
+                nn.Conv2D(
+                    in_channels=int(256 * width_factor),
+                    out_channels=self.n_anchors * 1,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                )
+            )
+            '''
             cls_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
                                       out_channels=self.n_anchors * self.num_classes,
                                       kernel_size=1,
                                       stride=1,
-                                      padding=0)#,
-                                      #bias_attr=battr)
+                                      padding=0,
+                                      bias_attr=battr)
             self.cls_preds.append(cls_pred_conv)
 
             reg_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
@@ -141,9 +169,10 @@ class YOLOXHead(nn.Layer):
                                      out_channels=self.n_anchors * 1,
                                      kernel_size=1,
                                      stride=1,
-                                     padding=0)#,
-                                     #bias_attr=battr)
+                                     padding=0,
+                                     bias_attr=battr)
             self.obj_preds.append(obj_pred_conv)
+            '''
 
         self.use_l1 = False
         self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
@@ -154,22 +183,22 @@ class YOLOXHead(nn.Layer):
 
     def initialize_biases(self, prior_prob):
         for conv in self.cls_preds:
-            b = conv.bias.reshape([self.n_anchors, -1])
+            #b = conv.bias.reshape([self.n_anchors, -1])
+            b = paddle.reshape(conv.bias, [self.n_anchors, -1])
             conv.bias = paddle.create_parameter(shape=b.reshape([-1]).shape, dtype='float32',
                         default_initializer=paddle.nn.initializer.Constant(-math.log((1 - prior_prob) / prior_prob)))
 
         for conv in self.obj_preds:
-            b = conv.bias.reshape([self.n_anchors, -1])
+            b = paddle.reshape(conv.bias, [self.n_anchors, -1])
             conv.bias = paddle.create_parameter(shape=b.reshape([-1]).shape, dtype='float32',
                         default_initializer=paddle.nn.initializer.Constant(-math.log((1 - prior_prob) / prior_prob)))
 
     def forward(self, feats, targets=None):
-        outputs, x_shifts, y_shifts, expanded_strides, origin_preds = self.get_outputs(feats)
-
         if self.training:
             gt_bbox = targets['gt_bbox']     # [N, 120, 4]
             gt_class = targets['gt_class'].unsqueeze(-1).astype(gt_bbox.dtype)   # [N, 120, 1]
             gt_class_bbox = paddle.concat([gt_class, gt_bbox], axis=2)
+            gt_class_bbox.stop_gradient = False
 
             self.use_l1 = True if targets['epoch_id'] >= self.mosaic_epoch else False
 
@@ -207,10 +236,18 @@ class YOLOXHead(nn.Layer):
         y_shifts = []
         expanded_strides = []
 
+        #print('  conv cls_preds [0,:,:,:]  ///////////.............', self.cls_preds[0].weight[0,:,:,:].sum())
+        #print('  conv cls_preds   ///////////.............', self.cls_preds[0].weight.sum())
+        #print('  conv reg_preds [0,:,:,:]   ///////////.............', self.reg_preds[0].weight[0,:,:,:].sum())
+        #print('  conv reg_preds     ///////////.............', self.reg_preds[0].weight.sum())
+
         for i, (cls_conv, reg_conv, stride, x) in enumerate(
             zip(self.cls_convs, self.reg_convs, self.strides, feats)
         ):
+            #print('..... fpn feat //', i, x.sum())
             x = self.stems[i](x)
+            #print('..... stems feat //', i, x.sum())
+
             cls_x = x
             reg_x = x
             cls_feat = cls_conv(cls_x)
@@ -219,6 +256,8 @@ class YOLOXHead(nn.Layer):
             reg_output = self.reg_preds[i](reg_feat)
             obj_output = self.obj_preds[i](reg_feat)
 
+            #print('..... reg cls feat //', i, reg_feat.sum(), cls_feat.sum())
+            #print('// reg obj cls_output //', i, reg_output.sum(), obj_output.sum(), cls_output.sum())
             if self.training:
                 output = paddle.concat([reg_output, obj_output, cls_output], 1)
                 # output.shape=[N, 1 * 80 * 80, 85]  # xywh

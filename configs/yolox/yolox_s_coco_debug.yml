@@ -5,7 +5,8 @@ _BASE_: [
   './_base_/optimizer_300e.yml',
   './_base_/yolox_reader.yml',
 ]
-snapshot_epoch: 1
+snapshot_epoch: 10
+find_unused_parameters: True
 weights: output/yolox_s_coco_debug/model_final
 depth_factor: 0.33
 width_factor: 0.50
@@ -18,7 +19,7 @@ TrainDataset:
     image_dir: val2017
     #anno_path: annotations/instances_val2017.json
     #anno_path: annotations/instances_val2017_im1.json
-    anno_path: annotations/instances_val2017_im4.json
+    anno_path: annotations/instances_val2017_im2.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
@@ -41,8 +42,11 @@ TrainReader:
     - DecodeResize:
         target_size: *input_size
         keep_ratio: True
+    #- Decode: {}
+    #- RGBReverse: {}
+    #- Resize: {target_size: *input_size, keep_ratio: True} # INTER_LINEAR
     - YOLOXMosaic:
-        prob: 0.0
+        prob: 0.0 # 1.0
         degrees: 10.0
         translate: 0.1
         scale: [0.1, 2]
@@ -63,7 +67,7 @@ TrainReader:
         multiscale_range: 5
     - PadBox: {num_max_boxes: 120}
     - Permute: {}
-  batch_size: 4
+  batch_size: 2 #1
   shuffle: False #True
   drop_last: True
   collate_batch: True 
@@ -72,6 +76,18 @@ TrainReader:
   mosaic_sample_num: 5
 
 EvalReader:
+  sample_transforms:
+    - Decode: {}
+    - RGBReverse: {}
+    - Resize: {target_size: *input_size, keep_ratio: True} # INTER_LINEAR
+    - PadResize:
+        target_size: *input_size
+        fill_value: 114
+  batch_transforms:
+    - Permute: {}
+  batch_size: 1
+
+EvalReader2:
   sample_transforms:
     - DecodeResize:
         target_size: *input_size
@@ -87,9 +103,9 @@ TestReader:
   inputs_def:
     image_shape: [3, 640, 640]
   sample_transforms:
-    - DecodeResize:
-        target_size: *input_size
-        keep_ratio: True
+    - Decode: {}
+    - RGBReverse: {}
+    - Resize: {target_size: *input_size, keep_ratio: True} # INTER_LINEAR
     - PadResize:
         target_size: *input_size
         fill_value: 114
@@ -97,13 +113,13 @@ TestReader:
     - Permute: {}
   batch_size: 1
 
-epoch: 3
+epoch: 1
 LearningRate:
-  base_lr: 0.000625
+  base_lr: 0.2 #0.01 #0.000625
   schedulers:
   - !PiecewiseDecay
     gamma: 0.1
-    milestones: [2]
+    milestones: [10]
     use_warmup: False
 
 OptimizerBuilder: # no use

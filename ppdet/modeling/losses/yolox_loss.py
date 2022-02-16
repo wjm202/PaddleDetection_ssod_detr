@@ -76,6 +76,52 @@ def bboxes_iou_batch(bboxes_a, bboxes_b, xyxy=True):
     return inter / union  # [N, A, B]
 
 
+class IOUloss(nn.Layer):
+    def __init__(self, reduction="none", loss_type="iou"):
+        super(IOUloss, self).__init__()
+        self.reduction = reduction
+        self.loss_type = loss_type
+
+    def forward(self, pred, target):
+        assert pred.shape[0] == target.shape[0]
+
+        pred = pred.reshape([-1, 4])
+        target = target.reshape([-1, 4])
+        tl = paddle.maximum(
+            (pred[:, :2] - pred[:, 2:] / 2), (target[:, :2] - target[:, 2:] / 2)
+        )
+        br = paddle.minimum(
+            (pred[:, :2] + pred[:, 2:] / 2), (target[:, :2] + target[:, 2:] / 2)
+        )
+
+        area_p = paddle.prod(pred[:, 2:], 1)
+        area_g = paddle.prod(target[:, 2:], 1)
+
+        en = (tl < br).astype(tl.dtype).prod(axis=1)
+        area_i = paddle.prod(br - tl, 1) * en
+        area_u = area_p + area_g - area_i
+        iou = (area_i) / (area_u + 1e-16)
+
+        if self.loss_type == "iou":
+            loss = 1 - iou ** 2
+        elif self.loss_type == "giou":
+            c_tl = paddle.minimum(
+                (pred[:, :2] - pred[:, 2:] / 2), (target[:, :2] - target[:, 2:] / 2)
+            )
+            c_br = paddle.maximum(
+                (pred[:, :2] + pred[:, 2:] / 2), (target[:, :2] + target[:, 2:] / 2)
+            )
+            area_c = paddle.prod(c_br - c_tl, 1)
+            giou = iou - (area_c - area_u) / area_c.clip(1e-16)
+            loss = 1 - giou.clip(min=-1.0, max=1.0)
+
+        if self.reduction == "mean":
+            loss = loss.mean()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+
+        return loss
+
 @register
 class YOLOXLoss(nn.Layer):
     __shared__ = ['num_classes']
@@ -98,8 +144,9 @@ class YOLOXLoss(nn.Layer):
         self.reg_weight = reg_weight
         self.l1_loss = nn.L1Loss(reduction="none")
         self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
+        self.iou_loss = IOUloss(reduction="none")
 
-    def iou_loss(self, pred, target):
+    def iou_loss_bug(self, pred, target):
         assert pred.shape[0] == target.shape[0]
         boxes1 = pred
         boxes2 = target
@@ -153,6 +200,9 @@ class YOLOXLoss(nn.Layer):
         bbox_preds = paddle.reshape(bbox_preds, [-1, 4])  # [N*A, 4]
         pos_index = paddle.nonzero(fg_masks > 0)[:, 0]    # [num_fg, ]
         pos_bbox_preds = paddle.gather(bbox_preds, pos_index)  # [num_fg, 4] xywh
+        # 1 [15525.62792969] [15284.11523438] 
+        # 2 [3264.59082031] [3550.83007812]
+        #print('  reg_targets.sum()  ', pos_bbox_preds.sum(), reg_targets.sum())
 
         loss_iou = (
             self.iou_loss(pos_bbox_preds, reg_targets)
@@ -175,20 +225,16 @@ class YOLOXLoss(nn.Layer):
             loss_l1 = (
                 self.l1_loss(pos_origin_preds, l1_targets)
             ).sum() / num_fg
-        '''
         else:
             loss_l1 = paddle.to_tensor([0.])
             loss_l1.stop_gradient = False
-        '''
 
         losses = {
             "loss_iou": self.reg_weight * loss_iou,
             "loss_obj": loss_obj,
             "loss_cls": loss_cls,
-            #"loss_l1": loss_l1,
+            "loss_l1": loss_l1,
         }
-        #if use_l1:
-        #    losses["loss_l1"] = loss_l1
         return losses
 
 
@@ -196,12 +242,14 @@ class YOLOXLoss(nn.Layer):
 
     def forward(self, outputs, x_shifts, y_shifts, expanded_strides, origin_preds, labels, dtype, use_l1):
         #### TODO 
-        use_l1 = False
+        #use_l1 = False
 
         N, A = outputs.shape[:2]
         bbox_preds = outputs[:, :, :4]              # [N, A, 4] # xywh
         obj_preds = outputs[:, :, 4:5]              # [N, A, 1]
         cls_preds = outputs[:, :, 5:]               # [N, A, n_cls]
+        #print('........ outputs', outputs.sum(), outputs.shape)
+        #print('........ bbox_preds   obj_preds   cls_preds ', bbox_preds.sum(), obj_preds.sum(), cls_preds.sum())
 
         # calculate targets
         labels = paddle.cast(labels, 'float32')  # [N, 120, 5]
@@ -219,16 +267,16 @@ class YOLOXLoss(nn.Layer):
 
             loss_iou = paddle.to_tensor([0.])
             loss_cls = paddle.to_tensor([0.])
-            #loss_l1 = paddle.to_tensor([0.])
+            loss_l1 = paddle.to_tensor([0.])
+            loss_iou.stop_gradient = False
+            loss_cls.stop_gradient = False
+            loss_l1.stop_gradient = False
             losses = {
                 "loss_iou": loss_iou,
                 "loss_obj": loss_obj,
                 "loss_cls": loss_cls,
-                #"loss_l1": loss_l1,
+                "loss_l1": loss_l1,
             }
-            loss_iou.stop_gradient = False
-            loss_cls.stop_gradient = False
-            #loss_l1.stop_gradient = False
             return losses
 
         labels = labels[:, :G, :]  # [N, G, 5]
