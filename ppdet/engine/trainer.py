@@ -34,7 +34,6 @@ from paddle.static import InputSpec
 from ppdet.optimizer import ModelEMA
 
 from ppdet.core.workspace import create
-from ppdet.modeling.architectures.meta_arch import BaseArch
 from ppdet.utils.checkpoint import load_weight, load_pretrain_weight
 from ppdet.utils.visualizer import visualize_results, save_result
 from ppdet.metrics import Metric, COCOMetric, VOCMetric, WiderFaceMetric, get_infer_results, KeyPointTopDownCOCOEval, KeyPointTopDownMPIIEval
@@ -167,9 +166,10 @@ class Trainer(object):
                 '''
 
 
-        if self.cfg.get('unstructured_prune'):
-            self.pruner = create('UnstructuredPruner')(self.model,
-                                                       steps_per_epoch)
+            # Unstructured pruner is only enabled in the train mode.
+            if self.cfg.get('unstructured_prune'):
+                self.pruner = create('UnstructuredPruner')(self.model,
+                                                           steps_per_epoch)
 
         self._nranks = dist.get_world_size()
         self._local_rank = dist.get_rank()
@@ -382,10 +382,11 @@ class Trainer(object):
         assert self.mode == 'train', "Model not in 'train' mode"
         Init_mark = False
 
-        sync_bn = (getattr(self.cfg, 'norm_type', None) in [None, 'sync_bn'] and
+        sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
                    self.cfg.use_gpu and self._nranks > 1)
         if sync_bn:
-            self.model = BaseArch.convert_sync_batchnorm(self.model)
+            self.model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+                self.model)
 
         model = self.model
         if self.cfg.get('fleet', False):
@@ -720,6 +721,10 @@ class Trainer(object):
 
         if hasattr(self.model, 'deploy'):
             self.model.deploy = True
+        export_post_process = self.cfg.get('export_post_process', False)
+        if hasattr(self.model, 'export_post_process'):
+            self.model.export_post_process = export_post_process
+            image_shape = [None] + image_shape[1:]
         if hasattr(self.model, 'fuse_norm'):
             self.model.fuse_norm = self.cfg['TestReader'].get('fuse_normalize',
                                                               False)
@@ -755,7 +760,7 @@ class Trainer(object):
             pruned_input_spec = input_spec
 
         # TODO: Hard code, delete it when support prune input_spec.
-        if self.cfg.architecture == 'PicoDet':
+        if self.cfg.architecture == 'PicoDet' and not export_post_process:
             pruned_input_spec = [{
                 "image": InputSpec(
                     shape=image_shape, name='image')
