@@ -26,38 +26,6 @@ from ..shape_spec import ShapeSpec
 __all__ = ['CSPDarkNet', 'BaseConv', 'DWConv', 'Bottleneck', 'SPPLayer', 'SPPFLayer']
 
 
-def fuse_conv_and_bn(conv, bn):
-    # Fuse convolution and batchnorm layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/
-    fusedconv = (
-        nn.Conv2D(
-            conv._in_channels,
-            conv._out_channels,
-            kernel_size=conv._kernel_size,
-            stride=conv._stride,
-            padding=conv._padding,
-            groups=conv._groups,
-            bias_attr=True,
-        )
-    )
-    fusedconv.stop_gradient = True
-
-    # prepare filters
-    w_conv = paddle.reshape(conv.weight, [conv._out_channels, -1])
-    w_bn = paddle.diag(paddle.divide(bn.weight, paddle.sqrt(bn._epsilon + bn._variance)))
-    fusedconv.weight.set_value(paddle.reshape(paddle.mm(w_bn, w_conv), fusedconv.weight.shape))
-
-    # prepare spatial bias
-    b_conv = (
-        paddle.zeros([conv.weight.shape[0]])
-        if conv.bias is None
-        else conv.bias
-    )
-    b_bn = bn.bias - paddle.divide(paddle.multiply(bn.weight, bn._mean), paddle.sqrt(bn._epsilon + bn._variance))
-
-    fusedconv.bias.set_value(paddle.mm(w_bn, b_conv.unsqueeze(-1)).squeeze(-1) + b_bn)
-    return fusedconv
-
-
 def get_activation(name="silu", inplace=True):
     if name == "silu":
         module = nn.Silu()
@@ -88,7 +56,7 @@ class BaseConv(nn.Layer):
             groups=groups,
             bias_attr=bias,
         )
-        self.bn = nn.BatchNorm2D(out_channels)
+        self.bn = nn.BatchNorm2D(out_channels, momentum=0.03, epsilon=1e-3)
         self.act = get_activation(act)
 
     def forward(self, x):
@@ -100,51 +68,6 @@ class BaseConv(nn.Layer):
         return self.act(self.bn(self.conv(x)))
 
     def fuseforward(self, x):
-        return self.act(self.conv(x))
-
-
-class BaseConv66(nn.Layer):
-    def __init__(self, in_channels, out_channels, ksize, stride, groups=1, bias=False, act="silu"):
-        super().__init__()
-        pad = (ksize - 1) // 2
-        self.conv = nn.Conv2D(
-            in_channels,
-            out_channels,
-            kernel_size=ksize,
-            stride=stride,
-            padding=pad,
-            groups=groups,
-            bias_attr=bias,
-        )
-
-        self.bn = nn.BatchNorm2D(out_channels) #, momentum=0.03, epsilon=1e-3) 
-        #self.bn = nn.BatchNorm2D(out_channels, momentum=0.03, epsilon=1e-3) 
-        # bn not eps=1e-5, momentum=0.1
-        self.act = get_activation(act)
-
-    def forward(self, x):
-        #'''
-        if x.shape[-1]==320:
-            print('  BaseConv  ppdet  ///////////.............', x.shape, self.conv.weight.shape)
-            print('  BaseConv  ppdet  ///////////.............', self.conv.weight.sum())
-        #'''
-        y = self.act(self.bn(self.conv(x)))
-        #y.stop_gradient = True
-        return y
-
-        '''
-        if x.shape[-1]==720:
-            print('  720    ///////////.............', x.shape, self.conv.weight.shape)
-            print('  720    ///////////.............', self.conv.weight.sum())
-        if self.training:
-            return self.act(self.bn(self.conv(x)))
-        else:
-            #self.conv = fuse_conv_and_bn(self.conv, self.bn)
-            #return self.act(self.conv(x))
-            return self.act(self.bn(self.conv(x)))
-        '''
-
-    def fuse_forward(self, x):
         return self.act(self.conv(x))
 
 
@@ -170,11 +93,11 @@ class DWConv(nn.Layer):
         return self.pw_conv(self.dw_conv(x))
 
 
-class Focus0(nn.Layer):
+class Focus(nn.Layer):
     """Focus width and height information into channel space, used in YOLOX."""
 
     def __init__(self, in_channels, out_channels, ksize=3, stride=1, bias=False, act="silu"):
-        super(Focus0, self).__init__()
+        super(Focus, self).__init__()
         self.conv = BaseConv(in_channels * 4, out_channels, ksize=ksize, stride=stride, bias=bias, act=act)
 
     def forward(self, inputs):
@@ -190,32 +113,6 @@ class Focus0(nn.Layer):
                 patch_top_right,
                 patch_bot_right,
             ],
-            axis=1,
-        )
-        #print('  after trans ///////////.............', x.sum(), x.shape)
-        x = self.conv(x)
-        #print('  after  Focus ///////////.............', x.sum(), x.shape)
-        return x
-
-class Focus(nn.Layer):
-    """Focus width and height information into channel space."""
-    def __init__(self, in_channels, out_channels, ksize=1, stride=1, act="silu"):
-        super().__init__()
-        self.conv = BaseConv(in_channels * 4, out_channels, ksize, stride, act=act)
-
-    def forward(self, x):
-        # shape of x (b,c,w,h) -> y(b,4c,w/2,h/2)
-        patch_top_left = x[..., ::2, ::2]
-        patch_top_right = x[..., ::2, 1::2]
-        patch_bot_left = x[..., 1::2, ::2]
-        patch_bot_right = x[..., 1::2, 1::2]
-        x = paddle.concat(
-            (
-                patch_top_left,
-                patch_bot_left,
-                patch_top_right,
-                patch_bot_right,
-            ),
             axis=1,
         )
         #print('  after trans ///////////.............', x.sum(), x.shape)
@@ -241,11 +138,11 @@ class Bottleneck(nn.Layer):
         return y
 
 
-class SPPLayer1(nn.Layer):
+class SPPLayer(nn.Layer):
     """Spatial Pyramid Pooling (SPP) layer used in YOLOv3-SPP and YOLOX"""
 
     def __init__(self, in_channels, out_channels, kernel_sizes=(5, 9, 13), bias=False, act="silu"):
-        super(SPPLayer1, self).__init__()
+        super(SPPLayer, self).__init__()
         hidden_channels = in_channels // 2
         self.conv1 = BaseConv(in_channels, hidden_channels, ksize=1, stride=1, bias=bias, act=act)
         self.maxpoolings = nn.LayerList([
@@ -263,33 +160,6 @@ class SPPLayer1(nn.Layer):
         x = self.conv2(x)
         return x
 
-
-class SPPLayer(nn.Layer):
-    def __init__(
-        self, in_channels, out_channels, kernel_sizes=(5, 9, 13), bias=False, act="silu"
-    ):
-        super().__init__()
-        hidden_channels = in_channels // 2
-        self.conv1 = BaseConv(in_channels, hidden_channels, 1, stride=1, act=act)
-        self.maxpoolings = nn.LayerList(
-            [
-                nn.MaxPool2D(kernel_size=ks, stride=1, padding=ks // 2)
-                for ks in kernel_sizes
-            ]
-        )
-        self.kernel_sizes = kernel_sizes
-        conv2_channels = hidden_channels * (len(kernel_sizes) + 1)
-        self.conv2 = BaseConv(conv2_channels, out_channels, 1, stride=1, act=act)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        mp_x = [x]
-        for ks in self.kernel_sizes:
-            mp_x.append(F.max_pool2d(x, kernel_size=ks, stride=1, padding=ks//2))
-        #x = paddle.concat([x] + [m(x) for m in self.maxpoolings], axis=1)
-        x = paddle.concat(mp_x, 1)
-        x = self.conv2(x)
-        return x
 
 
 class SPPFLayer(nn.Layer):

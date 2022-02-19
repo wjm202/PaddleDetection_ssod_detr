@@ -19,10 +19,27 @@ from __future__ import print_function
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 from ..post_process import JDEBBoxPostProcess
-from ppdet.modeling.ops import yolox_resize
+#from ppdet.modeling.ops import yolox_resize
 from IPython import embed
 
 __all__ = ['YOLOX']
+
+import paddle
+import paddle.nn.functional as F
+import paddle.nn as nn
+def yolox_resize(inputs, targets, inputs_dim, tsize):
+    # targets.shape [n, 120, 4]
+    scale_y = tsize[0] / inputs_dim[0]
+    scale_x = tsize[1] / inputs_dim[1]
+    if scale_x != 1 or scale_y != 1:
+        inputs = F.interpolate(
+            inputs, size=tsize, mode="bilinear", align_corners=False
+        )
+        #targets[:, :, 1::2] = targets[:, :, 1::2] * scale_x
+        #targets[:, :, 2::2] = targets[:, :, 2::2] * scale_y
+        targets[:, :, 0::2] = targets[:, :, 0::2] * scale_x
+        targets[:, :, 1::2] = targets[:, :, 1::2] * scale_y
+    return inputs, targets
 
 
 @register
@@ -82,8 +99,9 @@ class YOLOX(BaseArch):
             step_id = self.inputs['step_id']
             if (step_id + 1) % intv == 0:
                 assert 'target_size' in self.inputs
-                inputs_dim = self.inputs['im_shape'][0].numpy()
-                target_dim = self.inputs['target_size'][0].numpy()
+                inputs_dim = self.inputs['image'].shape[2:] 
+                #self.inputs['im_shape'][0].numpy() # shit bug
+                target_dim = [1280, 1280] #self.inputs['target_size'][0].numpy()
                 #print(' 1 ', self.inputs['image'].shape, self.inputs['image'].sum(), self.inputs['gt_bbox'].sum())
                 self.inputs['image'], self.inputs['gt_bbox'] = yolox_resize(
                     self.inputs['image'], self.inputs['gt_bbox'],
@@ -96,16 +114,16 @@ class YOLOX(BaseArch):
         print('self.inputs  sum 1 ',  self.inputs['image'][:,1,:,:].sum())
         print('self.inputs  sum 2 ',  self.inputs['image'][:,2,:,:].sum())
         '''
+        '''
         body_feats = self.backbone(self.inputs)
         print('body_feats ', [x.shape for x in body_feats])
         print('body_feats sum ', [x.sum() for x in body_feats])
         neck_feats = self.neck(body_feats, self.for_mot)
         print('neck_feats ', [x.shape for x in neck_feats])
         print('neck_feats sum ', [x.sum() for x in neck_feats])
-        
-        #body_feats = self.backbone(self.inputs)
-        #neck_feats = self.neck(body_feats, self.for_mot)
-        #'''
+        '''
+        body_feats = self.backbone(self.inputs)
+        neck_feats = self.neck(body_feats, self.for_mot)
 
         if self.training:
             yolo_losses = self.yolox_head(neck_feats, self.inputs)

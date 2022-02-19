@@ -207,7 +207,7 @@ class RecBatchRandomResize(BaseOperator):
         for sample in samples:
             sample['target_size'] = np.asarray(target_size, dtype=np.float32)
 
-        if self.nn_resize: # do resize by F.interpolate before model input
+        if self.nn_resize: # YOLOX do resize by F.interpolate before model input
             return samples
 
         # rectangle should set keep_ratio=False

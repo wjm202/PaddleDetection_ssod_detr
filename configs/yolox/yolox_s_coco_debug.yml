@@ -61,10 +61,12 @@ TrainReader:
         fill_value: 114
         hsv_prob: 0.0 #1.0
         flip_prob: 0 #0.5
-  batch_transforms:
+  batch_transforms: # only for YOLOX
     - RecBatchRandomResize:
         input_size: *input_size
-        multiscale_range: 5
+        multiscale_range: 0 # 5
+        nn_resize: True # only get target_size. resize in architecture
+        keep_ratio: True # only for rectangle
     - PadBox: {num_max_boxes: 120}
     - Permute: {}
   batch_size: 2 #1
@@ -72,7 +74,7 @@ TrainReader:
   drop_last: True
   collate_batch: True 
   use_shared_memory: True
-  mosaic_epoch: 1
+  mosaic_epoch: 285
   mosaic_sample_num: 5
 
 EvalReader:
@@ -113,9 +115,9 @@ TestReader:
     - Permute: {}
   batch_size: 1
 
-epoch: 1
+epoch: 4
 LearningRate:
-  base_lr: 0.2 #0.01 #0.000625
+  base_lr: 0.001 #0.01 #0.000625
   schedulers:
   - !PiecewiseDecay
     gamma: 0.1
@@ -194,7 +196,7 @@ YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
   depthwise: False
-  mosaic_epoch: 1
+  mosaic_epoch: 285
   yolox_loss: YOLOXLoss
 
 YOLOXPostProcess2: # slow but more accurate

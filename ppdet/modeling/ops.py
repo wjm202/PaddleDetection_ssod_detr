@@ -48,8 +48,8 @@ def yolox_resize(inputs, targets, inputs_dim, tsize):
         inputs = F.interpolate(
             inputs, size=tsize, mode="bilinear", align_corners=False
         )
-        targets[:, :, 1::2] = targets[:, :, 1::2] * scale_x
-        targets[:, :, 2::2] = targets[:, :, 2::2] * scale_y
+        targets[:, :, 0::2] = targets[:, :, 0::2] * scale_x
+        targets[:, :, 1::2] = targets[:, :, 1::2] * scale_y
     return inputs, targets
 
 

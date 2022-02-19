@@ -149,30 +149,6 @@ class YOLOXHead(nn.Layer):
                     padding=0,
                 )
             )
-            '''
-            cls_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
-                                      out_channels=self.n_anchors * self.num_classes,
-                                      kernel_size=1,
-                                      stride=1,
-                                      padding=0,
-                                      bias_attr=battr)
-            self.cls_preds.append(cls_pred_conv)
-
-            reg_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
-                                      out_channels=4,
-                                      kernel_size=1,
-                                      stride=1,
-                                      padding=0)
-            self.reg_preds.append(reg_pred_conv)
-
-            obj_pred_conv = nn.Conv2D(in_channels=int(256 * width_factor),
-                                     out_channels=self.n_anchors * 1,
-                                     kernel_size=1,
-                                     stride=1,
-                                     padding=0,
-                                     bias_attr=battr)
-            self.obj_preds.append(obj_pred_conv)
-            '''
 
         self.use_l1 = False
         self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
@@ -183,13 +159,14 @@ class YOLOXHead(nn.Layer):
 
     def initialize_biases(self, prior_prob):
         for conv in self.cls_preds:
-            #b = conv.bias.reshape([self.n_anchors, -1])
-            b = paddle.reshape(conv.bias, [self.n_anchors, -1])
+            b = conv.bias.reshape([self.n_anchors, -1])
+            #b = paddle.reshape(conv.bias, [self.n_anchors, -1])
             conv.bias = paddle.create_parameter(shape=b.reshape([-1]).shape, dtype='float32',
                         default_initializer=paddle.nn.initializer.Constant(-math.log((1 - prior_prob) / prior_prob)))
 
         for conv in self.obj_preds:
-            b = paddle.reshape(conv.bias, [self.n_anchors, -1])
+            b = conv.bias.reshape([self.n_anchors, -1])
+            #b = paddle.reshape(conv.bias, [self.n_anchors, -1])
             conv.bias = paddle.create_parameter(shape=b.reshape([-1]).shape, dtype='float32',
                         default_initializer=paddle.nn.initializer.Constant(-math.log((1 - prior_prob) / prior_prob)))
 
