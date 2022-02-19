@@ -12,6 +12,7 @@ weights: output/byte_x_mot_ablation/model_final
 
 depth_factor: 1.33
 width_factor: 1.25
+mosaic_epoch: &mosaic_epoch 70
 
 metric: COCO
 num_classes: 1
@@ -21,13 +22,13 @@ YOLOX:
   backbone: CSPDarkNet
   neck: YOLOCSPPAN
   yolox_head: YOLOXHead
-  post_process: YOLOXPostProcess2 ###
+  post_process: YOLOXPostProcess ###
 
 YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
   depthwise: False
-  mosaic_epoch: 70
+  mosaic_epoch: *mosaic_epoch
   yolox_loss: YOLOXLoss
 
 YOLOXPostProcess2: # slow but more accurate
@@ -56,7 +57,7 @@ YOLOXPostProcess:
 ##### optimizer
 epoch: 80
 LearningRate:
-  base_lr: 0.001 # fintune COCO weights
+  base_lr: 0.00075 #0.001 # fintune COCO weights
   schedulers:
   - !YOLOXCosineDecay
     max_epochs: 80
@@ -116,12 +117,12 @@ TrainReader:
         #multiscale_range: 5
     - PadBox: {num_max_boxes: 120}
     - Permute: {}
-  batch_size: 8
+  batch_size: 6 #8
   shuffle: True
   drop_last: True
   collate_batch: True 
   use_shared_memory: True
-  mosaic_epoch: 70
+  mosaic_epoch: *mosaic_epoch
   mosaic_sample_num: 5
 
 # batchsize should be 1 in MOT eval/infer
@@ -137,7 +138,7 @@ EvalReader:
     #- NormalizeImage: {is_scale: true, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
   batch_transforms:
     - Permute: {}
-  batch_size: 1
+  batch_size: 8
 
 TestReader:
   inputs_def:
@@ -165,7 +166,7 @@ TrainDataset:
 EvalDataset:
   !COCODataSet
     image_dir: train
-    anno_path: annotations/val_im8.json
+    anno_path: annotations/val_half.json
     dataset_dir: dataset/MOT
 
 TestDataset:

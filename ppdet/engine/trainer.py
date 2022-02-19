@@ -136,9 +136,11 @@ class Trainer(object):
                 #self.optimizer = paddle.optimizer.Momentum(
                 #    parameters=self.model.parameters(), learning_rate=0.001,
                 #    momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
+                '''
                 self.optimizer = paddle.optimizer.Momentum(
                     parameters=self.model.parameters(), learning_rate=0.001,
                     momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
+                '''
                 '''
                 self.optimizer = paddle.optimizer.Adam(
                     parameters=self.model.parameters(), learning_rate=0.001)
@@ -146,7 +148,7 @@ class Trainer(object):
                 #print(len(self.model.named_parameters())
                 #momentum=0.9) #, use_nesterov=True) #, weight_decay=paddle.regularizer.L2Decay(0.0005))
                 '''
-                '''
+                #'''
                 pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
                 for k, v in self.model.named_sublayers():
                     if hasattr(v, "bias") and isinstance(v.bias, paddle.fluid.framework.ParamBase):
@@ -166,7 +168,7 @@ class Trainer(object):
                 logger.info(f"optimizer: {type(optimizer).__name__} with parameter groups "
                     f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
                 self.optimizer = optimizer
-                '''
+                #'''
 
 
             # Unstructured pruner is only enabled in the train mode.

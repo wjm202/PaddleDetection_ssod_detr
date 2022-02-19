@@ -1033,8 +1033,8 @@ class YOLOCSPPAN(nn.Layer):
         self._out_channels = [int(x * width_factor) for x in in_channels]
         Conv = DWConv if depthwise else BaseConv
 
-        #self.upsample = #nn.Upsample(scale_factor=2, mode="nearest")
-        self.upsample = Upsample(scale_factor=2, mode="nearest") #F.interpolate(input, self.size, self.scale_factor, self.mode, self.align_corners)
+        self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
+        #self.upsample = Upsample(scale_factor=2, mode="nearest") #F.interpolate(input, self.size, self.scale_factor, self.mode, self.align_corners)
         # top-down fpn
         self.lateral_convs = nn.LayerList()
         self.fpn_blocks = nn.LayerList()

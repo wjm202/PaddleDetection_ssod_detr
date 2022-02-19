@@ -11,6 +11,8 @@ weights: output/yolox_s_coco_debug/model_final
 depth_factor: 0.33
 width_factor: 0.50
 
+mosaic_epoch: &mosaic_epoch 0 #285
+
 #################  for debug  #################
 log_iter: 1
 
@@ -74,7 +76,7 @@ TrainReader:
   drop_last: True
   collate_batch: True 
   use_shared_memory: True
-  mosaic_epoch: 285
+  mosaic_epoch: *mosaic_epoch
   mosaic_sample_num: 5
 
 EvalReader:
@@ -196,7 +198,7 @@ YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
   depthwise: False
-  mosaic_epoch: 285
+  mosaic_epoch: *mosaic_epoch
   yolox_loss: YOLOXLoss
 
 YOLOXPostProcess2: # slow but more accurate

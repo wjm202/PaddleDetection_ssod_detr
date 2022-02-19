@@ -241,8 +241,6 @@ class YOLOXLoss(nn.Layer):
 
 
     def forward(self, outputs, x_shifts, y_shifts, expanded_strides, origin_preds, labels, dtype, use_l1):
-        #### TODO 
-        #use_l1 = False
 
         N, A = outputs.shape[:2]
         bbox_preds = outputs[:, :, :4]              # [N, A, 4] # xywh
