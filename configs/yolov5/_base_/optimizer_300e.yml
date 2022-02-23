@@ -25,7 +25,7 @@ LearningRate:
 OptimizerBuilder:
   optimizer:
     type: "Momentum"
-    momentum: 0.937
+    momentum: 0.937 #
     use_nesterov: True
     param_groups:
       - params: ['bias', 'bn']

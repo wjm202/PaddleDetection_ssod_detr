@@ -1033,7 +1033,7 @@ class YOLOCSPPAN(nn.Layer):
         self._out_channels = [int(x * width_factor) for x in in_channels]
         Conv = DWConv if depthwise else BaseConv
 
-        #self.upsample = #nn.Upsample(scale_factor=2, mode="nearest")
+        self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
         #self.upsample = Upsample(scale_factor=2, mode="nearest") #F.interpolate(input, self.size, self.scale_factor, self.mode, self.align_corners)
         # top-down fpn
         self.lateral_convs = nn.LayerList()
@@ -1086,11 +1086,8 @@ class YOLOCSPPAN(nn.Layer):
                 feat_heigh)
             inner_outs[0] = feat_heigh
 
-            #upsample_feat = self.upsample(feat_heigh) # can not work if odd
+            upsample_feat = self.upsample(feat_heigh) # can not work if odd
             #upsample_feat = F.interpolate(feat_heigh, size=[feat_low.shape[2], feat_low.shape[3]], mode='nearest')
-            #upsample_feat = self.upsample(feat_heigh) # can not work if odd
-            #upsample_feat = F.interpolate(feat_heigh, size=[feat_low.shape[2], feat_low.shape[3]], mode='nearest')
-            upsample_feat = F.interpolate(feat_heigh, scale_factor=2, mode='nearest')
 
             inner_out = self.fpn_blocks[len(self.in_channels) - 1 - idx](
                 paddle.concat([upsample_feat, feat_low], axis=1))

@@ -20,7 +20,7 @@ import os
 import sys
 import copy
 import time
-
+import paddle.nn as nn
 import numpy as np
 import typing
 from PIL import Image, ImageOps, ImageFile
@@ -93,6 +93,7 @@ class Trainer(object):
         else:
             self.model = self.cfg.model
             self.is_loaded_weights = True
+        #print(self.model)
 
         #normalize params for deploy
         if 'slim' in cfg and cfg['slim_type'] == 'OFA':
@@ -101,7 +102,7 @@ class Trainer(object):
         else:
             self.model.load_meanstd(cfg['TestReader']['sample_transforms'])
 
-        self.use_ema = False #('use_ema' in cfg and cfg['use_ema'])
+        self.use_ema = ('use_ema' in cfg and cfg['use_ema'])
         if self.use_ema:
             ema_decay = self.cfg.get('ema_decay', 0.9998)
             cycle_epoch = self.cfg.get('cycle_epoch', -1)
@@ -131,11 +132,22 @@ class Trainer(object):
             if 0: #self.cfg.architecture not in ['YOLOX']:
                 self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
             else:
+                #self.optimizer = paddle.optimizer.Momentum(
+                #    parameters=self.model.parameters(), learning_rate=0.001,
+                #    momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
                 '''
                 self.optimizer = paddle.optimizer.Momentum(
-                    parameters=self.model.parameters(), learning_rate=self.lr,
-                    momentum=0.9) # , use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
+                    parameters=self.model.parameters(), learning_rate=0.001,
+                    momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
                 '''
+                '''
+                self.optimizer = paddle.optimizer.Adam(
+                    parameters=self.model.parameters(), learning_rate=0.001)
+                #print(self.model.named_parameters())
+                #print(len(self.model.named_parameters())
+                #momentum=0.9) #, use_nesterov=True) #, weight_decay=paddle.regularizer.L2Decay(0.0005))
+                '''
+                #'''
                 pg0, pg1, pg2 = [], [], []  # optimizer parameter groups
                 for k, v in self.model.named_sublayers():
                     if hasattr(v, "bias") and isinstance(v.bias, paddle.fluid.framework.ParamBase):
@@ -156,6 +168,7 @@ class Trainer(object):
                 logger.info(f"optimizer: {type(optimizer).__name__} with parameter groups "
                     f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
                 self.optimizer = optimizer
+                #'''
 
 
             # Unstructured pruner is only enabled in the train mode.
@@ -393,7 +406,9 @@ class Trainer(object):
         # initial fp16
         if self.cfg.get('fp16', False):
             scaler = amp.GradScaler(
-                enable=self.cfg.use_gpu, init_loss_scaling=1024)
+                enable=self.cfg.use_gpu) #, init_loss_scaling=1024)
+        else:
+            scaler = amp.GradScaler(enable=False)
 
         self.status.update({
             'epoch_id': self.start_epoch,
@@ -433,12 +448,8 @@ class Trainer(object):
                 if self.cfg.get('fp16', False):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
-                        if 1:
-                            new_img = np.load('imgs.npy')
-                            data['image'] = paddle.to_tensor(new_img)
-                            #data['image'] = paddle.ones((4,3,640,640))
                         outputs = model(data)
-                        loss = outputs['loss']
+                    loss = outputs['loss']
                     '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
@@ -453,20 +464,64 @@ class Trainer(object):
                     #'''
                 else:
                     # model forward
-                    if 1:
-                        new_img = np.load('imgs.npy')
-                        data['image'] = paddle.to_tensor(new_img)
-                        #data['image'] = paddle.ones((4,3,640,640))
+                    '''
+                    data['image'] = paddle.to_tensor(np.load('img1.npy'))
+                    data['gt_bbox'] = paddle.to_tensor(np.load('targets1.npy'))[:, :, 1:]
+                    data['gt_class'] = paddle.to_tensor(np.load('targets1.npy'))[:, :, :1].squeeze(-1)
+                    '''
+                    '''
                     outputs = model(data)
                     loss = outputs['loss']
                     # model backward
                     loss.backward()
                     self.optimizer.step()
+                    '''
+                    with amp.auto_cast(enable=False):
+                        outputs = model(data)
+                    loss = outputs['loss']
+                    #self.optimizer.clear_grad()
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()                    
+                    '''
+                    cnt, non_cnt = 0, 0
+                    for name, tensor in model.named_parameters():
+                        grad = tensor.grad
+                        if grad is None:
+                            non_cnt+=1
+                            continue
+                        cnt +=1
+                        #if 'yolox_head.cls_convs.2.1' in name: #name == 'yolox_head.cls_convs.0.0.conv.weight':
+                        if 'yolox_head.cls_convs.2.1.conv.weight' in name:
+                            print(name, grad.shape, grad.sum()*100)
+                        #if 'yolox_head.reg_convs.2.1' in name: #name == 'yolox_head.reg_convs.0.0.conv.weight':
+                        if 'yolox_head.reg_convs.2.1.conv.weight' in name:
+                            print(name, grad.shape, grad.sum()*100)
+
+                        if 'yolox_head.cls_preds' in name: #name == 'yolox_head.cls_convs.0.0.conv.weight':
+                            print('grad  ', name, grad.shape, grad.sum()*100)
+                        if 'yolox_head.reg_preds' in name: #name == 'yolox_head.reg_convs.0.0.conv.weight':
+                            print('grad  ', name, grad.shape, grad.sum()*100)
+                        if 'yolox_head.obj_preds' in name: #name == 'yolox_head.cls_convs.0.0.conv.weight':
+                            print('grad  ', name, grad.shape, grad.sum()*100)
+                        if name == 'neck.lateral_convs.0.conv.weight':
+                            print(name, grad.shape, grad.sum()*100)
+                        if name == 'backbone.stem.conv.conv.weight':
+                            print(name, grad.shape, grad.sum()*100)
+                            #np.save('backbone_1.npy', grad.numpy()*100)
+                        if 'backbone.' in name:
+                            print(name, grad.shape, grad.sum()*100)
+                    #print(' named_parameters cnt ', cnt, non_cnt)
+                    '''
+                    self.optimizer.clear_grad()
+
+                
                 curr_lr = self.optimizer.get_lr()
+                # self.optimizer.set_lr(curr_lr)
                 self.lr.step()
                 if self.cfg.get('unstructured_prune'):
                     self.pruner.step()
-                self.optimizer.clear_grad()
+                #self.optimizer.clear_grad()
                 self.status['learning_rate'] = curr_lr
 
                 if self._nranks < 2 or self._local_rank == 0:

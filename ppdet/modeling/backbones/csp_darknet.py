@@ -15,6 +15,8 @@ from IPython import embed
 import math
 import paddle
 import paddle.nn as nn
+import paddle.nn.functional as F
+
 from paddle.regularizer import L2Decay
 from paddle import ParamAttr
 
@@ -22,38 +24,6 @@ from ppdet.core.workspace import register, serializable
 from ..shape_spec import ShapeSpec
 
 __all__ = ['CSPDarkNet', 'BaseConv', 'DWConv', 'Bottleneck', 'SPPLayer', 'SPPFLayer']
-
-
-def fuse_conv_and_bn(conv, bn):
-    # Fuse convolution and batchnorm layers https://tehnokv.com/posts/fusing-batchnorm-and-conv/
-    fusedconv = (
-        nn.Conv2D(
-            conv._in_channels,
-            conv._out_channels,
-            kernel_size=conv._kernel_size,
-            stride=conv._stride,
-            padding=conv._padding,
-            groups=conv._groups,
-            bias_attr=True,
-        )
-    )
-    fusedconv.stop_gradient = True
-
-    # prepare filters
-    w_conv = paddle.reshape(conv.weight, [conv._out_channels, -1])
-    w_bn = paddle.diag(paddle.divide(bn.weight, paddle.sqrt(bn._epsilon + bn._variance)))
-    fusedconv.weight.set_value(paddle.reshape(paddle.mm(w_bn, w_conv), fusedconv.weight.shape))
-
-    # prepare spatial bias
-    b_conv = (
-        paddle.zeros([conv.weight.shape[0]])
-        if conv.bias is None
-        else conv.bias
-    )
-    b_bn = bn.bias - paddle.divide(paddle.multiply(bn.weight, bn._mean), paddle.sqrt(bn._epsilon + bn._variance))
-
-    fusedconv.bias.set_value(paddle.mm(w_bn, b_conv.unsqueeze(-1)).squeeze(-1) + b_bn)
-    return fusedconv
 
 
 def get_activation(name="silu", inplace=True):
@@ -69,8 +39,13 @@ def get_activation(name="silu", inplace=True):
 
 
 class BaseConv(nn.Layer):
-    def __init__(self, in_channels, out_channels, ksize, stride, groups=1, bias=False, act="silu"):
+    """A Conv2D -> Batchnorm -> silu/leaky relu block"""
+
+    def __init__(
+        self, in_channels, out_channels, ksize, stride, groups=1, bias=False, act="silu"
+    ):
         super().__init__()
+        # same padding
         pad = (ksize - 1) // 2
         self.conv = nn.Conv2D(
             in_channels,
@@ -81,33 +56,19 @@ class BaseConv(nn.Layer):
             groups=groups,
             bias_attr=bias,
         )
-
-        self.bn = nn.BatchNorm2D(out_channels, momentum=0.97, epsilon=1e-3) 
-        #self.bn = nn.BatchNorm2D(out_channels, momentum=0.03, epsilon=1e-3) 
-        # bn not eps=1e-5, momentum=0.1
+        #self.bn = nn.BatchNorm2D(out_channels, momentum=0.03, epsilon=1e-3)
+        self.bn = nn.BatchNorm2D(out_channels) #, momentum=0.03, epsilon=1e-3)
         self.act = get_activation(act)
 
     def forward(self, x):
         '''
         if x.shape[-1]==320:
-            print('  320  ppdet  ///////////.............', x.shape, self.conv.weight.shape)
-            print('  320  ppdet  ///////////.............', self.conv.weight.sum())
+            print('  BaseConv  ppdet  ///////////.............', x.shape, self.conv.weight.shape)
+            print('  BaseConv  ppdet  ///////////.............', self.conv.weight.sum())
         '''
         return self.act(self.bn(self.conv(x)))
 
-        '''
-        if x.shape[-1]==720:
-            print('  720    ///////////.............', x.shape, self.conv.weight.shape)
-            print('  720    ///////////.............', self.conv.weight.sum())
-        if self.training:
-            return self.act(self.bn(self.conv(x)))
-        else:
-            #self.conv = fuse_conv_and_bn(self.conv, self.bn)
-            #return self.act(self.conv(x))
-            return self.act(self.bn(self.conv(x)))
-        '''
-
-    def fuse_forward(self, x):
+    def fuseforward(self, x):
         return self.act(self.conv(x))
 
 
@@ -140,7 +101,6 @@ class Focus(nn.Layer):
         super(Focus, self).__init__()
         self.conv = BaseConv(in_channels * 4, out_channels, ksize=ksize, stride=stride, bias=bias, act=act)
 
-
     def forward(self, inputs):
         # x: [bs, c, w, h] -> y: [b, 4c, w/2, h/2]
         patch_top_left = inputs[:, :, 0::2, 0::2]
@@ -148,19 +108,14 @@ class Focus(nn.Layer):
         patch_bot_left = inputs[:, :, 1::2, 0::2]
         patch_bot_right = inputs[:, :, 1::2, 1::2]
 
-        try:
-            x = paddle.concat([
-                    patch_top_left,
-                    patch_bot_left,
-                    patch_top_right,
-                    patch_bot_right,
-                ],
-                axis=1,
-            )
-        except:
-            print('  before Focus ///////////.............', inputs.sum(), inputs.shape)
-            embed()
-
+        x = paddle.concat([
+                patch_top_left,
+                patch_bot_left,
+                patch_top_right,
+                patch_bot_right,
+            ],
+            axis=1,
+        )
         #print('  after trans ///////////.............', x.sum(), x.shape)
         x = self.conv(x)
         #print('  after  Focus ///////////.............', x.sum(), x.shape)
@@ -195,14 +150,17 @@ class SPPLayer(nn.Layer):
             nn.MaxPool2D(kernel_size=ks, stride=1, padding=ks // 2)
             for ks in kernel_sizes
         ])
+        #self.kernel_sizes = kernel_sizes
         conv2_channels = hidden_channels * (len(kernel_sizes) + 1)
+        #F.max_pool2d(conv1, kernel_size=3, stride=2, padding=1)
         self.conv2 = BaseConv(conv2_channels, out_channels, ksize=1, stride=1, bias=bias, act=act)
 
     def forward(self, x):
         x = self.conv1(x)
-        concats = paddle.concat([x] + [mp(x) for mp in self.maxpoolings], axis=1)
-        out = self.conv2(concats)
-        return out
+        x = paddle.concat([x] + [mp(x) for mp in self.maxpoolings], axis=1)
+        x = self.conv2(x)
+        return x
+
 
 
 class SPPFLayer(nn.Layer):
@@ -251,11 +209,26 @@ class CSPLayer(nn.Layer):
         self.conv3 = BaseConv(hidden_channels * 2, out_channels, ksize=1, stride=1, bias=bias, act=act)
 
     def forward(self, x):
-        x_1 = self.conv1(x)
-        x_2 = self.conv2(x)
-        x_1 = self.bottlenecks(x_1)
-        x = paddle.concat([x_1, x_2], axis=1)
-        return self.conv3(x)
+        #if x.shape[-1] == 160 and x.shape[1] == 64:
+        if 0: #1: #x.shape[-1] == 80 and x.shape[1] == 128:
+            print('  CSPLayer in x  .............', x.sum(), x.shape)
+            x_1 = self.conv1(x)
+            print('  CSPLayer conv1 x_1 .............', x_1.sum(), x_1.shape)
+            x_2 = self.conv2(x)
+            print('  CSPLayer conv2 x_2 .............', x_2.sum(), x_2.shape)
+            x_1 = self.bottlenecks(x_1)
+            print('  CSPLayer bottle x_1 .............', x_1.sum(), x_1.shape)
+            x = paddle.concat([x_1, x_2], axis=1)
+            #print('  CSPLayer  concat x  .............', x.sum(), x.shape)
+            x = self.conv3(x)
+            print('  CSPLayer  out y  .............', x.sum(), x.shape)
+        else:
+            x_1 = self.conv1(x)
+            x_2 = self.conv2(x)
+            x_1 = self.bottlenecks(x_1)
+            x = paddle.concat([x_1, x_2], axis=1)
+            x = self.conv3(x)
+        return x #self.conv3(x)
 
 
 @register
@@ -318,7 +291,7 @@ class CSPDarkNet(nn.Layer):
             spp_kernal_sizes = 5
         else:
             # in the original YOLOX, use Focus stem, and SPP (three spp kernal sizes)
-            self.stem = Focus(3, base_channels, ksize=3, stride=1, bias=bias, act=act)
+            self.stem = Focus(3, base_channels, ksize=3, act=act)
             spp_kernal_sizes = (5, 9, 13)
 
         _out_channels = [base_channels]
@@ -381,6 +354,7 @@ class CSPDarkNet(nn.Layer):
         x = self.stem(x)
         for i, layer in enumerate(self.csp_dark_blocks):
             x = layer(x)
+            #print('        after          x ', i, x.shape, x.sum())
             if i + 1 in self.return_idx:
                 outputs.append(x)
         return outputs

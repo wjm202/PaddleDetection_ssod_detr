@@ -6,33 +6,40 @@ _BASE_: [
   '_base_/yolov5_reader.yml',
 ]
 weights: output/yolov5_l_coco_debug/model_final
+
 depth_factor: 1.0
 width_factor: 1.0
 
-input_height: &input_height 640
-input_width: &input_width 640
-input_size: &input_size [*input_height, *input_width]
-mosaic_epoch: &mosaic_epoch -1
-batch_size: &batch_size 2 # train bs 
-worker_num: &worker_num 0 # debug
-
-############   for debug  ############
+metric: COCO
+num_classes: 1
+###### data
 TrainDataset:
   !COCODataSet
-    image_dir: val2017
-    anno_path: annotations/instances_val2017_im4.json
-    dataset_dir: dataset/coco
+    image_dir: train
+    anno_path: annotations/train.json
+    dataset_dir: dataset/MOT
+    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+
+TrainDataset2:
+  !COCODataSet
+    image_dir: ""
+    anno_path: annotations/train.json
+    dataset_dir: dataset/mix_mot_ch
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
 EvalDataset:
   !COCODataSet
-    image_dir: val2017
-    #anno_path: annotations/instances_val2017.json
-    anno_path: annotations/instances_val2017_im8.json
-    dataset_dir: dataset/coco
+    image_dir: train
+    anno_path: annotations/val_half.json
+    dataset_dir: dataset/MOT
 
-log_iter: 1
-snapshot_epoch: 10
+TestDataset:
+  !ImageFolder
+    anno_path: annotations/val_half.json
+
+
+log_iter: 20
+snapshot_epoch: 1
 
 YOLOv3Head:
   anchors: [[10, 13], [16, 30], [33, 23],
@@ -47,16 +54,17 @@ YOLOv5Loss:
   obj_weight: 1.0
   cls_weght: 0.5
 
-worker_num: *worker_num 
+input_height: &input_height 640
+input_width: &input_width 640
+input_size: &input_size [*input_height, *input_width]
+
+worker_num: 4
+#worker_num: 0
 TrainReader:
   inputs_def:
     num_max_boxes: 120
   sample_transforms:
     - DecodeNormResize: {target_size: *input_size, keep_ratio: True, to_rgb: True} # to_rgb
-    #- DecodeResize: {target_size: *input_size, keep_ratio: True}
-    #- Decode: {}
-    #- RGBReverse: {}
-    #- Resize: {target_size: *input_size, keep_ratio: True} # INTER_LINEAR
     - BboxPixelXYXY2NormCXCYWH: {}
     - MosaicPerspective: {mosaic_prob: 0.0, target_size: 640} #  # x y w h
     - LetterBox: {target_size: 640, auto: False, scaleup: False}
@@ -64,76 +72,59 @@ TrainReader:
   batch_transforms:
     - BboxXYXY2XYWH: {}
     - NormalizeBox: {}
-    - PadBox: {num_max_boxes: 120}
+    - PadBox: {num_max_boxes: 50}
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
     - Permute: {}
-  batch_size: *batch_size
+    #- Gt2Yolov5Target: 
+    #    anchor_masks: [[0, 1, 2], [3, 4, 5], [6, 7, 8]]
+    #    anchors: [[10, 13], [16, 30], [33, 23],
+    #              [30, 61], [62, 45], [59, 119],
+    #              [116, 90], [156, 198], [373, 326]]
+    #    downsample_ratios: [8, 16, 32]
+    #- Permute: {}
+  batch_size: 4 #8
   shuffle: False
   drop_last: True
   use_shared_memory: True
-  collate_batch: True
-  mosaic_epoch: *mosaic_epoch
-
+  collate_batch: True # False TODO
+  mosaic_epoch: -1 #300
 
 EvalReader:
   sample_transforms:
     - Decode: {}
-    - LetterBox: {target_size: *input_size, auto: True, scaleup: True}
+    - LetterBox: {target_size: 640, auto: True, scaleup: True}
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
     - Permute: {}
   batch_size: 1
-
 
 TestReader:
   inputs_def:
     image_shape: [3, 640, 640]
   sample_transforms:
     - Decode: {}
-    - LetterBox: {target_size: *input_size, auto: False, scaleup: False}
+    - LetterBox: {target_size: [640, 640], auto: False, scaleup: False}
     - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
     - Permute: {}
   batch_size: 1
 
 
-
-epoch: 2
+epoch: 10
 LearningRate:
-  base_lr: 0.01
-  schedulers:
-  - !PiecewiseDecay
-    gamma: 0.1
-    milestones: [2]
-    use_warmup: False
-
-OptimizerBuilder:
-  optimizer:
-    momentum: 0.9
-    type: Momentum
-  regularizer:
-    factor: 0.0005
-    type: L2
-
-
-
-
-#epoch: 3
-LearningRate2:
-  base_lr: 0.01
+  base_lr: 0.005 #0.01
   schedulers:
   - !YOLOXCosineDecay
-    max_epochs: 300
-    no_aug_epochs: 15
+    max_epochs: 80
+    no_aug_epochs: 10
     min_lr_ratio: 0.05
   - !ExpWarmup
     start_lr: 0.
-    warmup_epochs: 5
+    warmup_epochs: 1
 
-OptimizerBuilder2: # but no use, rewrite in trainer.py
+OptimizerBuilder: # but no use, rewrite in trainer.py
   optimizer:
-    momentum: 0.9
+    momentum: 0.937
     type: Momentum
     use_nesterov: true
   regularizer:
     factor: 0.0005
     type: L2
-
