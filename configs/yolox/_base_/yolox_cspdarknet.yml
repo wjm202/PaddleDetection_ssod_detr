@@ -1,9 +1,11 @@
 architecture: YOLOX
 use_ema: True
-ema_decay: 0.9999 # not 0.9998
+ema_decay: 0.9998
 depth_factor: 0.33
 width_factor: 0.50
 act: silu
+
+mosaic_epoch: &mosaic_epoch 285
 
 YOLOX:
   backbone: CSPDarkNet
@@ -22,7 +24,7 @@ YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
   depthwise: False
-  mosaic_epoch: 285
+  mosaic_epoch: *mosaic_epoch
   yolox_loss: YOLOXLoss
 
 YOLOXLoss:

@@ -11,7 +11,7 @@ weights: output/yolox_s_coco_debug/model_final
 depth_factor: 0.33
 width_factor: 0.50
 
-mosaic_epoch: &mosaic_epoch 0 #285
+mosaic_epoch: &mosaic_epoch 0 #285 # for l1 loss should set 0
 
 #################  for debug  #################
 log_iter: 1

@@ -1,6 +1,7 @@
 input_height: &input_height 640
 input_width: &input_width 640
 input_size: &input_size [*input_height, *input_width]
+mosaic_epoch: &mosaic_epoch 285
 
 worker_num: 4
 TrainReader:
@@ -37,7 +38,7 @@ TrainReader:
   drop_last: True
   collate_batch: True 
   use_shared_memory: True
-  mosaic_epoch: 285
+  mosaic_epoch: *mosaic_epoch
   mosaic_sample_num: 5
 
 

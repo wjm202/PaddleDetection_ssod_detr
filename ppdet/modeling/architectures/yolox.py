@@ -94,14 +94,13 @@ class YOLOX(BaseArch):
     def _forward(self):
 
         # YOLOX random resizing
-        if 0: #self.training:
+        if self.training:
             intv = 10
             step_id = self.inputs['step_id']
             if (step_id + 1) % intv == 0:
                 assert 'target_size' in self.inputs
                 inputs_dim = self.inputs['image'].shape[2:] 
-                #self.inputs['im_shape'][0].numpy() # shit bug
-                target_dim = [1280, 1280] #self.inputs['target_size'][0].numpy()
+                target_dim = self.inputs['target_size'][0].numpy()
                 #print(' 1 ', self.inputs['image'].shape, self.inputs['image'].sum(), self.inputs['gt_bbox'].sum())
                 self.inputs['image'], self.inputs['gt_bbox'] = yolox_resize(
                     self.inputs['image'], self.inputs['gt_bbox'],

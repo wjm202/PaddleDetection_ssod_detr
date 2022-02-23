@@ -22,7 +22,7 @@ TrainDataset:
 EvalDataset:
   !COCODataSet
     image_dir: val2017
-    anno_path: annotations/instances_val2017_im8.json
+    anno_path: annotations/instances_val2017.json
     dataset_dir: dataset/coco
 
 TestDataset:
@@ -43,25 +43,25 @@ TrainReader:
         target_size: *input_size
         keep_ratio: True
     - YOLOXMosaic:
-        prob: 1.0
+        prob: 1.0 #
         degrees: 10.0
         translate: 0.1
         scale: [0.1, 2]
         shear: 2.0
         perspective: 0.0
         input_dim: *input_size
-        enable_mixup: False #True
+        enable_mixup: True #
         mixup_prob: 1.0
         mixup_scale: [0.5, 1.5]
     - PadResize:
         target_size: *input_size
         fill_value: 114
-        hsv_prob: 0.0 #
-        flip_prob: 0.5
+        hsv_prob: 1.0 #
+        flip_prob: 0.5 #
   batch_transforms:
     - RecBatchRandomResize:
         input_size: *input_size
-        multiscale_range: 5
+        multiscale_range: 5 #
     - PadBox: {num_max_boxes: 120}
     - Permute: {}
   batch_size: 8
@@ -82,7 +82,7 @@ EvalReader:
         fill_value: 114
   batch_transforms:
     - Permute: {}
-  batch_size: 1
+  batch_size: 8
 
 
 TestReader:
@@ -98,29 +98,3 @@ TestReader:
   batch_transforms:
     - Permute: {}
   batch_size: 1
-
-
-epoch: 150
-
-LearningRate:
-  base_lr: 0.01
-  schedulers:
-  - !YOLOXCosineDecay
-    max_epochs: 150
-    no_aug_epochs: 10
-    min_lr_ratio: 0.05
-  - !ExpWarmup
-    start_lr: 0.
-    warmup_epochs: 3
-
-OptimizerBuilder: # but no use, rewrite in trainer.py
-  optimizer:
-    momentum: 0.9
-    type: Momentum
-    use_nesterov: true
-    #param_groups:
-    #  - params: ['bias', 'bn']
-    #    weight_decay: 0.
-  regularizer:
-    factor: 0.0005
-    type: L2
