@@ -5,7 +5,7 @@ _BASE_: [
   './_base_/optimizer_300e.yml',
   './_base_/yolox_reader.yml',
 ]
-pretrain_weights: https://paddledet.bj.bcebos.com/models/mot/yolox/torch2paddle_final_yolox/yolox_x_coco_paddle.pdparams
+pretrain_weights: https://paddledet.bj.bcebos.com/models/mot/yolox/torch2paddle_final_yolox/yolox_x_coco_paddle_rgb.pdparams
 
 snapshot_epoch: 1
 weights: output/byte_x_mot_ablation/model_final
@@ -103,6 +103,7 @@ TrainReader:
         enable_mixup: True  #
         mixup_prob: 1.0
         mixup_scale: [0.5, 1.5]
+        remove_outside_box: True
     - PadResize:
         target_size: *input_size
         fill_value: 114

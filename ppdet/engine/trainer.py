@@ -449,7 +449,7 @@ class Trainer(object):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
                         outputs = model(data)
-                        loss = outputs['loss']
+                    loss = outputs['loss']
                     '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
@@ -517,7 +517,7 @@ class Trainer(object):
 
                 
                 curr_lr = self.optimizer.get_lr()
-                self.optimizer.set_lr(curr_lr)
+                # self.optimizer.set_lr(curr_lr)
                 self.lr.step()
                 if self.cfg.get('unstructured_prune'):
                     self.pruner.step()

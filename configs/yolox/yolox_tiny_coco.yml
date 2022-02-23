@@ -6,8 +6,35 @@ _BASE_: [
   './_base_/yolox_reader.yml',
 ]
 
-snapshot_epoch: 5
+snapshot_epoch: 1 #5
 weights: output/yolox_tiny_coco/model_final
+find_unused_parameters: True
+
+mosaic_epoch: &mosaic_epoch 30
+epoch: 36
+LearningRate:
+  base_lr: 0.01
+  schedulers:
+  - !YOLOXCosineDecay
+    max_epochs: 36
+    no_aug_epochs: 6
+    min_lr_ratio: 0.05
+  - !ExpWarmup
+    start_lr: 0.
+    warmup_epochs: 2
+
+OptimizerBuilder: # but no use, rewrite in trainer.py
+  optimizer:
+    momentum: 0.9
+    type: Momentum
+    use_nesterov: true
+    #param_groups:
+    #  - params: ['bias', 'bn']
+    #    weight_decay: 0.
+  regularizer:
+    factor: 0.0005
+    type: L2
+
 
 depth_factor: 0.33
 width_factor: 0.375
@@ -44,7 +71,8 @@ TrainReader:
         input_size: *input_size
         nn_resize: True
         keep_ratio: True
-        random_size_factor: [10, 20] # 320*320, 640*640
+        multiscale_range: 0
+        #random_size_factor: [10, 20] # 320*320, 640*640
     - PadBox: {num_max_boxes: 120}
     - Permute: {}
   batch_size: 8
@@ -52,7 +80,7 @@ TrainReader:
   drop_last: True
   collate_batch: True 
   use_shared_memory: True
-  mosaic_epoch: 285
+  mosaic_epoch: *mosaic_epoch
   mosaic_sample_num: 5
 
 
@@ -66,7 +94,7 @@ EvalReader:
         fill_value: 114
   batch_transforms:
     - Permute: {}
-  batch_size: 1
+  batch_size: 8
 
 
 TestReader:
@@ -82,3 +110,28 @@ TestReader:
   batch_transforms:
     - Permute: {}
   batch_size: 1
+
+architecture: YOLOX
+YOLOX:
+  backbone: CSPDarkNet
+  neck: YOLOCSPPAN
+  yolox_head: YOLOXHead
+  post_process: YOLOXPostProcess
+
+YOLOXHead:
+  strides: [8, 16, 32]
+  channels: [256, 512, 1024]
+  depthwise: False
+  mosaic_epoch: *mosaic_epoch
+  yolox_loss: YOLOXLoss
+
+YOLOXPostProcess:
+  decode:
+    name: YOLOXBox
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 30000
+    keep_top_k: 1000
+    score_threshold: 0.001
+    nms_threshold: 0.65
+    return_index: true
