@@ -1,15 +1,15 @@
-epoch: 300
+epoch: 36
 
 LearningRate:
   base_lr: 0.01
   schedulers:
   - !YOLOXCosineDecay
-    max_epochs: 300
-    no_aug_epochs: 15
+    max_epochs: 36
+    no_aug_epochs: 2
     min_lr_ratio: 0.05
   - !ExpWarmup
     start_lr: 0.
-    warmup_epochs: 5
+    warmup_epochs: 1
 
 OptimizerBuilder: # but no use, rewrite in trainer.py
   optimizer:

@@ -295,41 +295,39 @@ class WarpAffine(object):
         return inp, im_info
 
 
-class SquareImage(object):
-    def __init__(self, fill_value=0, is_channel_first=True):
-        """
-        Pad zeros to bboxes if number of bboxes is less than num_max_boxes.
-        Args:
-            fill_value (int): the filled pixel value
-            is_channel_first (bool): ...
-        """
-        if not isinstance(fill_value, int):
-            raise ValueError('fill_value must be int!')
-        if fill_value < 0 or fill_value > 255:
-            raise ValueError('fill_value must in 0 ~ 255')
+class PadImage(object):
+    """pad image
+    """
+    def __init__(self, target_size, fill_value=114):
+        super(PadImage, self).__init__()
+        if isinstance(target_size, int):
+            target_size = [target_size, target_size]
+        self.target_size = target_size
         self.fill_value = fill_value
-        self.is_channel_first = is_channel_first
-        super(SquareImage, self).__init__()
+
+    def pad_resize(self, img, input_size, fill_value=114):
+        if len(img.shape) == 3:
+            padded_img = np.ones((input_size[0], input_size[1], 3)) * fill_value
+        else:
+            padded_img = np.ones(input_size, dtype=np.uint8) * fill_value
+
+        r = min(input_size[0] / img.shape[0], input_size[1] / img.shape[1])
+        resized_img = cv2.resize(
+            img,
+            (int(img.shape[1] * r), int(img.shape[0] * r)),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
+        padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
+        return padded_img, r
 
     def __call__(self, im, im_info):
-        im = im.astype(np.float32, copy=False)
-        if self.is_channel_first:
-            C, H, W = im.shape
-            if H != W:
-                max_ = max(H, W)
-                padded_img = np.ones((C, max_, max_), dtype=np.uint8) * self.fill_value
-                padded_img = padded_img.astype(np.float32)
-                padded_img[:C, :H, :W] = im
-                img = padded_img
-        else:
-            H, W, C = im.shape
-            if H != W:
-                max_ = max(H, W)
-                padded_img = np.ones((max_, max_, C), dtype=np.uint8) * self.fill_value
-                padded_img = padded_img.astype(np.float32)
-                padded_img[:H, :W, :C] = im
-                img = padded_img
-        return img, im_info
+        im, ratio = self.pad_resize(im, self.target_size, self.fill_value)
+        im_info['im_shape'] = np.array(im.shape[:2]).astype('float32')
+        im_scale_y, im_scale_x = im_info['scale_factor']
+        im_info['scale_factor'] = np.array(
+            [ratio * im_scale_y, ratio * im_scale_x]).astype('float32')
+        return im, im_info
 
 
 def preprocess(im, preprocess_ops):

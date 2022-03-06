@@ -134,8 +134,8 @@ class Trainer(object):
                 self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
             else:
                 #self.optimizer = paddle.optimizer.Momentum(
-                #    parameters=self.model.parameters(), learning_rate=0.001,
-                #    momentum=0.9, use_nesterov=True)#, weight_decay=paddle.regularizer.L2Decay(0.0005))
+                #    parameters=self.model.parameters(), learning_rate=0.01,
+                #    momentum=0.9, use_nesterov=True, weight_decay=0.0005)  #paddle.regularizer.L2Decay(0.0)) # if no weight_decay
                 '''
                 self.optimizer = paddle.optimizer.Momentum(
                     parameters=self.model.parameters(), learning_rate=0.001,
@@ -406,7 +406,7 @@ class Trainer(object):
         # initial fp16
         if self.cfg.get('fp16', False):
             scaler = amp.GradScaler(
-                enable=self.cfg.use_gpu) #, init_loss_scaling=1024)
+                enable=self.cfg.use_gpu, init_loss_scaling=2.**16, incr_every_n_steps=2000)
         else:
             scaler = amp.GradScaler(enable=False)
 
@@ -449,7 +449,7 @@ class Trainer(object):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
                         outputs = model(data)
-                    loss = outputs['loss']
+                        loss = outputs['loss']
                     '''
                     # model backward
                     scaled_loss = scaler.scale(loss)

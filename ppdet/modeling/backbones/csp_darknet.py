@@ -56,14 +56,16 @@ class BaseConv(nn.Layer):
             groups=groups,
             bias_attr=bias,
         )
-        self.bn = nn.BatchNorm2D(out_channels, momentum=0.03, epsilon=1e-3)
+        self.bn = nn.BatchNorm2D(out_channels, momentum=0.97, epsilon=1e-3)
         self.act = get_activation(act)
 
     def forward(self, x):
         '''
         if x.shape[-1]==320:
-            print('  BaseConv  ppdet  ///////////.............', x.shape, self.conv.weight.shape)
-            print('  BaseConv  ppdet  ///////////.............', self.conv.weight.sum())
+            print('......', x.sum(), x.shape)
+            print('......', self.conv(x).sum(), self.conv(x).shape)
+            #print('  BaseConv  ppdet  ///////////.............', x.shape, self.conv.weight.shape)
+            #print('  BaseConv  ppdet  ///////////.............', self.conv.weight.sum())
         '''
         return self.act(self.bn(self.conv(x)))
 
@@ -351,6 +353,7 @@ class CSPDarkNet(nn.Layer):
         x = inputs['image']
         outputs = []
         x = self.stem(x)
+        #print('        stem            x ', x.shape, x.sum())
         for i, layer in enumerate(self.csp_dark_blocks):
             x = layer(x)
             #print('        after          x ', i, x.shape, x.sum())

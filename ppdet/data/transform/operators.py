@@ -3605,214 +3605,70 @@ class DecodeResize(BaseOperator):
 
 
 @register_op
-class PadResize(BaseOperator):
-    def __init__(self, target_size, hsv_prob=0, flip_prob=0, legacy=False, fill_value=114, max_labels=120):
-        super(PadResize, self).__init__()
-        self.hsv_prob = hsv_prob
-        self.flip_prob = flip_prob
-        self.legacy = legacy
-        self.max_labels = max_labels
-        if not isinstance(target_size, (Integral, Sequence)):
-            raise TypeError(
-                "Type of target_size is invalid. Must be Integer or List or Tuple, now is {}".
-                format(type(target_size)))
+class PadImage(BaseOperator):
+    def __init__(self, target_size, fill_value=114):
+        super(PadImage, self).__init__()
         if isinstance(target_size, Integral):
             target_size = [target_size, target_size]
         self.target_size = target_size
-
-        if not isinstance(fill_value, int):
-            raise ValueError('fill_value must be int!')
-        if fill_value < 0 or fill_value > 255:
-            raise ValueError('fill_value must in 0 ~ 255')
         self.fill_value = fill_value
+        self.legacy = False
 
     def pad_resize(self, img, input_size, fill_value=114):
         if len(img.shape) == 3:
-            padded_img = np.ones((input_size[0], input_size[1], 3)) * fill_value
+            padded_img = np.ones((input_size[0], input_size[1], 3), dtype=np.uint8) * 114
         else:
-            padded_img = np.ones(input_size, dtype=np.uint8) * fill_value
+            padded_img = np.ones(input_size, dtype=np.uint8) * 114
 
         r = min(input_size[0] / img.shape[0], input_size[1] / img.shape[1])
         resized_img = cv2.resize(
             img,
             (int(img.shape[1] * r), int(img.shape[0] * r)),
             interpolation=cv2.INTER_LINEAR,
-        ) #.astype(np.uint8)
-        #print('   resized_img  preproc ', resized_img.shape, resized_img.sum())
+        ).astype(np.uint8)
+        #print(' PadImage  resized_img  preproc ', resized_img.shape, resized_img.sum())
         padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
-        #print('   padded_img ascontiguousarray .... ', padded_img.shape, padded_img.sum())
-
-        if self.legacy: # rgb
-            padded_img = padded_img[:, :, ::-1]
+        #print(' PadImage  padded_img .... ', padded_img.shape, padded_img.sum())
 
         padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
-        #padded_img = np.array(padded_img, dtype=np.float16)
-        #print(' ascontiguousarray   after ', padded_img.shape, padded_img.sum())
         return padded_img, r
 
-    def augment_hsv(self, img, hgain=5, sgain=30, vgain=30):
-        hsv_augs = np.random.uniform(-1, 1, 3) * [hgain, sgain, vgain]  # random gains
-        hsv_augs *= np.random.randint(0, 2, 3)  # random selection of h, s, v
-        hsv_augs = hsv_augs.astype(np.int16)
-        img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV).astype(np.int16)
-
-        img_hsv[..., 0] = (img_hsv[..., 0] + hsv_augs[0]) % 180
-        img_hsv[..., 1] = np.clip(img_hsv[..., 1] + hsv_augs[1], 0, 255)
-        img_hsv[..., 2] = np.clip(img_hsv[..., 2] + hsv_augs[2], 0, 255)
-        img_hsv = cv2.cvtColor(img_hsv.astype(img.dtype), cv2.COLOR_HSV2BGR, dst=img)  # no return needed
-
-    def _mirror(self, image, boxes, prob=0.5):
-        _, width, _ = image.shape
-        if random.random() < prob:
-            image = image[:, ::-1]
-            boxes[:, 0::2] = width - boxes[:, 2::-2]
-        return image, boxes
-
-    def xyxy2cxcywh(self, bboxes):
-        bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 0]
-        bboxes[:, 3] = bboxes[:, 3] - bboxes[:, 1]
-        bboxes[:, 0] = bboxes[:, 0] + bboxes[:, 2] * 0.5
-        bboxes[:, 1] = bboxes[:, 1] + bboxes[:, 3] * 0.5
-        return bboxes
-
     def apply(self, sample, context=None):
-        image = sample['image']
-
-        # val reader
-        if 'gt_bbox' not in sample:
-            image, ratio = self.pad_resize(image, self.target_size)
-            sample['image'] = image
-            return sample
-
-
-        # train reader
-        boxes = sample['gt_bbox'].copy() # xywh
-        labels = sample['gt_class'].copy()
-        is_crowds = sample['is_crowd'].copy()
-        targets = np.concatenate([boxes, labels, is_crowds], 1)
-
-        '''
-        image_vis = visbox(image, targets) # (427, 640, 3)
-        cv2.imwrite('%d_padresize.jpg' % sample['im_id'], image)
-        print('    dui  ')
-        embed()
-        exit()
-        '''
-
-
-        input_dim = self.target_size
-        if len(boxes) == 0:
-            #targets = np.zeros((1, 6), dtype=np.float32) #
-            image, r_o = self.pad_resize(image, input_dim)
-            sample['image'] = image
-            sample['gt_class'] = np.zeros((1, 1), dtype=np.float32)
-            sample['gt_bbox'] = np.zeros((1, 4), dtype=np.float32)
-            sample['is_crowd'] = np.zeros((1, 1), dtype=np.float32)
-            #sample['gt_class_bbox'] = targets
-            return sample
-
-        image_o = image.copy()
-        targets_o = targets.copy()
-        boxes_o = targets_o[:, :4]
-        labels_o = targets_o[:, 4:5]
-        is_crowds_o = targets_o[:, 5:6]
-        # bbox_o: [xyxy] to [c_x,c_y,w,h]
-        boxes_o = self.xyxy2cxcywh(boxes_o)
-        
-        if random.random() < self.hsv_prob:
-            self.augment_hsv(image)
-        image_t, boxes = self._mirror(image, boxes, self.flip_prob)
-
-        #image_t, r_ = self.pad_resize(image_t, input_dim) # -》 640，640，3
-        #print('   image_t  before ', image_t.shape, image_t.sum())
-        image_t, r_ = self.pad_resize(image_t, input_dim)
-        #print('   image_t  after ', image_t.shape, image_t.sum())
-        # boxes [xyxy] 2 [cx,cy,w,h]
-        boxes = self.xyxy2cxcywh(boxes)
-        boxes *= r_
-
-        #print('    dui  r_  boxes ', boxes.shape, boxes.sum(), boxes)
-        #embed()
-
-        mask_b = np.minimum(boxes[:, 2], boxes[:, 3]) > 1
-        boxes_t = boxes[mask_b]
-        labels_t = labels[mask_b]
-        is_crowd_t = is_crowds[mask_b]
-
-        if len(boxes_t) == 0:
-            image_t, r_o = self.pad_resize(image_o, input_dim)
-            boxes_o *= r_o
-            boxes_t = boxes_o
-            labels_t = labels_o
-            is_crowd_t = is_crowds_o
-        
-        targets_t = np.hstack((boxes_t, labels_t, is_crowd_t))
-
-        padded_labels = np.ascontiguousarray(targets_t, dtype=np.float32)
-
-        '''
-        padded_labels = np.zeros((self.max_labels, 5))
-        padded_labels[range(len(targets_t))[: self.max_labels]] = targets_t[
-            : self.max_labels
-        ]
-        padded_labels = np.ascontiguousarray(padded_labels, dtype=np.float32)
-        '''
-         # shourld cxcywh -> xyxy
-        #image_t_vis = visbox(image_t, padded_labels)
-        #cv2.imwrite('%d_padresize.jpg' % sample['im_id'], image_t_vis)
-
-        sample['image'] = image_t # (640, 640, 3)
-        sample['gt_bbox'] = padded_labels[:, :4]
-        sample['gt_class'] = padded_labels[:, 4:5]
-        sample['is_crowd'] = padded_labels[:, 5:6]
+        image, ratio = self.pad_resize(sample['image'], self.target_size)
+        sample['image'] = image
+        scale_y, scale_x = sample['scale_factor']
+        sample['scale_factor'] = np.array([scale_y * ratio, scale_x * ratio], dtype=np.float32)
         return sample
-
 
 
 @register_op
-class PadResize2(BaseOperator):
-    def __init__(self, target_size, hsv_prob=0, flip_prob=0, legacy=False, fill_value=114, max_labels=120):
-        super(PadResize2, self).__init__()
-        self.hsv_prob = hsv_prob
-        self.flip_prob = flip_prob
-        self.legacy = legacy
-        self.max_labels = max_labels
-        if not isinstance(target_size, (Integral, Sequence)):
-            raise TypeError(
-                "Type of target_size is invalid. Must be Integer or List or Tuple, now is {}".
-                format(type(target_size)))
+class AugImage(BaseOperator):
+    def __init__(self, target_size, hsv_prob=1.0, flip_prob=0.5):
+        super(AugImage, self).__init__()
         if isinstance(target_size, Integral):
             target_size = [target_size, target_size]
         self.target_size = target_size
-
-        if not isinstance(fill_value, int):
-            raise ValueError('fill_value must be int!')
-        if fill_value < 0 or fill_value > 255:
-            raise ValueError('fill_value must in 0 ~ 255')
-        self.fill_value = fill_value
+        self.hsv_prob = hsv_prob
+        self.flip_prob = flip_prob
 
     def pad_resize(self, img, input_size, fill_value=114):
         if len(img.shape) == 3:
-            padded_img = np.ones((input_size[0], input_size[1], 3)) * fill_value
+            padded_img = np.ones((input_size[0], input_size[1], 3), dtype=np.uint8) * 114
         else:
-            padded_img = np.ones(input_size, dtype=np.uint8) * fill_value
+            padded_img = np.ones(input_size, dtype=np.uint8) * 114
+        #print(' AugImage  before img  preproc ', img.shape, img.sum())
 
         r = min(input_size[0] / img.shape[0], input_size[1] / img.shape[1])
         resized_img = cv2.resize(
             img,
             (int(img.shape[1] * r), int(img.shape[0] * r)),
             interpolation=cv2.INTER_LINEAR,
-        ) #.astype(np.uint8)
-        #print('   resized_img  preproc ', resized_img.shape, resized_img.sum())
+        ).astype(np.uint8)
+        #print(' AugImage  resized_img  preproc ', resized_img.shape, resized_img.sum())
         padded_img[: int(img.shape[0] * r), : int(img.shape[1] * r)] = resized_img
-        #print('   padded_img ascontiguousarray .... ', padded_img.shape, padded_img.sum())
-
-        if self.legacy: # rgb
-            padded_img = padded_img[:, :, ::-1]
+        #print(' AugImage  padded_img .... ', padded_img.shape, padded_img.sum())
 
         padded_img = np.ascontiguousarray(padded_img, dtype=np.float32)
-        #padded_img = np.array(padded_img, dtype=np.float16)
-        #print(' ascontiguousarray   after ', padded_img.shape, padded_img.sum())
         return padded_img, r
 
     def augment_hsv(self, img, hgain=5, sgain=30, vgain=30):
@@ -3840,80 +3696,13 @@ class PadResize2(BaseOperator):
         bboxes[:, 1] = bboxes[:, 1] + bboxes[:, 3] * 0.5
         return bboxes
 
-    def load_resized_img(self, sample, target_size):
-        if 'image' not in sample:
-            img_file = sample['im_file']
-            sample['image'] = cv2.imread(img_file)
-            sample.pop('im_file')
-        im = sample['image']
-
-        if 'keep_ori_im' in sample and sample['keep_ori_im']:
-            sample['ori_image'] = im
-
-        if 'h' not in sample:
-            sample['h'] = im.shape[0]
-        elif sample['h'] != im.shape[0]:
-            logger.warning(
-                "The actual image height: {} is not equal to the "
-                "height: {} in annotation, and update sample['h'] by actual "
-                "image height.".format(im.shape[0], sample['h']))
-            sample['h'] = im.shape[0]
-        if 'w' not in sample:
-            sample['w'] = im.shape[1]
-        elif sample['w'] != im.shape[1]:
-            logger.warning(
-                "The actual image width: {} is not equal to the "
-                "width: {} in annotation, and update sample['w'] by actual "
-                "image width.".format(im.shape[1], sample['w']))
-            sample['w'] = im.shape[1]
-
-        sample['im_shape'] = np.array(im.shape[:2], dtype=np.float32) # original shape
-
-        # get resized img
-        r = min(target_size[0] / im.shape[0], target_size[1] / im.shape[1])
-        resized_img = cv2.resize(
-            im,
-            (int(im.shape[1] * r), int(im.shape[0] * r)),
-            interpolation=cv2.INTER_LINEAR,
-        ).astype(np.uint8)
-        #print('  im  load_resized_img   ',im.shape, im.sum(), resized_img.shape, resized_img.sum())
-
-        #if self.to_rgb:
-        #    resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
-
-        sample['image'] = resized_img
-        sample['scale_factor'] = np.array([r, r], dtype=np.float32)
-        return sample, r
-
     def apply(self, sample, context=None):
-        #image = sample['image']
-
-        sample, before_r = self.load_resized_img(sample, self.target_size)
-        if 'gt_bbox' in sample:
-            sample['gt_bbox'] *= before_r
         image = sample['image']
 
-        # val reader
-        if 'gt_bbox' not in sample:
-            image, ratio = self.pad_resize(image, self.target_size)
-            sample['image'] = image
-            return sample
-
-
-        # train reader
         boxes = sample['gt_bbox'].copy() # xywh
         labels = sample['gt_class'].copy()
         is_crowds = sample['is_crowd'].copy()
         targets = np.concatenate([boxes, labels, is_crowds], 1)
-
-        '''
-        image_vis = visbox(image, targets) # (427, 640, 3)
-        cv2.imwrite('%d_padresize.jpg' % sample['im_id'], image)
-        print('    dui  ')
-        embed()
-        exit()
-        '''
-
 
         input_dim = self.target_size
         if len(boxes) == 0:
@@ -3947,7 +3736,6 @@ class PadResize2(BaseOperator):
         boxes *= r_
 
         #print('    dui  r_  boxes ', boxes.shape, boxes.sum(), boxes)
-        #embed()
 
         mask_b = np.minimum(boxes[:, 2], boxes[:, 3]) > 1
         boxes_t = boxes[mask_b]
@@ -3965,23 +3753,11 @@ class PadResize2(BaseOperator):
 
         padded_labels = np.ascontiguousarray(targets_t, dtype=np.float32)
 
-        '''
-        padded_labels = np.zeros((self.max_labels, 5))
-        padded_labels[range(len(targets_t))[: self.max_labels]] = targets_t[
-            : self.max_labels
-        ]
-        padded_labels = np.ascontiguousarray(padded_labels, dtype=np.float32)
-        '''
-         # shourld cxcywh -> xyxy
-        #image_t_vis = visbox(image_t, padded_labels)
-        #cv2.imwrite('%d_padresize.jpg' % sample['im_id'], image_t_vis)
-
         sample['image'] = image_t # (640, 640, 3)
         sample['gt_bbox'] = padded_labels[:, :4]
         sample['gt_class'] = padded_labels[:, 4:5]
         sample['is_crowd'] = padded_labels[:, 5:6]
         return sample
-
 
 
 def visbox(image, tlbr_cls_crds):

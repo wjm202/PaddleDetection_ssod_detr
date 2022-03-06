@@ -1,5 +1,5 @@
-input_height: &input_height 640
-input_width: &input_width 640
+input_height: &input_height 416
+input_width: &input_width 416
 input_size: &input_size [*input_height, *input_width]
 mosaic_epoch: &mosaic_epoch 285
 
@@ -11,13 +11,13 @@ TrainReader:
     - Decode: {}
     - Resize: {target_size: *input_size, keep_ratio: True}
     - YOLOXMosaic:
-        prob: 1.0
+        prob: 1.0 # 0.5 in nano
         degrees: 10.0
         translate: 0.1
-        scale: [0.1, 2]
+        scale: [0.5, 1.5] # [0.1, 2] in s/m/l/x
         shear: 2.0
         input_dim: *input_size
-        enable_mixup: True
+        enable_mixup: False # True in s/m/l/x
         mixup_prob: 1.0
         mixup_scale: [0.5, 1.5]
     - AugImage:
@@ -27,9 +27,9 @@ TrainReader:
   batch_transforms:
     - RecBatchRandomResize:
         input_size: *input_size
-        nn_resize: True # only get target_size. resize in architecture
-        keep_ratio: True # only for square
-        multiscale_range: 5 # 480*480, 800*800
+        nn_resize: True
+        keep_ratio: True
+        random_size_factor: [10, 20] # 320*320, 640*640
     - PadBox: {num_max_boxes: 120}
     - Permute: {}
   batch_size: 8
@@ -52,7 +52,7 @@ EvalReader:
 
 TestReader:
   inputs_def:
-    image_shape: [3, 640, 640]
+    image_shape: [3, 416, 416]
   sample_transforms:
     - Decode: {}
     - Resize: {target_size: *input_size, keep_ratio: True}

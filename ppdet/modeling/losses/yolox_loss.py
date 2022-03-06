@@ -231,7 +231,7 @@ class YOLOXLoss(nn.Layer):
 
         losses = {
             "loss_iou": self.reg_weight * loss_iou,
-            "loss_obj": loss_obj,
+            "loss_conf": loss_obj,
             "loss_cls": loss_cls,
             "loss_l1": loss_l1,
         }

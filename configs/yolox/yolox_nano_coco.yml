@@ -3,7 +3,7 @@ _BASE_: [
   '../runtime.yml',
   './_base_/yolox_cspdarknet.yml',
   './_base_/optimizer_300e.yml',
-  './_base_/yolox_reader.yml',
+  './_base_/yolox_reader_416.yml',
 ]
 
 snapshot_epoch: 5
@@ -11,6 +11,49 @@ weights: output/yolox_nano_coco/model_final
 
 depth_factor: 0.33
 width_factor: 0.25
+
+# Nano model use depthwise convert and input_size 416x416, mosaic_scale:[0.5, 1.5], enable_mixup:False, random_size_factor:[10, 20]. 
+input_height: &input_height 416
+input_width: &input_width 416
+input_size: &input_size [*input_height, *input_width]
+mosaic_epoch: &mosaic_epoch 285
+
+TrainReader:
+  inputs_def:
+    num_max_boxes: 120
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: *input_size, keep_ratio: True}
+    - YOLOXMosaic:
+        prob: 0.5 # in nano
+        degrees: 10.0
+        translate: 0.1
+        scale: [0.5, 1.5] # [0.1, 2] in s/m/l/x
+        shear: 2.0
+        input_dim: *input_size
+        enable_mixup: False # True in s/m/l/x
+        mixup_prob: 1.0
+        mixup_scale: [0.5, 1.5]
+    - AugImage:
+        target_size: *input_size
+        hsv_prob: 1.0
+        flip_prob: 0.5
+  batch_transforms:
+    - RecBatchRandomResize:
+        input_size: *input_size
+        nn_resize: True # only get target_size. resize in architecture
+        keep_ratio: True # only for square
+        random_size_factor: [10, 20] # 320*320, 640*640
+    - PadBox: {num_max_boxes: 120}
+    - Permute: {}
+  batch_size: 8
+  shuffle: True
+  drop_last: True
+  collate_batch: True 
+  use_shared_memory: True
+  mosaic_epoch: *mosaic_epoch
+  mosaic_sample_num: 5
+
 
 # Nano model use depthwise
 CSPDarkNet:
@@ -25,76 +68,5 @@ YOLOXHead:
   strides: [8, 16, 32]
   channels: [256, 512, 1024]
   depthwise: True
-  mosaic_epoch: 285
+  mosaic_epoch: *mosaic_epoch
   yolox_loss: YOLOXLoss
-
-# Nano model use 416x416, mosaic_scale:[0.5, 1.5], enable_mixup:False, random_size_factor:[10, 20]. 
-input_height: &input_height 416
-input_width: &input_width 416
-input_size: &input_size [*input_height, *input_width]
-
-worker_num: 4
-TrainReader:
-  inputs_def:
-    num_max_boxes: 120
-  sample_transforms:
-    - DecodeResize:
-        target_size: *input_size
-        keep_ratio: True
-    - YOLOXMosaic:
-        prob: 0.5 # not 1.0
-        degrees: 10.0
-        translate: 0.1
-        scale: [0.5, 1.5] #not [0.1, 2]
-        shear: 2.0
-        perspective: 0.0
-        input_dim: *input_size
-        enable_mixup: False #True
-    - PadResize:
-        target_size: *input_size
-        fill_value: 114
-        hsv_prob: 1.0
-        flip_prob: 0.5
-  batch_transforms:
-    - RecBatchRandomResize:
-        input_size: *input_size
-        nn_resize: True
-        keep_ratio: True
-        random_size_factor: [10, 20] # 320*320, 640*640
-    - PadBox: {num_max_boxes: 120}
-    - Permute: {}
-  batch_size: 8
-  shuffle: True
-  drop_last: True
-  collate_batch: True 
-  use_shared_memory: True
-  mosaic_epoch: 285
-  mosaic_sample_num: 5
-
-
-EvalReader:
-  sample_transforms:
-    - DecodeResize:
-        target_size: *input_size
-        keep_ratio: True
-    - PadResize:
-        target_size: *input_size
-        fill_value: 114
-  batch_transforms:
-    - Permute: {}
-  batch_size: 1
-
-
-TestReader:
-  inputs_def:
-    image_shape: [3, 416, 416]
-  sample_transforms:
-    - DecodeResize:
-        target_size: *input_size
-        keep_ratio: True
-    - PadResize:
-        target_size: *input_size
-        fill_value: 114
-  batch_transforms:
-    - Permute: {}
-  batch_size: 1

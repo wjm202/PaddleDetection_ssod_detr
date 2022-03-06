@@ -1,4 +1,4 @@
-# Copyright (c) 2021 PaddlePaddle Authors. All Rights Reserved. 
+# Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved. 
 #   
 # Licensed under the Apache License, Version 2.0 (the "License");   
 # you may not use this file except in compliance with the License.  
@@ -16,17 +16,18 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import numpy as np
+import paddle
+import paddle.nn.functional as F
+import paddle.nn as nn
+
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
-from ..post_process import JDEBBoxPostProcess
-#from ppdet.modeling.ops import yolox_resize
 from IPython import embed
 
 __all__ = ['YOLOX']
 
-import paddle
-import paddle.nn.functional as F
-import paddle.nn as nn
+
 def yolox_resize(inputs, targets, inputs_dim, tsize):
     # targets.shape [n, 120, 4]
     scale_y = tsize[0] / inputs_dim[0]
@@ -35,8 +36,6 @@ def yolox_resize(inputs, targets, inputs_dim, tsize):
         inputs = F.interpolate(
             inputs, size=tsize, mode="bilinear", align_corners=False
         )
-        #targets[:, :, 1::2] = targets[:, :, 1::2] * scale_x
-        #targets[:, :, 2::2] = targets[:, :, 2::2] * scale_y
         targets[:, :, 0::2] = targets[:, :, 0::2] * scale_x
         targets[:, :, 1::2] = targets[:, :, 1::2] * scale_y
     return inputs, targets
@@ -56,7 +55,7 @@ class YOLOX(BaseArch):
                  data_format='NCHW',
                  for_mot=False):
         """
-        YOLOX network, see https://arxiv.org/abs/...
+        YOLOX network, see https://arxiv.org/abs/2107.08430
 
         Args:
             backbone (nn.Layer): backbone instance
@@ -70,7 +69,7 @@ class YOLOX(BaseArch):
         self.yolox_head = yolox_head
         self.post_process = post_process
         self.for_mot = for_mot
-        self.return_idx = isinstance(post_process, JDEBBoxPostProcess)
+        self.target_dim = [416, 416] # initial scale, will be reset by self.inputs['target_size'].shape
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
@@ -92,21 +91,17 @@ class YOLOX(BaseArch):
         }
 
     def _forward(self):
-
-        # YOLOX random resizing
+        # YOLOX random resizing every 10 iters
         if self.training:
-            intv = 10
-            step_id = self.inputs['step_id']
-            if (step_id + 1) % intv == 0:
-                assert 'target_size' in self.inputs
-                inputs_dim = self.inputs['image'].shape[2:] 
-                target_dim = self.inputs['target_size'][0].numpy()
-                #print(' 1 ', self.inputs['image'].shape, self.inputs['image'].sum(), self.inputs['gt_bbox'].sum())
-                self.inputs['image'], self.inputs['gt_bbox'] = yolox_resize(
-                    self.inputs['image'], self.inputs['gt_bbox'],
-                    tuple(inputs_dim), tuple(target_dim))
-                #print(' 2 ', self.inputs['image'].shape, self.inputs['image'].sum(), self.inputs['gt_bbox'].sum())
-                #new_shape = self.inputs['im_shape'][0].numpy()
+            interval = 10
+            inputs_dim = self.inputs['image'].shape[2:]
+            if self.inputs['step_id'] % interval == 0:
+                self.target_dim = list(map(int, self.inputs['target_size'][0].numpy()))
+            #print('inputs_dim   target_dim', tuple(inputs_dim), tuple(self.target_dim))
+            self.inputs['image'], self.inputs['gt_bbox'] = yolox_resize(
+                self.inputs['image'], self.inputs['gt_bbox'],
+                inputs_dim, self.target_dim)
+
         '''
         print('self.inputs ', self.inputs['image'].shape, self.inputs['image'].sum())
         print('self.inputs  sum 0 ',  self.inputs['image'][:,0,:,:].sum())
@@ -126,6 +121,7 @@ class YOLOX(BaseArch):
 
         if self.training:
             yolo_losses = self.yolox_head(neck_feats, self.inputs)
+            yolo_losses.update({'size': self.inputs['target_size'][0]})
             return yolo_losses
         else:
             yolo_head_outs = self.yolox_head(neck_feats)
@@ -133,7 +129,6 @@ class YOLOX(BaseArch):
                 yolo_head_outs, 
                 self.inputs['im_shape'], self.inputs['scale_factor'])
             output = {'bbox': bbox, 'bbox_num': bbox_num}
-            #print(bbox.shape, bbox[:10])
             return output
 
     def get_loss(self):

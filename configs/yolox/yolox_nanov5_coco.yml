@@ -1,9 +1,0 @@
-_BASE_: [
-  './yolox_nano_coco.yml',
-]
-weights: output/yolox_nanov5_coco/model_final
-
-CSPDarkNet:
-  arch: "P5"
-  return_idx: [2, 3, 4]
-  depthwise: True
