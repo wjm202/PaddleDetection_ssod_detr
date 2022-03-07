@@ -101,6 +101,8 @@ class YOLOX(BaseArch):
             self.inputs['image'], self.inputs['gt_bbox'] = yolox_resize(
                 self.inputs['image'], self.inputs['gt_bbox'],
                 inputs_dim, self.target_dim)
+            target_size_tensor = paddle.to_tensor(self.target_dim[0])
+            target_size_tensor.stop_gradient = True
 
         '''
         print('self.inputs ', self.inputs['image'].shape, self.inputs['image'].sum())
@@ -121,7 +123,7 @@ class YOLOX(BaseArch):
 
         if self.training:
             yolo_losses = self.yolox_head(neck_feats, self.inputs)
-            yolo_losses.update({'size': self.inputs['target_size'][0]})
+            yolo_losses.update({'size': target_size_tensor})
             return yolo_losses
         else:
             yolo_head_outs = self.yolox_head(neck_feats)

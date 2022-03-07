@@ -1820,13 +1820,14 @@ class BboxXYXY2XYWH(BaseOperator):
 
 @register_op
 class PadBox(BaseOperator):
-    def __init__(self, num_max_boxes=50):
+    def __init__(self, num_max_boxes=50, init_bbox=None):
         """
         Pad zeros to bboxes if number of bboxes is less than num_max_boxes.
         Args:
             num_max_boxes (int): the max number of bboxes
         """
         self.num_max_boxes = num_max_boxes
+        self.init_bbox = [-9999.0, -9999.0, 10.0, 10.0] # None
         super(PadBox, self).__init__()
 
     def apply(self, sample, context=None):
@@ -1836,6 +1837,8 @@ class PadBox(BaseOperator):
         num_max = self.num_max_boxes
         # fields = context['fields'] if context else []
         pad_bbox = np.zeros((num_max, 4), dtype=np.float32)
+        if self.init_bbox is not None:
+            pad_bbox = np.ones((num_max, 4), dtype=np.float32) * self.init_bbox
         if gt_num > 0:
             pad_bbox[:gt_num, :] = bbox[:gt_num, :]
         sample['gt_bbox'] = pad_bbox

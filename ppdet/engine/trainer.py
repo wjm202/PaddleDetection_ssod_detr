@@ -45,7 +45,6 @@ from ppdet.utils import profiler
 
 from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator
 from .export_utils import _dump_infer_config, _prune_input_spec
-from ppdet.modeling.ops import yolox_resize
 
 from ppdet.utils.logger import setup_logger
 logger = setup_logger('ppdet.engine')
@@ -414,7 +413,7 @@ class Trainer(object):
         # enabel auto mixed precision mode
         if self.cfg.get('amp', False):
             scaler = amp.GradScaler(
-                enable=self.cfg.use_gpu, init_loss_scaling=2.**16, incr_every_n_steps=2000)
+                enable=self.cfg.use_gpu, init_loss_scaling=1024) # 2.**16, incr_every_n_steps=2000)
         else:
             scaler = amp.GradScaler(enable=False)
 
@@ -457,7 +456,7 @@ class Trainer(object):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
                         outputs = model(data)
-                        loss = outputs['loss']
+                    loss = outputs['loss']
                     '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
