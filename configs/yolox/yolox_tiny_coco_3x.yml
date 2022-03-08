@@ -11,7 +11,7 @@ weights: output/yolox_tiny_coco_3x/model_final
 depth_factor: 0.33
 width_factor: 0.375
 
-use_ema: False
+use_ema: True
 
 input_height: &input_height 416
 input_width: &input_width 416
@@ -49,7 +49,7 @@ TrainReader:
     - Decode: {}
     - Resize: {target_size: *input_size, keep_ratio: True}
     - YOLOXMosaic:
-        prob: 0.0 #1.0 # 0.5 in nano
+        prob: 1.0 # 0.5 in nano
         degrees: 10.0
         translate: 0.1
         scale: [0.5, 1.5] # [0.1, 2] in s/m/l/x
@@ -63,11 +63,8 @@ TrainReader:
         hsv_prob: 1.0
         flip_prob: 0.5
   batch_transforms:
-    - RecBatchRandomResize:
-        input_size: *input_size
-        nn_resize: True
-        keep_ratio: True
-        random_size_factor: [10, 20] # 320*320, 640*640
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640], random_size: True, random_interp: True, keep_ratio: True}
+    #- RecBatchRandomResize: {input_size: *input_size, nn_resize: True, keep_ratio: True, random_size_factor: [10, 20]}
     - PadBox: {num_max_boxes: 120}
     - Permute: {}
   batch_size: 8

@@ -114,6 +114,7 @@ class Trainer(object):
                 self.model,
                 decay=ema_decay,
                 use_thres_step=True,
+                ema_decay_type='exponential',
                 cycle_epoch=cycle_epoch)
 
         # EvalDataset build with BatchSampler to evaluate in single device
