@@ -28,6 +28,85 @@ from ..backbones.csp_darknet import BaseConv, DWConv
 __all__ = ['YOLOXHead']
 
 
+def bboxes_iou(bboxes_a, bboxes_b, xyxy=True):
+    bboxes_a = paddle.cast(bboxes_a, bboxes_b.dtype)
+    if bboxes_a.shape[1] != 4 or bboxes_b.shape[1] != 4:
+        raise IndexError
+
+    if bboxes_b.shape[0] == 0:
+        return paddle.empty([bboxes_a.shape[0], 0])
+
+    if xyxy:
+        tl = paddle.maximum(bboxes_a[:, None, :2], bboxes_b[:, :2])
+        br = paddle.minimum(bboxes_a[:, None, 2:], bboxes_b[:, 2:])
+        area_a = paddle.prod(bboxes_a[:, 2:] - bboxes_a[:, :2], 1)
+        area_b = paddle.prod(bboxes_b[:, 2:] - bboxes_b[:, :2], 1)
+    else:
+        # print(bboxes_a.shape, bboxes_b.shape) # [2, 4] [1091, 4]
+        tl = paddle.maximum(
+            (bboxes_a[:, None, :2] - bboxes_a[:, None, 2:] / 2),
+            (bboxes_b[:, :2] - bboxes_b[:, 2:] / 2),
+        )
+        br = paddle.minimum(
+            (bboxes_a[:, None, :2] + bboxes_a[:, None, 2:] / 2),
+            (bboxes_b[:, :2] + bboxes_b[:, 2:] / 2),
+        )
+
+        area_a = paddle.prod(bboxes_a[:, 2:], 1)
+        area_b = paddle.prod(bboxes_b[:, 2:], 1)
+    en = (tl < br).astype(tl.dtype).prod(axis=2)
+    area_i = paddle.prod(br - tl, 2) * en  # * ((tl < br).all())
+    return area_i / (area_a[:, None] + area_b - area_i)
+
+
+class IOUloss(nn.Layer):
+    def __init__(self, reduction="none", loss_type="iou"):
+        super(IOUloss, self).__init__()
+        self.reduction = reduction
+        self.loss_type = loss_type
+
+    def forward(self, pred, target):
+        target = paddle.cast(target, pred.dtype)
+        assert pred.shape[0] == target.shape[0]
+
+        pred = pred.reshape([-1, 4])
+        target = target.reshape([-1, 4])
+        tl = paddle.maximum(
+            (pred[:, :2] - pred[:, 2:] / 2), (target[:, :2] - target[:, 2:] / 2)
+        )
+        br = paddle.minimum(
+            (pred[:, :2] + pred[:, 2:] / 2), (target[:, :2] + target[:, 2:] / 2)
+        )
+
+        area_p = paddle.prod(pred[:, 2:], 1)
+        area_g = paddle.prod(target[:, 2:], 1)
+
+        en = (tl < br).astype(tl.dtype).prod(axis=1)
+        area_i = paddle.prod(br - tl, 1) * en
+        area_u = area_p + area_g - area_i
+        iou = (area_i) / (area_u + 1e-16)
+
+        if self.loss_type == "iou":
+            loss = 1 - iou ** 2
+        elif self.loss_type == "giou":
+            c_tl = paddle.minimum(
+                (pred[:, :2] - pred[:, 2:] / 2), (target[:, :2] - target[:, 2:] / 2)
+            )
+            c_br = paddle.maximum(
+                (pred[:, :2] + pred[:, 2:] / 2), (target[:, :2] + target[:, 2:] / 2)
+            )
+            area_c = paddle.prod(c_br - c_tl, 1)
+            giou = iou - (area_c - area_u) / area_c.clip(1e-16)
+            loss = 1 - giou.clip(min=-1.0, max=1.0)
+
+        if self.reduction == "mean":
+            loss = loss.mean()
+        elif self.reduction == "sum":
+            loss = loss.sum()
+
+        return loss
+
+
 @register
 class YOLOXHead(nn.Layer):
     __shared__ = ['num_classes', 'width_factor', 'act']
@@ -152,6 +231,9 @@ class YOLOXHead(nn.Layer):
 
         self.use_l1 = False
         self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
+        self.iou_loss = IOUloss(reduction="none")
+        self.l1_loss = nn.L1Loss(reduction="none")
+
         self.strides = strides
         self.yolox_loss = yolox_loss
         self.grids = [paddle.zeros((1, ))] * len(channels)
@@ -170,136 +252,540 @@ class YOLOXHead(nn.Layer):
             conv.bias = paddle.create_parameter(shape=b.reshape([-1]).shape, dtype='float32',
                         default_initializer=paddle.nn.initializer.Constant(-math.log((1 - prior_prob) / prior_prob)))
 
-    def forward(self, feats, targets=None):
+    def forward(self, xin, targets=None, imgs=None):
         if self.training:
             gt_bbox = targets['gt_bbox']     # [N, 120, 4]
             gt_class = targets['gt_class'].unsqueeze(-1).astype(gt_bbox.dtype)   # [N, 120, 1]
-            gt_class_bbox = paddle.concat([gt_class, gt_bbox], axis=2)
-            gt_class_bbox.stop_gradient = False
-
+            labels = paddle.concat([gt_class, gt_bbox], axis=2)
+            labels.stop_gradient = True ###
             self.use_l1 = True if targets['epoch_id'] >= self.mosaic_epoch else False
 
-            outputs, x_shifts, y_shifts, expanded_strides, origin_preds = self.get_outputs(feats)
-
-            outputs = paddle.concat(outputs, axis=1)
-            yolox_losses = self.yolox_loss(
-                outputs,
-                x_shifts,
-                y_shifts,
-                expanded_strides,
-                origin_preds,
-                gt_class_bbox,
-                dtype=feats[0].dtype,
-                use_l1=self.use_l1,
-            )
-            return yolox_losses
-        else:
-            outputs, x_shifts, y_shifts, expanded_strides, origin_preds = self.get_outputs(feats)
-
-            self.hw = [x.shape[-2:] for x in outputs]
-            outputs = paddle.concat(
-                [paddle.reshape(x, (x.shape[0], x.shape[1], -1)) for x in outputs], axis=2
-            )
-            outputs = paddle.transpose(outputs, [0, 2, 1]) # [bs, 85, A] -> [bs, A, 85]
-
-            if self.decode_in_inference:
-                outputs = self.decode_outputs(outputs)
-            return outputs
-
-    def get_outputs(self, feats):
         outputs = []
         origin_preds = []
         x_shifts = []
         y_shifts = []
         expanded_strides = []
 
-        #print('  conv cls_preds [0,:,:,:]  ///////////.............', self.cls_preds[0].weight[0,:,:,:].sum())
-        #print('  conv cls_preds   ///////////.............', self.cls_preds[0].weight.sum())
-        #print('  conv reg_preds [0,:,:,:]   ///////////.............', self.reg_preds[0].weight[0,:,:,:].sum())
-        #print('  conv reg_preds     ///////////.............', self.reg_preds[0].weight.sum())
 
-        for i, (cls_conv, reg_conv, stride, x) in enumerate(
-            zip(self.cls_convs, self.reg_convs, self.strides, feats)
+
+        for k, (cls_conv, reg_conv, stride_this_level, x) in enumerate(
+            zip(self.cls_convs, self.reg_convs, self.strides, xin)
         ):
-            #print('..... fpn feat //', i, x.sum())
-            x = self.stems[i](x)
-            #print('..... stems feat //', i, x.sum())
-
+            x = self.stems[k](x)
             cls_x = x
             reg_x = x
-            cls_feat = cls_conv(cls_x)
-            cls_output = self.cls_preds[i](cls_feat)
-            reg_feat = reg_conv(reg_x)
-            reg_output = self.reg_preds[i](reg_feat)
-            obj_output = self.obj_preds[i](reg_feat)
 
-            #print('..... reg cls feat //', i, reg_feat.sum(), cls_feat.sum())
-            #print('// reg obj cls_output //', i, reg_output.sum(), obj_output.sum(), cls_output.sum())
+            cls_feat = cls_conv(cls_x)
+            cls_output = self.cls_preds[k](cls_feat)
+
+            reg_feat = reg_conv(reg_x)
+            reg_output = self.reg_preds[k](reg_feat)
+            obj_output = self.obj_preds[k](reg_feat)
+
             if self.training:
                 output = paddle.concat([reg_output, obj_output, cls_output], 1)
-                # output.shape=[N, 1 * 80 * 80, 85]  # xywh
-                # grid.shape=  [1, 1 * 80 * 80, 2]
                 output, grid = self.get_output_and_grid(
-                    output, i, stride
+                    output, k, stride_this_level, xin[0].dtype
                 )
-                x_shifts.append(grid[:, :, 0])   # [1, 1 * 80 * 80]
-                y_shifts.append(grid[:, :, 1])   # [1, 1 * 80 * 80]
-
-                expanded_stride = paddle.ones((1, grid.shape[1]), dtype=feats[0].dtype) * stride
-                expanded_strides.append(expanded_stride)
-
-                if self.use_l1:  # not use mosaic
-                    bs, _, hsize, wsize = reg_output.shape
-                    
-                    reg_output = reg_output.reshape((bs, self.n_anchors, 4, hsize, wsize)).transpose((0, 1, 3, 4, 2))
-
-                    reg_output = reg_output.reshape((bs, -1, 4))
+                x_shifts.append(grid[:, :, 0])
+                y_shifts.append(grid[:, :, 1])
+                expanded_strides.append(
+                    paddle.ones([1, grid.shape[1]], dtype=xin[0].dtype) * stride_this_level
+                )
+                if self.use_l1:
+                    batch_size = reg_output.shape[0]
+                    hsize, wsize = reg_output.shape[-2:]
+                    reg_output = reg_output.reshape(
+                        [batch_size, self.n_anchors, 4, hsize, wsize]
+                    )
+                    reg_output = reg_output.transpose([0, 1, 3, 4, 2]).reshape(
+                        [batch_size, -1, 4]
+                    )
                     origin_preds.append(reg_output.clone())
+
             else:
-                objs = F.sigmoid(obj_output)
-                clses = F.sigmoid(cls_output)
-                output = paddle.concat([reg_output, objs, clses], axis=1)
-            
+                output = paddle.concat(
+                    [reg_output, F.sigmoid(obj_output), F.sigmoid(cls_output)], 1
+                )
+
             outputs.append(output)
 
-        return outputs, x_shifts, y_shifts, expanded_strides, origin_preds
+        if self.training:
+            ans =  self.get_losses(
+                imgs,
+                x_shifts,
+                y_shifts,
+                expanded_strides,
+                labels,
+                paddle.concat(outputs, 1),
+                origin_preds,
+                dtype=xin[0].dtype,
+            )
 
-    def get_output_and_grid(self, output, k, stride):
+            loss_total, loss_iou, loss_obj, loss_cls, loss_l1, num_fg = ans
+
+            losses = {
+                "loss_iou": loss_iou,
+                "loss_obj": loss_obj,
+                "loss_cls": loss_cls,
+                "loss_l1": loss_l1,
+                "loss": loss_total,
+            }
+            return losses
+
+        else:
+            self.hw = [x.shape[-2:] for x in outputs]
+            # [batch, n_anchors_all, 85]
+            outputs = paddle.concat(
+                [x.flatten(start_axis=2) for x in outputs], axis=2
+            ).transpose([0, 2, 1])
+            if self.decode_in_inference:
+                return self.decode_outputs(outputs, dtype=xin[0].dtype)
+            else:
+                return outputs
+
+    def get_output_and_grid(self, output, k, stride, dtype):
         grid = self.grids[k]
-        bs = output.shape[0]
-        n_ch = self.num_classes + 5
+
+        batch_size = output.shape[0]
+        n_ch = 5 + self.num_classes
         hsize, wsize = output.shape[-2:]
         if grid.shape[2:4] != output.shape[2:4]:
             yv, xv = paddle.meshgrid([paddle.arange(hsize), paddle.arange(wsize)])
-            grid = paddle.stack((xv, yv), 2)
-            grid = paddle.reshape(grid, (1, 1, hsize, wsize, 2))
-            grid = paddle.cast(grid, dtype=output.dtype)
+            grid = paddle.stack((xv, yv), 2).reshape([1, 1, hsize, wsize, 2]).astype(dtype)
             self.grids[k] = grid
 
-        output = paddle.reshape(output, (bs, self.n_anchors, n_ch, hsize, wsize))
-        output = paddle.transpose(output, [0, 1, 3, 4, 2])
-        output = paddle.reshape(output, (bs, self.n_anchors * hsize * wsize, -1))   # [N, 1 * 80 * 80, 85]
-        grid = paddle.reshape(grid, (1, -1, 2))   # [1, 1 * 80 * 80, 2]
-
-        xy = (output[:, :, :2] + grid) * stride       # [N, 1 * 80 * 80, 2]
-        wh = paddle.exp(output[:, :, 2:4]) * stride   # [N, 1 * 80 * 80, 2]
-        output = paddle.concat([xy, wh, output[:, :, 4:]], 2)   # [N, 1 * 80 * 80, 85]
+        output = output.reshape([batch_size, self.n_anchors, n_ch, hsize, wsize])
+        output = output.transpose([0, 1, 3, 4, 2]).reshape(
+            [batch_size, self.n_anchors * hsize * wsize, -1]
+        )
+        grid = grid.reshape([1, -1, 2])
+        output[..., :2] = (output[..., :2] + grid) * stride
+        output[..., 2:4] = paddle.exp(output[..., 2:4]) * stride
         return output, grid
 
-    def decode_outputs(self, outputs): # [1, 8400, 85]
+    def decode_outputs(self, outputs, dtype):
         grids = []
         strides = []
-        for (hsize, wsize), stride in zip(self.hw, self.strides): # [[80, 80], [40, 40], [20, 20]]  [8, 16, 32]
-            yv, xv = paddle.meshgrid([paddle.arange(hsize), paddle.arange(wsize)]) # [80, 80], [80, 80]
-            grid = paddle.reshape(paddle.stack((xv, yv), axis=2), (1, hsize * wsize, 2)) # [80, 80, 2] -> [1, 6400, 2]
+        for (hsize, wsize), stride in zip(self.hw, self.strides):
+            yv, xv = paddle.meshgrid([paddle.arange(hsize), paddle.arange(wsize)])
+            grid = paddle.stack((xv, yv), 2).reshape([1, -1, 2])
             grids.append(grid)
-            strides.append(paddle.full((1, hsize * wsize, 1), stride))
-        grids = paddle.concat(grids, axis=1)
-        strides = paddle.concat(strides, axis=1)
+            shape = grid.shape[:2]
+            strides.append(paddle.full((*shape, 1), stride))
 
-        outputs[:, :, 0:2] = (outputs[:, :, 0:2] + grids) * strides
-        outputs[:, :, 2:4] = paddle.exp(outputs[:, :, 2:4]) * strides
+        grids = paddle.concat(grids, axis=1).astype(dtype)
+        strides = paddle.concat(strides, axis=1).astype(dtype)
+
+        outputs[..., :2] = (outputs[..., :2] + grids) * strides
+        outputs[..., 2:4] = paddle.exp(outputs[..., 2:4]) * strides
         return outputs
+
+    def get_losses(
+        self,
+        imgs,
+        x_shifts,
+        y_shifts,
+        expanded_strides,
+        labels,
+        outputs,
+        origin_preds,
+        dtype,
+    ):
+        bbox_preds = outputs[:, :, :4]  # [batch, n_anchors_all, 4]
+        obj_preds = outputs[:, :, 4].unsqueeze(-1)  # [batch, n_anchors_all, 1]
+        cls_preds = outputs[:, :, 5:]  # [batch, n_anchors_all, n_cls]
+
+        # calculate targets
+        nlabel = (labels.sum(axis=2) > 0).sum(axis=1)  # number of objects
+
+        total_num_anchors = outputs.shape[1]
+        x_shifts = paddle.concat(x_shifts, 1)  # [1, n_anchors_all]
+        y_shifts = paddle.concat(y_shifts, 1)  # [1, n_anchors_all]
+        expanded_strides = paddle.concat(expanded_strides, 1)
+        if self.use_l1:
+            origin_preds = paddle.concat(origin_preds, 1)
+
+        cls_targets = []
+        reg_targets = []
+        l1_targets = []
+        obj_targets = []
+        fg_masks = []
+
+        num_fg = 0.0
+        num_gts = 0.0
+
+        for batch_idx in range(outputs.shape[0]):
+            num_gt = int(nlabel[batch_idx])
+            num_gts += num_gt
+            if num_gt == 0:
+                cls_target = paddle.zeros((0, self.num_classes))
+                reg_target = paddle.zeros((0, 4))
+                l1_target = paddle.zeros((0, 4))
+                obj_target = paddle.zeros((total_num_anchors, 1))
+                fg_mask = paddle.zeros([total_num_anchors], dtype=bool)
+            else:
+                gt_bboxes_per_image = labels[batch_idx, :num_gt, 1:5]
+                gt_classes = labels[batch_idx, :num_gt, 0]
+                bboxes_preds_per_image = bbox_preds[batch_idx]
+
+                try:
+                    (
+                        gt_matched_classes,
+                        fg_mask,
+                        pred_ious_this_matching,
+                        matched_gt_inds,
+                        num_fg_img,
+                    ) = self.get_assignments(  # noqa
+                        batch_idx,
+                        num_gt,
+                        total_num_anchors,
+                        gt_bboxes_per_image,
+                        gt_classes,
+                        bboxes_preds_per_image,
+                        expanded_strides,
+                        x_shifts,
+                        y_shifts,
+                        cls_preds,
+                        bbox_preds,
+                        obj_preds,
+                        labels,
+                        imgs,
+                    )
+                except RuntimeError:
+                    logger.error(
+                        "OOM RuntimeError is raised due to the huge memory cost during label assignment. \
+                           CPU mode is applied in this batch. If you want to avoid this issue, \
+                           try to reduce the batch size or image size."
+                    )
+                    (
+                        gt_matched_classes,
+                        fg_mask,
+                        pred_ious_this_matching,
+                        matched_gt_inds,
+                        num_fg_img,
+                    ) = self.get_assignments(  # noqa
+                        batch_idx,
+                        num_gt,
+                        total_num_anchors,
+                        gt_bboxes_per_image,
+                        gt_classes,
+                        bboxes_preds_per_image,
+                        expanded_strides,
+                        x_shifts,
+                        y_shifts,
+                        cls_preds,
+                        bbox_preds,
+                        obj_preds,
+                        labels,
+                        imgs,
+                        "cpu",
+                    )
+
+                num_fg += num_fg_img
+
+                cls_target = F.one_hot(
+                    gt_matched_classes.astype(paddle.int64), self.num_classes
+                ) * pred_ious_this_matching.unsqueeze(-1)
+                obj_target = fg_mask.unsqueeze(-1)
+                reg_target = gt_bboxes_per_image[matched_gt_inds]
+                if self.use_l1:
+                    l1_target = self.get_l1_target(
+                        paddle.zeros((num_fg_img, 4)),
+                        gt_bboxes_per_image[matched_gt_inds],
+                        expanded_strides[0][fg_mask],
+                        x_shifts=x_shifts[0][fg_mask],
+                        y_shifts=y_shifts[0][fg_mask],
+                    )
+
+            cls_targets.append(cls_target)
+            if len(reg_target.shape) == 1:
+                reg_target.unsqueeze_(0)
+            reg_targets.append(reg_target)
+            obj_targets.append(obj_target.astype(dtype))
+            fg_masks.append(fg_mask)
+            if self.use_l1:
+                l1_targets.append(l1_target)
+
+        cls_targets = paddle.concat(cls_targets, 0)
+        reg_targets = paddle.concat(reg_targets, 0)
+        obj_targets = paddle.concat(obj_targets, 0)
+        fg_masks = paddle.concat(fg_masks, 0)
+        if self.use_l1:
+            l1_targets = paddle.concat(l1_targets, 0)
+
+        num_fg = max(num_fg, 1)
+        loss_iou = (
+            self.iou_loss(bbox_preds.reshape([-1, 4])[fg_masks], reg_targets)
+        ).sum() / num_fg
+        
+        loss_obj = (
+            self.bcewithlog_loss(obj_preds.reshape([-1, 1]), obj_targets)
+        ).sum() / num_fg
+
+        loss_cls = (
+            self.bcewithlog_loss(
+                cls_preds.reshape([-1, self.num_classes])[fg_masks], cls_targets
+            )
+        ).sum() / num_fg
+
+        if self.use_l1:
+            loss_l1 = (
+                self.l1_loss(origin_preds.reshape([-1, 4])[fg_masks], l1_targets)
+            ).sum() / num_fg
+        else:
+            loss_l1 = paddle.to_tensor([0.])
+            loss_l1.stop_gradient = False
+
+        reg_weight = 5.0
+        loss = reg_weight * loss_iou + loss_obj + loss_cls + loss_l1
+
+        return (
+            loss,
+            reg_weight * loss_iou,
+            loss_obj,
+            loss_cls,
+            loss_l1,
+            num_fg / max(num_gts, 1),
+        )
+
+    def get_l1_target(self, l1_target, gt, stride, x_shifts, y_shifts, eps=1e-8):
+        gt = paddle.cast(gt, x_shifts.dtype)
+        if len(gt.shape) == 1:
+            gt.unsqueeze_(0)
+        l1_target[:, 0] = gt[:, 0] / stride - x_shifts
+        l1_target[:, 1] = gt[:, 1] / stride - y_shifts
+        l1_target[:, 2] = paddle.log(gt[:, 2] / stride + eps)
+        l1_target[:, 3] = paddle.log(gt[:, 3] / stride + eps)
+        return l1_target
+
+    @paddle.no_grad()
+    def get_assignments(
+        self,
+        batch_idx,
+        num_gt,
+        total_num_anchors,
+        gt_bboxes_per_image,
+        gt_classes,
+        bboxes_preds_per_image,
+        expanded_strides,
+        x_shifts,
+        y_shifts,
+        cls_preds,
+        bbox_preds,
+        obj_preds,
+        labels,
+        imgs,
+        mode="gpu",
+    ):
+        if mode == "cpu":
+            print("------------CPU Mode for This Batch-------------")
+            gt_bboxes_per_image = gt_bboxes_per_image.cpu().astype('float32')
+            bboxes_preds_per_image = bboxes_preds_per_image.cpu().astype('float32')
+            gt_classes = gt_classes.cpu().astype('float32')
+            expanded_strides = expanded_strides.cpu().astype('float32')
+            x_shifts = x_shifts.cpu()
+            y_shifts = y_shifts.cpu()
+        fg_mask, is_in_boxes_and_center = self.get_in_boxes_info(
+            gt_bboxes_per_image,
+            expanded_strides,
+            x_shifts,
+            y_shifts,
+            total_num_anchors,
+            num_gt,
+        )
+        #print(fg_mask.sum(0).item(), fg_mask.shape)
+        bboxes_preds_per_image = bboxes_preds_per_image[fg_mask]
+        cls_preds_ = cls_preds[batch_idx][fg_mask]
+        obj_preds_ = obj_preds[batch_idx][fg_mask]
+        num_in_boxes_anchor = bboxes_preds_per_image.shape[0]
+
+        if mode == "cpu":
+            gt_bboxes_per_image = gt_bboxes_per_image.cpu()
+            bboxes_preds_per_image = bboxes_preds_per_image.cpu()
+
+        pair_wise_ious = bboxes_iou(gt_bboxes_per_image, bboxes_preds_per_image, False)
+        # print(num_in_boxes_anchor)
+        gt_cls_per_image = (
+            F.one_hot(gt_classes.astype(paddle.int64), self.num_classes)
+            .astype('float32')
+            .unsqueeze(1)
+            .tile([1, num_in_boxes_anchor, 1])
+        )
+        pair_wise_ious_loss = -paddle.log(pair_wise_ious + 1e-8)
+
+        if mode == "cpu":
+            cls_preds_, obj_preds_ = cls_preds_.cpu(), obj_preds_.cpu()
+
+        with paddle.amp.auto_cast(enable=False):
+            cls_preds_ = (
+                F.sigmoid(cls_preds_.astype('float32').unsqueeze(0).tile([num_gt, 1, 1]))
+                * F.sigmoid(obj_preds_.astype('float32').unsqueeze(0).tile([num_gt, 1, 1]))
+            )
+            pair_wise_cls_loss = F.binary_cross_entropy(
+                cls_preds_.sqrt_(), gt_cls_per_image, reduction="none"
+            ).sum(-1)
+        del cls_preds_
+
+        cost = (
+            pair_wise_cls_loss
+            + 3.0 * pair_wise_ious_loss
+            + 100000.0 * (~is_in_boxes_and_center)
+        )
+
+        (
+            num_fg,
+            gt_matched_classes,
+            pred_ious_this_matching,
+            matched_gt_inds,
+            fg_mask,
+        ) = self.dynamic_k_matching(cost, pair_wise_ious, gt_classes, num_gt, fg_mask)
+        del pair_wise_cls_loss, cost, pair_wise_ious, pair_wise_ious_loss
+
+        if mode == "cpu":
+            gt_matched_classes = gt_matched_classes.cuda()
+            fg_mask = fg_mask.cuda()
+            pred_ious_this_matching = pred_ious_this_matching.cuda()
+            matched_gt_inds = matched_gt_inds.cuda()
+
+        return (
+            gt_matched_classes,
+            fg_mask,
+            pred_ious_this_matching,
+            matched_gt_inds,
+            num_fg,
+        )
+
+    def get_in_boxes_info(
+        self,
+        gt_bboxes_per_image,
+        expanded_strides,
+        x_shifts,
+        y_shifts,
+        total_num_anchors,
+        num_gt,
+    ):
+        expanded_strides_per_image = expanded_strides[0]
+        x_shifts_per_image = x_shifts[0] * expanded_strides_per_image
+        y_shifts_per_image = y_shifts[0] * expanded_strides_per_image
+        x_centers_per_image = (
+            (x_shifts_per_image + 0.5 * expanded_strides_per_image)
+            .unsqueeze(0)
+            .tile([num_gt, 1])
+        )  # [n_anchor] -> [n_gt, n_anchor]
+        y_centers_per_image = (
+            (y_shifts_per_image + 0.5 * expanded_strides_per_image)
+            .unsqueeze(0)
+            .tile([num_gt, 1])
+        )
+
+        gt_bboxes_per_image_l = (
+            (gt_bboxes_per_image[:, 0] - 0.5 * gt_bboxes_per_image[:, 2])
+            .unsqueeze(1)
+            .tile([1, total_num_anchors])
+        )
+        gt_bboxes_per_image_r = (
+            (gt_bboxes_per_image[:, 0] + 0.5 * gt_bboxes_per_image[:, 2])
+            .unsqueeze(1)
+            .tile([1, total_num_anchors])
+        )
+        gt_bboxes_per_image_t = (
+            (gt_bboxes_per_image[:, 1] - 0.5 * gt_bboxes_per_image[:, 3])
+            .unsqueeze(1)
+            .tile([1, total_num_anchors])
+        )
+        gt_bboxes_per_image_b = (
+            (gt_bboxes_per_image[:, 1] + 0.5 * gt_bboxes_per_image[:, 3])
+            .unsqueeze(1)
+            .tile([1, total_num_anchors])
+        )
+
+        b_l = x_centers_per_image - gt_bboxes_per_image_l
+        b_r = -(x_centers_per_image - gt_bboxes_per_image_r) #gt_bboxes_per_image_r - x_centers_per_image
+        b_t = y_centers_per_image - gt_bboxes_per_image_t
+        b_b = -(y_centers_per_image - gt_bboxes_per_image_b)  #gt_bboxes_per_image_b - y_centers_per_image
+        bbox_deltas = paddle.stack([b_l, b_t, b_r, b_b], 2)
+
+        is_in_boxes = bbox_deltas.min(axis=-1) > 0.0
+        is_in_boxes_all = is_in_boxes.astype(paddle.int64).sum(axis=0) > 0
+        # in fixed center
+
+        center_radius = 2.5
+
+        gt_bboxes_per_image_l = (gt_bboxes_per_image[:, 0]).unsqueeze(1).tile(
+            [1, total_num_anchors]
+        ) - center_radius * expanded_strides_per_image.unsqueeze(0)
+        gt_bboxes_per_image_r = (gt_bboxes_per_image[:, 0]).unsqueeze(1).tile(
+            [1, total_num_anchors]
+        ) + center_radius * expanded_strides_per_image.unsqueeze(0)
+        gt_bboxes_per_image_t = (gt_bboxes_per_image[:, 1]).unsqueeze(1).tile(
+            [1, total_num_anchors]
+        ) - center_radius * expanded_strides_per_image.unsqueeze(0)
+        gt_bboxes_per_image_b = (gt_bboxes_per_image[:, 1]).unsqueeze(1).tile(
+            [1, total_num_anchors]
+        ) + center_radius * expanded_strides_per_image.unsqueeze(0)
+
+        c_l = x_centers_per_image - gt_bboxes_per_image_l
+        c_r = -(x_centers_per_image - gt_bboxes_per_image_r) #gt_bboxes_per_image_r - x_centers_per_image
+        c_t = y_centers_per_image - gt_bboxes_per_image_t
+        c_b = -(y_centers_per_image - gt_bboxes_per_image_b)  # gt_bboxes_per_image_b - y_centers_per_image
+        center_deltas = paddle.stack([c_l, c_t, c_r, c_b], 2)
+        is_in_centers = center_deltas.min(axis=-1) > 0.0
+        is_in_centers_all = is_in_centers.astype(paddle.int64).sum(axis=0) > 0
+
+        # in boxes and in centers
+        is_in_boxes_anchor = is_in_boxes_all | is_in_centers_all
+        '''
+        is_in_boxes_and_center = (
+            is_in_boxes.astype('float32').masked_select(is_in_boxes_anchor.tile([is_in_boxes.shape[0], 1])).reshape([is_in_boxes.shape[0], -1]).astype(bool) & \
+            is_in_centers.astype('float32').masked_select(is_in_boxes_anchor.tile([is_in_centers.shape[0], 1])).reshape([is_in_centers.shape[0], -1]).astype(bool)
+        )
+        '''
+        is_in_boxes_and_center = (
+            paddle.to_tensor(is_in_boxes.numpy()[:, is_in_boxes_anchor.numpy()]) & paddle.to_tensor(is_in_centers.numpy()[:, is_in_boxes_anchor.numpy()])
+        )
+        return is_in_boxes_anchor, is_in_boxes_and_center
+
+    def dynamic_k_matching(self, cost, pair_wise_ious, gt_classes, num_gt, fg_mask):
+        # Dynamic K
+        # ---------------------------------------------------------------
+        # print(cost.shape, pair_wise_ious.shape, gt_classes.shape, fg_mask.shape)
+        cost, pair_wise_ious, gt_classes, fg_mask = cost.cpu().numpy(), pair_wise_ious.cpu().numpy(), gt_classes.cpu().numpy(), fg_mask.cpu().numpy()
+        matching_matrix = np.zeros_like(cost, dtype=np.uint8)
+
+        ious_in_boxes_matrix = pair_wise_ious
+        n_candidate_k = min(10, ious_in_boxes_matrix.shape[1])
+        topk_ious, _ = paddle.topk(paddle.to_tensor(ious_in_boxes_matrix), n_candidate_k, axis=1)
+        topk_ious = topk_ious.numpy()
+        dynamic_ks = np.clip(topk_ious.sum(1).astype('int32'), a_min=1, a_max=None)
+        dynamic_ks = dynamic_ks.tolist()
+        for gt_idx in range(num_gt):
+            _, pos_idx = paddle.topk(
+                paddle.to_tensor(cost[gt_idx]), k=dynamic_ks[gt_idx], largest=False
+            )
+            pos_idx = pos_idx.numpy()
+            matching_matrix[gt_idx][pos_idx] = 1
+
+        del topk_ious, dynamic_ks, pos_idx
+
+        anchor_matching_gt = matching_matrix.sum(0)
+        if (anchor_matching_gt > 1).sum() > 0:
+            cost_argmin = np.argmin(cost[:, anchor_matching_gt > 1], axis=0)
+            matching_matrix[:, anchor_matching_gt > 1] *= 0
+            matching_matrix[cost_argmin, anchor_matching_gt > 1] = 1
+        fg_mask_inboxes = matching_matrix.sum(0) > 0
+        num_fg = fg_mask_inboxes.sum().item()
+        fg_mask[fg_mask] = fg_mask_inboxes
+
+        matched_gt_inds = matching_matrix[:, fg_mask_inboxes].argmax(0)
+        gt_matched_classes = gt_classes[matched_gt_inds]
+
+        pred_ious_this_matching = (matching_matrix * pair_wise_ious).sum(0)[
+            fg_mask_inboxes
+        ]
+        return num_fg, paddle.to_tensor(gt_matched_classes), paddle.to_tensor(pred_ious_this_matching), paddle.to_tensor(matched_gt_inds), paddle.to_tensor(fg_mask)
+
+
 
     @classmethod
     def from_config(cls, cfg, input_shape):

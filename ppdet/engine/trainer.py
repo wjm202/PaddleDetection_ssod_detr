@@ -413,7 +413,7 @@ class Trainer(object):
         # enabel auto mixed precision mode
         if self.cfg.get('amp', False):
             scaler = amp.GradScaler(
-                enable=self.cfg.use_gpu, init_loss_scaling=1024) # 2.**16, incr_every_n_steps=2000)
+                enable=self.cfg.use_gpu, init_loss_scaling=2.**16, incr_every_n_steps=2000)
         else:
             scaler = amp.GradScaler(enable=False)
 
