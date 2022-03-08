@@ -92,7 +92,7 @@ class YOLOX(BaseArch):
 
     def _forward(self):
         # YOLOX random resizing every 10 iters
-        if self.training:
+        if 0: #self.training:
             interval = 10
             inputs_dim = self.inputs['image'].shape[2:]
             if self.inputs['step_id'] % interval == 0:
@@ -123,7 +123,7 @@ class YOLOX(BaseArch):
 
         if self.training:
             yolo_losses = self.yolox_head(neck_feats, self.inputs)
-            yolo_losses.update({'size': target_size_tensor})
+            #yolo_losses.update({'size': target_size_tensor})
             return yolo_losses
         else:
             yolo_head_outs = self.yolox_head(neck_feats)
