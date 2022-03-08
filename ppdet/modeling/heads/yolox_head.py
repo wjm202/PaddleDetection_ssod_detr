@@ -24,6 +24,8 @@ from paddle.regularizer import L2Decay
 from paddle.nn.initializer import Constant
 from ppdet.core.workspace import register
 from ..backbones.csp_darknet import BaseConv, DWConv
+from ppdet.modeling.initializer import uniform_
+import numpy as np
 
 __all__ = ['YOLOXHead']
 
@@ -241,12 +243,18 @@ class YOLOXHead(nn.Layer):
 
     def initialize_biases(self, prior_prob):
         for conv in self.cls_preds:
+            bound = 1 / np.sqrt(np.prod(conv.weight.shape[1:]))
+            uniform_(conv.weight, -bound, bound)
+
             b = conv.bias.reshape([self.n_anchors, -1])
             #b = paddle.reshape(conv.bias, [self.n_anchors, -1])
             conv.bias = paddle.create_parameter(shape=b.reshape([-1]).shape, dtype='float32',
                         default_initializer=paddle.nn.initializer.Constant(-math.log((1 - prior_prob) / prior_prob)))
 
         for conv in self.obj_preds:
+            bound = 1 / np.sqrt(np.prod(conv.weight.shape[1:]))
+            uniform_(conv.weight, -bound, bound)
+
             b = conv.bias.reshape([self.n_anchors, -1])
             #b = paddle.reshape(conv.bias, [self.n_anchors, -1])
             conv.bias = paddle.create_parameter(shape=b.reshape([-1]).shape, dtype='float32',
