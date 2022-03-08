@@ -22,6 +22,8 @@ from paddle import ParamAttr
 
 from ppdet.core.workspace import register, serializable
 from ..shape_spec import ShapeSpec
+from ppdet.modeling.initializer import uniform_
+import numpy as np
 
 __all__ = ['CSPDarkNet', 'BaseConv', 'DWConv', 'Bottleneck', 'SPPLayer', 'SPPFLayer']
 
@@ -58,6 +60,12 @@ class BaseConv(nn.Layer):
         )
         self.bn = nn.BatchNorm2D(out_channels, momentum=0.97, epsilon=1e-3)
         self.act = get_activation(act)
+
+        self._init_weights()
+
+    def _init_weights(self):
+        bound = 1 / np.sqrt(np.prod(self.conv.weight.shape[1:]))
+        uniform_(self.conv.weight, -bound, bound)
 
     def forward(self, x):
         '''
