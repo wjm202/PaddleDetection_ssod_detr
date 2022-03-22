@@ -1,14 +1,14 @@
 export FLAGS_allocator_strategy=auto_growth
-name=l
+name=s
 model_type=yolov5
 job_name=yolov5_${name}_coco_debug
 config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
 
-weight_path=../../yolov5_${name}_coco_paddle.pdparams
+weight_path=../yolov5_${name}_coco_paddle.pdparams
 
 # 1. training
-CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ${weight_path} #--fp16
+#CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ${weight_path} #--fp16
 #python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1,2,3,4,5,6,7 tools/train.py -c ${config} --fp16 #--eval --fp16 # &> ${job_name}.log &
 
 # 2. eval
@@ -17,7 +17,7 @@ CUDA_VISIBLE_DEVICES=7 python3.7 tools/train.py -c ${config} -r ${weight_path} #
 #CUDA_VISIBLE_DEVICES=2 python3.7 tools/eval.py -c ${config} -o weights=../paddle_yolov5_fuse/paddle_yolov5_s_coco.pdparams #./${job_name}_final_fromori_noneedrgb.pdparams
 # im8 56.7
 
-#CUDA_VISIBLE_DEVICES=1 python3.7 tools/eval.py -c ${config} -o weights=${weight_path} #--classwise #./${job_name}_final_fromori_noneedrgb.pdparams
+CUDA_VISIBLE_DEVICES=1 python3.7 tools/eval.py -c ${config} -o weights=${weight_path} #--classwise #./${job_name}_final_fromori_noneedrgb.pdparams
 # im8 59.6
 
 # 3. tools infer
