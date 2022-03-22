@@ -41,6 +41,7 @@ TRT_MIN_SUBGRAPH = {
     'HigherHRNet': 3,
     'HRNet': 3,
     'DeepSORT': 3,
+    'ByteTrack': 10,
     'JDE': 10,
     'FairMOT': 5,
     'GFL': 16,
@@ -50,7 +51,7 @@ TRT_MIN_SUBGRAPH = {
 }
 
 KEYPOINT_ARCH = ['HigherHRNet', 'TopDownHRNet']
-MOT_ARCH = ['DeepSORT', 'JDE', 'FairMOT']
+MOT_ARCH = ['DeepSORT', 'JDE', 'FairMOT', 'ByteTrack']
 
 
 def _prune_input_spec(input_spec, program, targets):
@@ -120,7 +121,7 @@ def _dump_infer_config(config, path, image_shape, model):
     setup_orderdict()
     use_dynamic_shape = True if image_shape[2] == -1 else False
     infer_cfg = OrderedDict({
-        'mode': 'fluid',
+        'mode': 'paddle',
         'draw_threshold': 0.5,
         'metric': config['metric'],
         'use_dynamic_shape': use_dynamic_shape
@@ -165,12 +166,16 @@ def _dump_infer_config(config, path, image_shape, model):
         reader_cfg, dataset_cfg, config['metric'], label_arch, image_shape[1:])
 
     if infer_arch == 'PicoDet':
-        infer_cfg['NMS'] = config['PicoHead']['nms']
+        if hasattr(config, 'export') and config['export'].get('post_process',
+                                                              False):
+            infer_cfg['arch'] = 'GFL'
+        head_name = 'PicoHeadV2' if config['PicoHeadV2'] else 'PicoHead'
+        infer_cfg['NMS'] = config[head_name]['nms']
         # In order to speed up the prediction, the threshold of nms 
         # is adjusted here, which can be changed in infer_cfg.yml
-        config['PicoHead']['nms']["score_threshold"] = 0.3
-        config['PicoHead']['nms']["nms_threshold"] = 0.5
-        infer_cfg['fpn_stride'] = config['PicoHead']['fpn_stride']
+        config[head_name]['nms']["score_threshold"] = 0.3
+        config[head_name]['nms']["nms_threshold"] = 0.5
+        infer_cfg['fpn_stride'] = config[head_name]['fpn_stride']
 
     yaml.dump(infer_cfg, open(path, 'w'))
     logger.info("Export inference config file to {}".format(os.path.join(path)))

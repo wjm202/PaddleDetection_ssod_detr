@@ -30,8 +30,24 @@ PP-Tracking 提供了AI Studio公开项目案例，教程请参考[PP-Tracking�
 | HRNetV2-W18    | 576x320 |  12.0  |  33.8  |  2178  |    -     |[下载链接](https://paddledet.bj.bcebos.com/models/mot/mcfairmot_hrnetv2_w18_dlafpn_30e_576x320_visdrone.pdparams) | [配置文件](./mcfairmot_hrnetv2_w18_dlafpn_30e_576x320_visdrone.yml) |
 
 **注意:**
- - MOTA是VisDrone2019 MOT数据集10类目标的平均MOTA, 其值也等于所有评估的视频序列的平均MOTA。
+ - MOTA是VisDrone2019 MOT数据集10类目标的平均MOTA, 其值也等于所有评估的视频序列的平均MOTA，此处提供数据集[下载链接](https://bj.bcebos.com/v1/paddledet/data/mot/visdrone_mcmot.zip)。
  - MCFairMOT模型均使用4个GPU进行训练，训练30个epoch。DLA-34骨干网络的每个GPU上batch size为6，HRNetV2-W18骨干网络的每个GPU上batch size为8。
+
+### MCFairMOT 在VisDrone Vehicle val-set上结果
+|    骨干网络      |  输入尺寸 |  MOTA  |  IDF1  |  IDS   |   FPS   |  下载链接 | 配置文件 |
+| :--------------| :------- | :----: | :----: | :---:  | :------: | :----: |:----: |
+| DLA-34         | 1088x608 |  37.7  |  56.8  |  199  |    -     |[下载链接](https://paddledet.bj.bcebos.com/models/mot/mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.pdparams) | [配置文件](./mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml) |
+| HRNetV2-W18    | 1088x608 |  35.6  |  56.3  |  190  |    -     |[下载链接](https://paddledet.bj.bcebos.com/models/mot/mcfairmot_hrnetv2_w18_dlafpn_30e_1088x608_visdrone_vehicle_bytetracker.pdparams) | [配置文件](./mcfairmot_hrnetv2_w18_dlafpn_30e_1088x608_visdrone_vehicle_bytetracker.yml) |
+
+**注意:**
+ - MOTA是VisDrone Vehicle数据集4类车辆目标的平均MOTA, 该数据集是VisDrone数据集中抽出4类车辆类别组成的，此处提供数据集[下载链接](https://bj.bcebos.com/v1/paddledet/data/mot/visdrone_mcmot_vehicle.zip)。
+ - MCFairMOT模型此处使用的跟踪器是使用的ByteTracker。
+
+### MCFairMOT 在VisDrone Vehicle val-set上离线量化结果
+|    骨干网络      |  压缩策略 | 预测时延（T4） |预测时延（V100）| 配置文件 |压缩算法配置文件 |
+| :--------------| :------- | :------: | :----: | :----: | :----: |
+| DLA-34         | baseline |    41.3  |    21.9 |[配置文件](./mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml)|    -     |
+| DLA-34         | 离线量化   |  37.8    |  21.2  |[配置文件](./mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml)|[配置文件](https://github.com/PaddlePaddle/PaddleDetection/blob/release/2.3/configs/slim/post_quant/mcfairmot_ptq.yml)|
 
 ## 快速开始
 
@@ -83,6 +99,14 @@ python deploy/pptracking/python/mot_jde_infer.py --model_dir=output_inference/mc
  - 跟踪模型是对视频进行预测，不支持单张图的预测，默认保存跟踪结果可视化后的视频，可添加`--save_mot_txts`表示保存跟踪结果的txt文件，或`--save_images`表示保存跟踪结果可视化图片。
  - 多类别跟踪结果txt文件每行信息是`frame,id,x1,y1,w,h,score,cls_id,-1,-1`。
 
+### 6. 离线量化
+
+使用 VisDrone Vehicle val-set 对离线量化模型进行校准，运行方式：
+```bash
+CUDA_VISIBLE_DEVICES=0 python3.7 tools/post_quant.py -c configs/mot/mcfairmot/mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml --slim_config=configs/slim/post_quant/mcfairmot_ptq.yml
+```
+**注意:**
+ - 离线量化默认使用的是VisDrone Vehicle val-set数据集以及4类车辆跟踪模型。
 
 ## 引用
 ```
@@ -102,5 +126,12 @@ python deploy/pptracking/python/mot_jde_infer.py --model_dir=output_inference/mc
   number={},
   pages={1-1},
   doi={10.1109/TPAMI.2021.3119563}
+}
+
+@article{zhang2021bytetrack,
+  title={ByteTrack: Multi-Object Tracking by Associating Every Detection Box},
+  author={Zhang, Yifu and Sun, Peize and Jiang, Yi and Yu, Dongdong and Yuan, Zehuan and Luo, Ping and Liu, Wenyu and Wang, Xinggang},
+  journal={arXiv preprint arXiv:2110.06864},
+  year={2021}
 }
 ```

@@ -31,8 +31,24 @@ PP-tracking provides an AI studio public project tutorial. Please refer to this 
 | HRNetV2-W18    | 576x320 |  12.0  |  33.8  |  2178  |    -     |[model](https://paddledet.bj.bcebos.com/models/mot/mcfairmot_hrnetv2_w18_dlafpn_30e_576x320_visdrone.pdparams) | [config](./mcfairmot_hrnetv2_w18_dlafpn_30e_576x320_visdrone.yml) |
 
 **Notes:**
- - MOTA is the average MOTA of 10 catecories in the VisDrone2019 MOT dataset, and its value is also equal to the average MOTA of all the evaluated video sequences.
+ - MOTA is the average MOTA of 10 catecories in the VisDrone2019 MOT dataset, and its value is also equal to the average MOTA of all the evaluated video sequences. Here we provide the download [link](https://bj.bcebos.com/v1/paddledet/data/mot/visdrone_mcmot.zip) of the dataset.
  - MCFairMOT used 4 GPUs for training 30 epoches. The batch size is 6 on each GPU for MCFairMOT DLA-34, and 8 for MCFairMOT HRNetV2-W18.
+
+### MCFairMOT Results on VisDrone Vehicle Val Set
+| backbone       | input shape | MOTA | IDF1 |  IDS    |   FPS    | download | config |
+| :--------------| :------- | :----: | :----: | :---:  | :------: | :----: |:----: |
+| DLA-34         | 1088x608 |  37.7  |  56.8  |  199  |    -     |[model](https://paddledet.bj.bcebos.com/models/mot/mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.pdparams) | [config](./mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml) |
+| HRNetV2-W18    | 1088x608 |  35.6  |  56.3  |  190  |    -     |[model](https://paddledet.bj.bcebos.com/models/mot/mcfairmot_hrnetv2_w18_dlafpn_30e_1088x608_visdrone_vehicle_bytetracker.pdparams) | [config](./mcfairmot_hrnetv2_w18_dlafpn_30e_1088x608_visdrone_vehicle_bytetracker.yml) |
+
+**Notes:**
+ - MOTA is the average MOTA of 4 catecories in the VisDrone Vehicle dataset, and this dataset is extracted from the VisDrone2019 MOT dataset, here we provide the download [link](https://bj.bcebos.com/v1/paddledet/data/mot/visdrone_mcmot_vehicle.zip).
+ - The tracker used in MCFairMOT model here is ByteTracker.
+
+### MCFairMOT off-line quantization results on VisDrone Vehicle val-set
+|    Model      |  Compression Strategy | Prediction Delay（T4） |Prediction Delay（V100）| Model Configuration File |Compression Algorithm Configuration File |
+| :--------------| :------- | :------: | :----: | :----: | :----: |
+| DLA-34         | baseline |    41.3  |    21.9 |[Configuration File](./mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml)|    -     |
+| DLA-34         | off-line quantization   |  37.8    |  21.2  |[Configuration File](./mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml)|[Configuration File](https://github.com/PaddlePaddle/PaddleDetection/blob/release/2.3/configs/slim/post_quant/mcfairmot_ptq.yml)|
 
 
 ## Getting Start
@@ -86,6 +102,14 @@ python deploy/pptracking/python/mot_jde_infer.py --model_dir=output_inference/mc
  - The tracking model is used to predict the video, and does not support the prediction of a single image. The visualization video of the tracking results is saved by default. You can add `--save_mot_txts` to save the txt result file, or `--save_images` to save the visualization images.
  - Each line of the tracking results txt file is `frame,id,x1,y1,w,h,score,cls_id,-1,-1`.
 
+### 6. Off-line quantization
+
+The offline quantization model is calibrated using the VisDrone Vehicle val-set, running as:
+```bash
+CUDA_VISIBLE_DEVICES=0 python3.7 tools/post_quant.py -c configs/mot/mcfairmot/mcfairmot_dla34_30e_1088x608_visdrone_vehicle_bytetracker.yml --slim_config=configs/slim/post_quant/mcfairmot_ptq.yml
+```
+**Notes:**
+ - Offline quantization uses the VisDrone Vehicle val-set dataset and a 4-class vehicle tracking model by default.
 
 ## Citations
 ```
@@ -105,5 +129,12 @@ python deploy/pptracking/python/mot_jde_infer.py --model_dir=output_inference/mc
   number={},
   pages={1-1},
   doi={10.1109/TPAMI.2021.3119563}
+}
+
+@article{zhang2021bytetrack,
+  title={ByteTrack: Multi-Object Tracking by Associating Every Detection Box},
+  author={Zhang, Yifu and Sun, Peize and Jiang, Yi and Yu, Dongdong and Yuan, Zehuan and Luo, Ping and Liu, Wenyu and Wang, Xinggang},
+  journal={arXiv preprint arXiv:2110.06864},
+  year={2021}
 }
 ```
