@@ -1,3 +1,20 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  './_base_/yolox_cspresnet.yml',
+  './_base_/optimizer_300e.yml',
+  './_base_/yolox_reader.yml',
+]
+log_iter: 100
+snapshot_epoch: 5
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/CSPResNetb_s_pretrained.pdparams
+weights: output/yolox_s_crn_coco_3x/model_final
+
+depth_factor: 0.33
+width_factor: 0.50
+depth_mult: 0.33
+width_mult: 0.50
+
 input_height: &input_height 640
 input_width: &input_width 640
 input_size: &input_size [*input_height, *input_width]
@@ -11,7 +28,7 @@ TrainReader:
     - Decode: {}
     - Resize: {target_size: *input_size, keep_ratio: True}
     - YOLOXMosaic:
-        prob: 1.0
+        prob: 0.0 #1.0
         degrees: 10.0
         translate: 0.1
         scale: [0.1, 2]
@@ -37,25 +54,5 @@ TrainReader:
   drop_last: True
   collate_batch: True 
   use_shared_memory: True
-  mosaic_epoch: *mosaic_epoch
+  mosaic_epoch: 300
   mosaic_sample_num: 5
-
-
-EvalReader:
-  sample_transforms:
-    - Decode: {}
-    - Resize: {target_size: *input_size, keep_ratio: True}
-    - PadImage: {target_size: *input_size, fill_value: 114}
-    - Permute: {}
-  batch_size: 8
-
-
-TestReader:
-  inputs_def:
-    image_shape: [3, 640, 640]
-  sample_transforms:
-    - Decode: {}
-    - Resize: {target_size: *input_size, keep_ratio: True}
-    - PadImage: {target_size: *input_size, fill_value: 114}
-    - Permute: {}
-  batch_size: 1

@@ -109,11 +109,12 @@ class Trainer(object):
         self.use_ema = ('use_ema' in cfg and cfg['use_ema'])
         if self.use_ema:
             ema_decay = self.cfg.get('ema_decay', 0.9998)
+            ema_decay_type = self.cfg.get('ema_decay_type', 'exponential')
             cycle_epoch = self.cfg.get('cycle_epoch', -1)
             self.ema = ModelEMA(
                 self.model,
                 decay=ema_decay,
-                use_thres_step=True,
+                ema_decay_type='exponential',
                 cycle_epoch=cycle_epoch)
 
         # EvalDataset build with BatchSampler to evaluate in single device

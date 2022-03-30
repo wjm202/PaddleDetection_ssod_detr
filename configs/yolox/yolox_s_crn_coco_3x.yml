@@ -1,0 +1,99 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  './_base_/yolox_cspresnet.yml',
+  './_base_/optimizer_3x.yml',
+  './_base_/yolox_reader.yml',
+]
+log_iter: 100
+snapshot_epoch: 2
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/CSPResNetb_s_pretrained.pdparams
+weights: output/yolox_s_crn_coco_3x/model_final
+
+depth_factor: 0.33
+width_factor: 0.50
+depth_mult: 0.33
+width_mult: 0.50
+
+input_height: &input_height 640
+input_width: &input_width 640
+input_size: &input_size [*input_height, *input_width]
+mosaic_epoch: &mosaic_epoch 300
+
+worker_num: 4
+TrainReader:
+  inputs_def:
+    num_max_boxes: 120
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: *input_size, keep_ratio: True}
+    - YOLOXMosaic:
+        prob: 0.0 #1.0
+        degrees: 10.0
+        translate: 0.1
+        scale: [0.1, 2]
+        shear: 2.0
+        input_dim: *input_size
+        enable_mixup: True
+        mixup_prob: 1.0
+        mixup_scale: [0.5, 1.5]
+    - AugImage:
+        target_size: *input_size
+        hsv_prob: 1.0
+        flip_prob: 0.5
+  batch_transforms:
+    - RecBatchRandomResize:
+        input_size: *input_size
+        nn_resize: True # only get target_size. resize in architecture
+        keep_ratio: True # only for square
+        multiscale_range: 5 # 480*480, 800*800
+    - PadBox: {num_max_boxes: 120}
+    - Permute: {}
+  batch_size: 8
+  shuffle: True
+  drop_last: True
+  collate_batch: True 
+  use_shared_memory: True
+  mosaic_epoch: 300
+  mosaic_sample_num: 5
+
+
+YOLOX:
+  backbone: CSPResNet
+  neck: YOLOCSPPAN
+  yolox_head: YOLOXHead
+  post_process: YOLOXPostProcess
+
+CSPResNet:
+  layers: [3, 6, 6, 3]
+  channels: [64, 128, 256, 512, 1024]
+  return_idx: [1, 2, 3]
+  use_large_stem: True
+
+CSPDarkNet:
+  arch: "X"
+  return_idx: [2, 3, 4]
+
+YOLOCSPPAN:
+  depthwise: False
+
+YOLOXHead:
+  strides: [8, 16, 32]
+  channels: [256, 512, 1024]
+  depthwise: False
+  mosaic_epoch: 300
+  yolox_loss: YOLOXLoss
+
+YOLOXLoss:
+  loss_type: "iou"
+
+YOLOXPostProcess:
+  decode:
+    name: YOLOXBox
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 30000
+    keep_top_k: 1000
+    score_threshold: 0.001
+    nms_threshold: 0.65
+    return_index: true
