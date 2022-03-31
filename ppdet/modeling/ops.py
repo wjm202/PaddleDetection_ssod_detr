@@ -482,6 +482,8 @@ def collect_fpn_proposals(multi_rois,
             rois_num = helper.create_variable_for_type_inference(dtype='int32')
             rois_num.stop_gradient = True
             outputs['RoisNum'] = rois_num
+        else:
+            rois_num = None
         helper.append_op(
             type='collect_fpn_proposals',
             inputs=inputs,
@@ -602,6 +604,8 @@ def distribute_fpn_proposals(fpn_rois,
                 for i in range(num_lvl)
             ]
             outputs['MultiLevelRoIsNum'] = rois_num_per_level
+        else:
+            rois_num_per_level = None
 
         helper.append_op(
             type='distribute_fpn_proposals',
@@ -1536,6 +1540,8 @@ def generate_proposals(scores,
                  'pixel_offset', pixel_offset)
         rpn_rois, rpn_roi_probs, rpn_rois_num = core.ops.generate_proposals_v2(
             scores, bbox_deltas, im_shape, anchors, variances, *attrs)
+        if not return_rois_num:
+            rpn_rois_num = None
         return rpn_rois, rpn_roi_probs, rpn_rois_num
 
     else:
@@ -1586,6 +1592,8 @@ def generate_proposals(scores,
             outputs=outputs)
         rpn_rois.stop_gradient = True
         rpn_roi_probs.stop_gradient = True
+        if not return_rois_num:
+            rpn_rois_num = None
 
         return rpn_rois, rpn_roi_probs, rpn_rois_num
 

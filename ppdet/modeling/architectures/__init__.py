@@ -27,6 +27,7 @@ from . import detr
 from . import sparse_rcnn
 from . import tood
 from . import retinanet
+from . import bytetrack
 from . import yolox
 
 from .meta_arch import *
@@ -52,4 +53,5 @@ from .detr import *
 from .sparse_rcnn import *
 from .tood import *
 from .retinanet import *
+from .bytetrack import *
 from .yolox import *

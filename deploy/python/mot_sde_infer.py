@@ -32,14 +32,7 @@ sys.path.insert(0, parent_path)
 
 from pptracking.python.mot import JDETracker
 from pptracking.python.mot.utils import MOTTimer, write_mot_results
-from pptracking.python.visualize import plot_tracking, plot_tracking_dict
-
-# Global dictionary
-MOT_SDE_SUPPORT_MODELS = {
-    'DeepSORT',
-    'ByteTrack',
-    'YOLO',
-}
+from pptracking.python.mot.visualize import plot_tracking, plot_tracking_dict
 
 
 class SDE_Detector(Detector):
@@ -111,11 +104,8 @@ class SDE_Detector(Detector):
             low_conf_thres=low_conf_thres)
 
     def tracking(self, det_results):
-        pred_dets = det_results['boxes']
+        pred_dets = det_results['boxes']  # 'cls_id, score, x0, y0, x1, y1'
         pred_embs = None
-        pred_dets = np.concatenate(
-            (pred_dets[:, 2:], pred_dets[:, 1:2], pred_dets[:, 0:1]), 1)
-        # pred_dets should be 'x0, y0, x1, y1, score, cls_id'
 
         online_targets_dict = self.tracker.update(pred_dets, pred_embs)
         online_tlwhs = defaultdict(list)
@@ -241,7 +231,7 @@ class SDE_Detector(Detector):
         if not os.path.exists(self.output_dir):
             os.makedirs(self.output_dir)
         out_path = os.path.join(self.output_dir, video_out_name)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        fourcc = cv2.VideoWriter_fourcc(* 'mp4v')
         writer = cv2.VideoWriter(out_path, fourcc, fps, (width, height))
 
         frame_id = 1
@@ -290,7 +280,6 @@ def main():
     with open(deploy_file) as f:
         yml_conf = yaml.safe_load(f)
     arch = yml_conf['arch']
-    assert arch in MOT_SDE_SUPPORT_MODELS, '{} is not supported.'.format(arch)
     detector = SDE_Detector(
         FLAGS.model_dir,
         FLAGS.tracker_config,
