@@ -15,7 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from IPython import embed
 import os
 import sys
 import copy
@@ -100,7 +100,7 @@ class Trainer(object):
             self.model = self.cfg.model
             self.is_loaded_weights = True
 
-        if cfg.architecture == 'YOLOX':
+        if cfg.architecture in ['YOLOX', 'YOLOv5']:
             for k, m in self.model.named_sublayers():
                 if isinstance(m, nn.BatchNorm2D):
                     m._epsilon = 1e-3  # for amp(fp16)
@@ -152,6 +152,97 @@ class Trainer(object):
             steps_per_epoch = len(self.loader)
             self.lr = create('LearningRate')(steps_per_epoch)
             self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
+
+            if self.cfg.architecture == 'YOLOv5':
+                pg0, pg1, pg2 = [], [], []  # parameter groups
+                for k, v in self.model.named_sublayers():
+                    if hasattr(v, "bias") and isinstance(
+                            v.bias, paddle.fluid.framework.ParamBase):
+                        pg2.append(v.bias)  # biases
+                    if isinstance(v, paddle.nn.BatchNorm2D) or "bn" in k:
+                        pg0.append(v.weight)  # no decay
+                    elif hasattr(v, "weight") and isinstance(
+                            v.weight, paddle.fluid.framework.ParamBase):
+                        pg1.append(v.weight)  # apply decay
+                logger.info(f"optimizer: {type(self.optimizer).__name__} with parameter groups "
+                    f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
+
+                # TODO
+                lr_b_l = []
+                lr_w_and_bn_l = []
+                boundary = []
+                lrf = 0.01
+                lr0 = 0.01
+                epoches = 300
+                cosine_lr = False
+
+                import math
+                if cosine_lr:
+                    def one_cycle(y1=0.0, y2=1.0, steps=100):
+                        # lambda function for sinusoidal ramp from y1 to y2 https://arxiv.org/pdf/1812.01187.pdf
+                        return lambda x: ((1 - math.cos(x * math.pi / steps)) / 2) * (y2 - y1) + y1
+
+                    lf = one_cycle(1, lrf, epoches)
+
+                else:
+                    lf = lambda x: (1 - x / epoches) * (1.0 - lrf) + lrf  # linear
+
+                nw = 3 * len(self.loader)
+                for epoch_id in range(0, 4):
+                    for step_id in range(len(self.loader)):
+                        ni = len(self.loader) * epoch_id + step_id
+                        # Warmup
+                        if ni <= nw:
+                            if ni > 0:
+                                boundary.append(ni)
+                            xi = [0, nw]
+                            for j in range(3):
+                                # bias lr falls from 0.1 to lr0, all other lrs rise from 0.0 to lr0
+                                # if 'learning_rate' in x:
+                                lr = np.interp(ni, xi, [
+                                    0.1 if j == 2 else 0.0, lr0 * lf(epoch_id)
+                                ])
+                                if j == 2:
+                                    lr_b_l.append(float(lr))
+                                elif j == 0:
+                                    lr_w_and_bn_l.append(float(lr))
+                                else:
+                                    pass
+                        if ni > nw:
+                            break
+                self.lr_bn = paddle.optimizer.lr.PiecewiseDecay(boundary, lr_w_and_bn_l)
+                self.optimizer_bn = paddle.optimizer.Momentum(
+                    parameters=[{
+                        'params': pg0
+                    }],
+                    learning_rate=self.lr_bn,
+                    grad_clip=None,
+                    momentum=0.937,
+                    use_nesterov=True,
+                    weight_decay=0.0)
+
+                self.lr_w = paddle.optimizer.lr.PiecewiseDecay(boundary, lr_w_and_bn_l)
+                self.optimizer_w = paddle.optimizer.Momentum(
+                    parameters=[{
+                        'params': pg1
+                    }],
+                    learning_rate=self.lr_w,
+                    grad_clip=None,
+                    momentum=0.937,
+                    use_nesterov=True,
+                    weight_decay=0.0005)
+
+                # add pg1 with weight_decay
+                self.lr_b = paddle.optimizer.lr.PiecewiseDecay(boundary, lr_b_l)
+                self.optimizer_b = paddle.optimizer.Momentum(
+                    parameters=[{
+                        'params': pg2
+                    }],
+                    learning_rate=self.lr_b,
+                    grad_clip=None,
+                    momentum=0.937,
+                    use_nesterov=True,
+                    weight_decay=0.0)  # 0.937
 
             # Unstructured pruner is only enabled in the train mode.
             if self.cfg.get('unstructured_prune'):
@@ -391,6 +482,8 @@ class Trainer(object):
             scaler = amp.GradScaler(
                 enable=self.cfg.use_gpu or self.cfg.use_npu,
                 init_loss_scaling=1024)
+        else:
+            scaler = amp.GradScaler(enable=False)
 
         self.status.update({
             'epoch_id': self.start_epoch,
@@ -420,6 +513,28 @@ class Trainer(object):
             model.train()
             iter_tic = time.time()
             for step_id, data in enumerate(self.loader):
+                # if self.cfg.architecture == 'YOLOv5':
+                ni = len(self.loader) * epoch_id + step_id
+                nw = 3 * len(self.loader)
+                # yolov5 Warmup
+                if ni <= nw:
+                    xi = [0, nw]
+                    self.optimizer_b._momentum = np.interp(ni, xi, [0.8, 0.937])
+                    self.optimizer_b._default_dict['momentum'] = np.interp(
+                        ni, xi, [0.8, 0.937])
+
+                    self.optimizer_bn._momentum = np.interp(ni, xi,
+                                                            [0.8, 0.937])
+                    self.optimizer_bn._default_dict['momentum'] = np.interp(
+                        ni, xi, [0.8, 0.937])
+
+                    self.optimizer_w._momentum = np.interp(ni, xi, [0.8, 0.937])
+                    self.optimizer_w._default_dict['momentum'] = np.interp(
+                        ni, xi, [0.8, 0.937])
+                else:
+                    self.optimizer._momentum = 0.937
+                    self.optimizer._default_dict['momentum'] = 0.937
+
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
@@ -430,25 +545,60 @@ class Trainer(object):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
                         outputs = model(data)
-                        loss = outputs['loss']
-
+                    loss = outputs['loss']
+                    '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
                     # in dygraph mode, optimizer.minimize is equal to optimizer.step
                     scaler.minimize(self.optimizer, scaled_loss)
+                    '''
+                    self.optimizer.clear_grad()
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
                 else:
+                    '''
                     # model forward
                     outputs = model(data)
                     loss = outputs['loss']
                     # model backward
                     loss.backward()
                     self.optimizer.step()
-                curr_lr = self.optimizer.get_lr()
-                self.lr.step()
+                    '''
+                    with amp.auto_cast(enable=False):
+                        outputs = model(data)
+                    loss = outputs['loss']
+                    #self.optimizer.clear_grad()
+                    scaler.scale(loss).backward()
+                    if ni <= nw:
+                        scaler.step(self.optimizer_b)
+                        scaler.step(self.optimizer_bn)
+                        scaler.step(self.optimizer_w)
+                    else:
+                        scaler.step(self.optimizer)
+                    scaler.update()
+                    if ni <= nw:
+                        self.optimizer_b.clear_grad()
+                        self.optimizer_bn.clear_grad()
+                        self.optimizer_w.clear_grad()
+                    else:
+                        self.optimizer.clear_grad()
+
+
+                if ni <= nw:
+                    curr_lr = self.optimizer_w.get_lr()
+                    # self.optimizer.set_lr(curr_lr)
+                    self.lr_b.step()
+                    self.lr_bn.step()
+                    self.lr_w.step()
+                else:
+                    curr_lr = self.optimizer.get_lr()
+                    # self.optimizer.set_lr(curr_lr)
+                    self.lr.step()
                 if self.cfg.get('unstructured_prune'):
                     self.pruner.step()
-                self.optimizer.clear_grad()
+                # self.optimizer.clear_grad()
                 self.status['learning_rate'] = curr_lr
 
                 if self._nranks < 2 or self._local_rank == 0:
@@ -562,7 +712,7 @@ class Trainer(object):
         clsid2catid, catid2name = get_categories(
             self.cfg.metric, anno_file=anno_file)
 
-        # Run Infer 
+        # Run Infer
         self.status['mode'] = 'test'
         self.model.eval()
         if self.cfg.get('print_flops', False):

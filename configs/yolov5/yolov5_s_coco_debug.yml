@@ -1,0 +1,105 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  '_base_/optimizer_300e.yml',
+  '_base_/yolov5_cspdarknet.yml',
+  '_base_/yolov5_reader.yml',
+]
+depth_mult: 0.33
+width_mult: 0.50
+
+log_iter: 100
+snapshot_epoch: 2
+weights: output/yolov5_s_coco_debug/model_final
+#pretrain_weights: /paddle/PaddleDetection_yolov5/s.pdparams
+
+
+######### Dataset #########
+TrainDataset:
+  !COCODataSet
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+
+EvalDataset:
+  !COCODataSet
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    #anno_path: annotations/instances_val2017_im8.json
+    dataset_dir: dataset/coco
+
+
+######### Optimizer #########
+epoch: 30
+LearningRate:
+  base_lr: 0.01
+  schedulers:
+  - !YOLOv5LRDecay
+    max_epochs: 30
+    min_lr_ratio: 0.01
+  - !ExpWarmup
+    start_lr: 0.
+    warmup_epochs: 3
+
+OptimizerBuilder:
+  optimizer:
+    type: "Momentum"
+    momentum: 0.937
+    use_nesterov: True
+  regularizer:
+    factor: 0.0005
+    type: L2
+
+
+######### reader #########
+input_height: &input_height 640
+input_width: &input_width 640
+input_size: &input_size [*input_height, *input_width]
+mosaic_epoch: &mosaic_epoch 30
+
+worker_num: 4
+TrainReader:
+  sample_transforms:
+    - DecodeNormResize:
+        target_size: *input_size
+        keep_ratio: True
+    - BboxPixelXYXY2NormCXCYWH: {}
+    - MosaicPerspective: {mosaic_prob: 1.0, target_size: 640} # x y w h
+    #- LetterBox: {target_size: *input_size, auto: False, scaleup: False}
+    #- Albumentations: {}
+    - RandomHSV: {hgain: 0.015, sgain: 0.7, vgain: 0.4}
+    - RandomFlip: {}
+    - BboxXYXY2XYWH: {}
+    - NormalizeBox: {}
+    - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
+    - RGBReverse: {}
+    - Permute: {}
+  batch_size: 8
+  shuffle: True
+  drop_last: True
+  collate_batch: False
+  mosaic_epoch: *mosaic_epoch
+
+
+EvalReader:
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: *input_size, keep_ratio: True}
+    - Pad: {size: *input_size, fill_value: [114., 114., 114.]}
+    - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
+    - Permute: {}
+  batch_size: 8
+
+
+TestReader:
+  inputs_def:
+    image_shape: [3, 640, 640]
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: *input_size, keep_ratio: True}
+    - Pad: {size: *input_size, fill_value: [114., 114., 114.]}
+    - NormalizeImage: {mean: [0, 0, 0], std: [1, 1, 1], is_scale: True}
+    - Permute: {}
+  batch_size: 1
+  fuse_normalize: True

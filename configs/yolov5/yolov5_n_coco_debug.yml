@@ -1,0 +1,45 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  '_base_/optimizer_300e.yml',
+  '_base_/yolov5_cspdarknet.yml',
+  '_base_/yolov5_reader.yml',
+]
+depth_mult: 0.33
+width_mult: 0.25
+
+log_iter: 100
+snapshot_epoch: 2
+weights: output/yolov5_n_coco_30e/model_final
+
+TrainReader:
+  batch_size: 16
+  mosaic_epoch: 30 #
+
+EvalDataset:
+  !COCODataSet
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    #anno_path: annotations/instances_val2017_im8.json
+    dataset_dir: dataset/coco
+
+###################
+epoch: 30
+LearningRate:
+  base_lr: 0.01
+  schedulers:
+  - !YOLOv5LRDecay
+    max_epochs: 30
+    min_lr_ratio: 0.01
+  - !ExpWarmup
+    start_lr: 0.
+    warmup_epochs: 3
+
+OptimizerBuilder:
+  optimizer:
+    type: "Momentum"
+    momentum: 0.937
+    use_nesterov: True
+  regularizer:
+    factor: 0.0005
+    type: L2
