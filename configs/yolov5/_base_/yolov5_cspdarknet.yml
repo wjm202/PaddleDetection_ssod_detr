@@ -2,6 +2,7 @@ architecture: YOLOv5
 # norm_type: sync_bn
 use_ema: True
 ema_decay: 0.9999
+ema_decay_type: "exponential"
 act: silu
 find_unused_parameters: True
 
@@ -31,8 +32,8 @@ YOLOv5Head:
   loss: YOLOv5Loss
   nms:
     name: MultiClassNMS
-    nms_top_k: 30000
-    keep_top_k: 300
+    nms_top_k: 1000 #30000
+    keep_top_k: 100 #300
     score_threshold: 0.001
     nms_threshold: 0.65
 
