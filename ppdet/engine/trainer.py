@@ -44,6 +44,7 @@ from ppdet.data.source.sniper_coco import SniperCOCODataSet
 from ppdet.data.source.category import get_categories
 import ppdet.utils.stats as stats
 from ppdet.utils import profiler
+from ppdet.modeling.initializer import reset_initialized_parameter
 
 from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator
 from .export_utils import _dump_infer_config, _prune_input_spec
@@ -99,6 +100,9 @@ class Trainer(object):
         else:
             self.model = self.cfg.model
             self.is_loaded_weights = True
+        
+        if self.cfg.architecture == 'YOLOv5':
+            reset_initialized_parameter(self.model)
 
         if cfg.architecture in ['YOLOX', 'YOLOv5']:
             for k, m in self.model.named_sublayers():
@@ -150,7 +154,7 @@ class Trainer(object):
         # build optimizer in train mode
         if self.mode == 'train':
             steps_per_epoch = len(self.loader)
-            self.lr = create('LearningRate')(steps_per_epoch)
+            self.lr = create('LearningRate')(steps_per_epoch)    
             self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
 
             if self.cfg.architecture == 'YOLOv5':
@@ -173,10 +177,10 @@ class Trainer(object):
                 boundary = []
                 lrf = 0.01
                 lr0 = 0.01
-                epoches = cfg.epoch                
-
+                epoches = cfg.epoch
+                
                 lf = lambda x: (1 - x / epoches) * (1.0 - lrf) + lrf  # linear
-
+                    
                 nw = 3 * len(self.loader)
                 for epoch_id in range(0, 4):
                     for step_id in range(len(self.loader)):
@@ -232,8 +236,8 @@ class Trainer(object):
                     grad_clip=None,
                     momentum=0.937,
                     use_nesterov=True,
-                    weight_decay=0.0)  # 0.937
-
+                    weight_decay=0.0)
+                
             # Unstructured pruner is only enabled in the train mode.
             if self.cfg.get('unstructured_prune'):
                 self.pruner = create('UnstructuredPruner')(self.model,
@@ -530,6 +534,7 @@ class Trainer(object):
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
                 data['epoch_id'] = epoch_id
+                data['num_gpus'] = self._nranks  # new add
 
                 if self.cfg.get('amp', False):
                     with amp.auto_cast(enable=self.cfg.use_gpu):

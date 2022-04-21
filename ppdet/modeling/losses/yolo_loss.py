@@ -322,8 +322,8 @@ class YOLOv5Loss(nn.Layer):
                 else:
                     indices.append(
                         (paddle.to_tensor([]), paddle.to_tensor([]),
-                         paddle.to_tensor([]),
-                         paddle.to_tensor([])))  # image, anchor, grid indices
+                                    paddle.to_tensor([]),
+                                    paddle.to_tensor([])))  # image, anchor, grid indices
                     tbox.append(paddle.to_tensor([]))  # box
                     anch.append(paddle.to_tensor([]))  #
                     tcls.append(paddle.to_tensor([]))  # class
@@ -333,14 +333,14 @@ class YOLOv5Loss(nn.Layer):
                 # offsets = 0
                 indices.append(
                     (paddle.to_tensor([]), paddle.to_tensor([]),
-                     paddle.to_tensor([]),
-                     paddle.to_tensor([])))  # image, anchor, grid indices
+                                paddle.to_tensor([]),
+                                paddle.to_tensor([])))  # image, anchor, grid indices
                 tbox.append(paddle.to_tensor([]))  # box
                 anch.append(paddle.to_tensor([]))  # anchor
                 tcls.append(paddle.to_tensor([]))  # class
                 continue
 
-            # Define
+                      # Define
             if(len(t)):
                 b, c = paddle.cast(t[:, :2], 'int64').T  # image, class
                 gxy = t[:, 2:4]  # grid xy
@@ -378,6 +378,8 @@ class YOLOv5Loss(nn.Layer):
         if num_gts:
             ps = pi[b, a, gj, gi]  # [4, 3, 80, 80, 85] -> [21, 85]
 
+            if len(ps.shape)==1:
+                ps = ps.unsqueeze(0)
             # loss_box
             pxy = F.sigmoid(ps[:, :2]) * 2 - 0.5
             pwh = (F.sigmoid(ps[:, 2:4]) * 2)**2 * t_anchor
@@ -432,6 +434,6 @@ class YOLOv5Loss(nn.Layer):
             loss += v
 
         batch_size = inputs[0].shape[0]
-        # num_gpus = targets['_nranks']
-        yolo_losses['loss'] = loss * batch_size * 8
+        num_gpus = targets.get('num_gpus', 8)
+        yolo_losses['loss'] = loss * batch_size * num_gpus
         return yolo_losses
