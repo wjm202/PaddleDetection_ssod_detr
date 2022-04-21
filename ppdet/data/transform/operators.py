@@ -2537,7 +2537,7 @@ class BboxPixelXYXY2NormCXCYWH(BaseOperator):
     [x0, y0, x1, y1] -> [center_x, center_y, width, height]
     """
 
-    def __init__(self, clip=True, eps=1E-3): ###
+    def __init__(self, clip=False, eps=1E-3): ###
         super(BboxPixelXYXY2NormCXCYWH, self).__init__()
         self.clip = clip
         self.eps = eps
