@@ -174,19 +174,9 @@ class Trainer(object):
                 lrf = 0.01
                 lr0 = 0.01
                 epoches = cfg.epoch                
-                cosine_lr = False
 
-                import math
-                if cosine_lr:
-                    def one_cycle(y1=0.0, y2=1.0, steps=100):
-                        # lambda function for sinusoidal ramp from y1 to y2 https://arxiv.org/pdf/1812.01187.pdf
-                        return lambda x: ((1 - math.cos(x * math.pi / steps)) / 2) * (y2 - y1) + y1
+                lf = lambda x: (1 - x / epoches) * (1.0 - lrf) + lrf  # linear
 
-                    lf = one_cycle(1, lrf, epoches)
-
-                else:
-                    lf = lambda x: (1 - x / epoches) * (1.0 - lrf) + lrf  # linear
-                    
                 nw = 3 * len(self.loader)
                 for epoch_id in range(0, 4):
                     for step_id in range(len(self.loader)):

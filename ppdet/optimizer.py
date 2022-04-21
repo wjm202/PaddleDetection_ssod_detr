@@ -459,7 +459,7 @@ class YOLOv5LRDecay(object):
         for i in range(boundary_iter + 1, max_iters):
             if i - boundary_iter - 1 > 0:
                 boundary.append(i - boundary_iter - 1)
-            epoch_i = i // step_per_epoch
+            epoch_i = i // step_per_epoch - 1 ###
             decayed_lr = base_lr * (
                 (1 - epoch_i / self.max_epochs) *
                 (1.0 - self.min_lr_ratio) + self.min_lr_ratio)

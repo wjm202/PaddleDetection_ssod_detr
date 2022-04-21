@@ -7,6 +7,7 @@ TrainDataset:
     anno_path: annotations/instances_train2017.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+    allow_empty: True
 
 EvalDataset:
   !COCODataSet

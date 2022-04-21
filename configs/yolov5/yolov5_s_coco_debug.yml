@@ -11,11 +11,10 @@ width_mult: 0.50
 log_iter: 100
 snapshot_epoch: 2
 weights: output/yolov5_s_coco_debug/model_final
-#pretrain_weights: /paddle/PaddleDetection_yolov5/s.pdparams
 
 
 ######### Dataset #########
-TrainDataset:
+TrainDataset_debug:
   !COCODataSet
     image_dir: val2017
     anno_path: annotations/instances_val2017.json
