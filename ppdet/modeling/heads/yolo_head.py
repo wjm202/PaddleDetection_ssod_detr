@@ -220,16 +220,6 @@ class YOLOv5Head(nn.Layer):
             b[:, 4] += math.log(8 / (640 / self.stride[i])**2)
             b[:, 5:] += math.log(0.6 / (self.num_classes - 0.999999))
             conv.bias.set_value(b.reshape([-1]))
-            # print(math.log(0.6 / (num_c - 0.999999)))
-            # print(conv.bias.sum())
-            # print(conv.bias.stop_gradient)
-
-        # m = self.model[-1]  # Detect() module
-        # for mi, s in zip(m.m, m.stride):  # from
-        #     b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
-        #     b.data[:, 4] += math.log(8 / (640 / s) ** 2)  # obj (8 objects per 640 image)
-        #     b.data[:, 5:] += math.log(0.6 / (m.nc - 0.999999)) if cf is None else torch.log(cf / cf.sum())  # cls
-        #     mi.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
     def parse_anchor(self, anchors, anchor_masks):
         self.anchors = [[anchors[i] for i in mask] for mask in anchor_masks]
@@ -262,11 +252,9 @@ class YOLOv5Head(nn.Layer):
     def post_process(self, head_outs, img_shape, scale_factor):
         bbox_list, score_list = [], []
         for i, head_out in enumerate(head_outs):
-            bs, _, ny, nx = head_out.shape
-            head_out = head_out.reshape(
-                [bs, self.num_anchor, self.num_out_ch, ny, nx]).transpose(
-                    [0, 1, 3, 4, 2])
-            # head_out.shape [bs, self.num_anchor, ny, nx, self.num_out_ch]
+            bs, num_filters, ny, nx = head_out.shape
+            head_out = head_out.reshape([bs, num_filters, ny * nx])
+            head_out = head_out.reshape([bs, self.num_anchor, self.num_out_ch, ny * nx]).transpose([0, 1, 3, 2])
 
             bbox, score = self.postprocessing_by_level(head_out, self.stride[i],
                                                        self.anchors[i], ny, nx)
@@ -297,10 +285,12 @@ class YOLOv5Head(nn.Layer):
 
     def make_grid(self, nx, ny, anchor):
         yv, xv = paddle.meshgrid([paddle.arange(ny), paddle.arange(nx)])
-        grid = paddle.stack(
-            (xv, yv), axis=2).expand([1, self.num_anchor, ny, nx, 2])
-        anchor_grid = anchor.reshape([1, self.num_anchor, 1, 1, 2]).expand(
-            (1, self.num_anchor, ny, nx, 2))
+        grid = paddle.stack((xv, yv), axis=2).reshape([ny * nx, 2])
+        grid = grid.expand([1, self.num_anchor, ny * nx, 2])
+
+        anchor_grid = anchor.reshape([self.num_anchor, 1, 1, 2]).expand(
+            (self.num_anchor, ny, nx, 2)).reshape([self.num_anchor, ny * nx, 2])
+        anchor_grid = anchor_grid.expand([1, self.num_anchor, ny * nx, 2])
         return grid, anchor_grid
 
 

@@ -227,8 +227,8 @@ class YOLOv5Loss(nn.Layer):
         self.na = 3  # not len(anchors) # anchors.shape [na, 3, 2]
         self.gr = 1.0
 
-        self.BCEcls = nn.BCEWithLogitsLoss(reduction="none")
-        self.BCEobj = nn.BCEWithLogitsLoss(reduction="none")
+        self.BCEcls = nn.BCEWithLogitsLoss(pos_weight=paddle.to_tensor([1.0]),reduction='none')
+        self.BCEobj = nn.BCEWithLogitsLoss(pos_weight=paddle.to_tensor([1.0]),reduction='none')
 
         self.loss_weights = {
             'box': box_weight,
@@ -260,10 +260,11 @@ class YOLOv5Loss(nn.Layer):
         tcls, tbox, indices, anch = [], [], [], []
 
         gain = paddle.ones([7], dtype='float32')  # normalized to gridspace gain
-        ai = paddle.tile(
-            paddle.cast(
-                paddle.arange(na), dtype='float32').reshape([na, 1]),
-            [1, num_gts])  # [na, num_gts]
+        if num_gts:
+            ai = paddle.tile(
+                paddle.cast(
+                    paddle.arange(na), dtype='float32').reshape([na, 1]),
+                    [1, num_gts])  # [na, num_gts]
 
         batch_size = outputs[0].shape[0]
         gt_labels = []
@@ -282,11 +283,13 @@ class YOLOv5Loss(nn.Layer):
             gt_labels.append(
                 paddle.concat(
                     (img_idx, gt_class, gt_bbox), axis=-1))
-        gt_labels = paddle.concat(gt_labels)  # [num_gts, 6]
+        if(len(gt_labels)):
+            gt_labels = paddle.concat(gt_labels)  # [num_gts, 6]
 
-        targets_labels = paddle.concat(
-            (paddle.tile(gt_labels.unsqueeze(0), [na, 1, 1]), ai.unsqueeze(-1)),
-            axis=2)
+        if num_gts:
+            targets_labels = paddle.concat(
+                (paddle.tile(gt_labels.unsqueeze(0), [na, 1, 1]), ai.unsqueeze(-1)),
+                axis=2)
         # targets_labels.shape [na, num_gts, 7]
 
         for i in range(len(anchors)):
@@ -296,7 +299,8 @@ class YOLOv5Loss(nn.Layer):
                 outputs[i].shape, dtype='float32')[[3, 2, 3, 2]]
 
             # Match targets_labels to
-            t = targets_labels * gain
+            if num_gts:
+                t = targets_labels * gain
             if num_gts:
                 # Matches
                 r = t[:, :, 4:6] / anchor[:, None]  # wh ratio
@@ -311,7 +315,7 @@ class YOLOv5Loss(nn.Layer):
                     l, m = ((gxi % 1 < self.bias) & (gxi > 1)).T
                     j = paddle.concat(
                         (paddle.ones_like(j).unsqueeze(0), j.unsqueeze(0),
-                         k.unsqueeze(0), l.unsqueeze(0), m.unsqueeze(0)))
+                        k.unsqueeze(0), l.unsqueeze(0), m.unsqueeze(0)))
                     t = paddle.tile(t, [5, 1, 1])[j]
                     offsets = (
                         paddle.zeros_like(gxy)[None] + self.off[:, None])[j]
@@ -337,19 +341,28 @@ class YOLOv5Loss(nn.Layer):
                 continue
 
             # Define
-            b, c = paddle.cast(t[:, :2], 'int64').T  # image, class
-            gxy = t[:, 2:4]  # grid xy
-            gwh = t[:, 4:6]  # grid wh
-            gij = paddle.cast((gxy - offsets), 'int64')
-            gi, gj = gij.T  # grid xy indices
-
-            # Append
-            a = paddle.cast(t[:, 6], 'int64')  # anchor indices
-            gj, gi = gj.clip(0, gain[3] - 1), gi.clip(0, gain[2] - 1)  # clamp_
-            indices.append((b, a, gj, gi))  # image, anchor, grid indices
-            tbox.append(paddle.concat((gxy - gij, gwh), 1))
-            anch.append(anchor[a])
-            tcls.append(c)
+            if(len(t)):
+                b, c = paddle.cast(t[:, :2], 'int64').T  # image, class
+                gxy = t[:, 2:4]  # grid xy
+                gwh = t[:, 4:6]  # grid wh
+                gij = paddle.cast((gxy - offsets), 'int64')
+                gi, gj = gij.T  # grid xy indices
+    
+                # Append
+                a = paddle.cast(t[:, 6], 'int64')  # anchor indices
+                gj, gi = gj.clip(0, gain[3] - 1), gi.clip(0, gain[2] - 1)  # clamp_
+                indices.append((b, a, gj, gi))  # image, anchor, grid indices
+                tbox.append(paddle.concat((gxy - gij, gwh), 1))
+                anch.append(anchor[a])
+                tcls.append(c)
+            else:
+                indices.append((paddle.to_tensor([]),
+                                paddle.to_tensor([]),
+                                paddle.to_tensor([]),
+                                paddle.to_tensor([])))  # image, anchor, grid indices
+                tbox.append(paddle.to_tensor([]))  # box
+                anch.append(paddle.to_tensor([]))  #
+                tcls.append(paddle.to_tensor([]))  # class
 
         return tcls, tbox, indices, anch
 
@@ -374,7 +387,7 @@ class YOLOv5Loss(nn.Layer):
             loss_box = (1.0 - iou).mean()
 
             # loss_obj
-            score_iou = iou.detach().clip(0)
+            score_iou = paddle.cast(iou.detach().clip(0), tobj.dtype)
             tobj[b, a, gj, gi] = (1.0 - self.gr
                                   ) + self.gr * score_iou  # iou ratio
 
@@ -419,5 +432,6 @@ class YOLOv5Loss(nn.Layer):
             loss += v
 
         batch_size = inputs[0].shape[0]
-        yolo_losses['loss'] = loss * batch_size
+        # num_gpus = targets['_nranks']
+        yolo_losses['loss'] = loss * batch_size * 8
         return yolo_losses

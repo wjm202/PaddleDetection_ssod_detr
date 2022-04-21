@@ -173,7 +173,7 @@ class Trainer(object):
                 boundary = []
                 lrf = 0.01
                 lr0 = 0.01
-                epoches = 300
+                epoches = cfg.epoch                
                 cosine_lr = False
 
                 import math
@@ -186,7 +186,7 @@ class Trainer(object):
 
                 else:
                     lf = lambda x: (1 - x / epoches) * (1.0 - lrf) + lrf  # linear
-
+                    
                 nw = 3 * len(self.loader)
                 for epoch_id in range(0, 4):
                     for step_id in range(len(self.loader)):
