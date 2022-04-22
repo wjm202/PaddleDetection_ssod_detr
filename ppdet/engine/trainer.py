@@ -100,7 +100,7 @@ class Trainer(object):
         else:
             self.model = self.cfg.model
             self.is_loaded_weights = True
-        
+
         if self.cfg.architecture == 'YOLOv5':
             reset_initialized_parameter(self.model)
             self.model.yolo_head._initialize_biases()
@@ -155,7 +155,7 @@ class Trainer(object):
         # build optimizer in train mode
         if self.mode == 'train':
             steps_per_epoch = len(self.loader)
-            self.lr = create('LearningRate')(steps_per_epoch)    
+            self.lr = create('LearningRate')(steps_per_epoch)
             self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
 
             if self.cfg.architecture == 'YOLOv5':
@@ -169,8 +169,10 @@ class Trainer(object):
                     elif hasattr(v, "weight") and isinstance(
                             v.weight, paddle.fluid.framework.ParamBase):
                         pg1.append(v.weight)  # apply decay
-                logger.info(f"optimizer: {type(self.optimizer).__name__} with parameter groups "
-                    f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias")
+                logger.info(
+                    f"optimizer: {type(self.optimizer).__name__} with parameter groups "
+                    f"{len(pg0)} weight, {len(pg1)} weight (no decay), {len(pg2)} bias"
+                )
 
                 # TODO
                 lr_b_l = []
@@ -179,9 +181,9 @@ class Trainer(object):
                 lrf = 0.01
                 lr0 = 0.01
                 epoches = cfg.epoch
-                
+
                 lf = lambda x: (1 - x / epoches) * (1.0 - lrf) + lrf  # linear
-                    
+
                 nw = 3 * len(self.loader)
                 for epoch_id in range(0, 4):
                     for step_id in range(len(self.loader)):
@@ -205,7 +207,8 @@ class Trainer(object):
                                     pass
                         if ni > nw:
                             break
-                self.lr_bn = paddle.optimizer.lr.PiecewiseDecay(boundary, lr_w_and_bn_l)
+                self.lr_bn = paddle.optimizer.lr.PiecewiseDecay(boundary,
+                                                                lr_w_and_bn_l)
                 self.optimizer_bn = paddle.optimizer.Momentum(
                     parameters=[{
                         'params': pg0
@@ -216,7 +219,8 @@ class Trainer(object):
                     use_nesterov=True,
                     weight_decay=0.0)
 
-                self.lr_w = paddle.optimizer.lr.PiecewiseDecay(boundary, lr_w_and_bn_l)
+                self.lr_w = paddle.optimizer.lr.PiecewiseDecay(boundary,
+                                                               lr_w_and_bn_l)
                 self.optimizer_w = paddle.optimizer.Momentum(
                     parameters=[{
                         'params': pg1
@@ -238,7 +242,7 @@ class Trainer(object):
                     momentum=0.937,
                     use_nesterov=True,
                     weight_decay=0.0)
-                
+
             # Unstructured pruner is only enabled in the train mode.
             if self.cfg.get('unstructured_prune'):
                 self.pruner = create('UnstructuredPruner')(self.model,
@@ -580,7 +584,6 @@ class Trainer(object):
                         self.optimizer_w.clear_grad()
                     else:
                         self.optimizer.clear_grad()
-
 
                 if ni <= nw:
                     curr_lr = self.optimizer_w.get_lr()

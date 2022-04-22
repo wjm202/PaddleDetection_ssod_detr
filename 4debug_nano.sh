@@ -2,7 +2,7 @@ export FLAGS_allocator_strategy=auto_growth
 
 name=n
 model_type=yolov5
-job_name=yolov5p6_${name}_coco
+job_name=yolov5_${name}_coco
 config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
 

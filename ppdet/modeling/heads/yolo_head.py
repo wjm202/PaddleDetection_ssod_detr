@@ -252,9 +252,11 @@ class YOLOv5Head(nn.Layer):
     def post_process(self, head_outs, img_shape, scale_factor):
         bbox_list, score_list = [], []
         for i, head_out in enumerate(head_outs):
-            bs, num_filters, ny, nx = head_out.shape
-            head_out = head_out.reshape([bs, num_filters, ny * nx])
-            head_out = head_out.reshape([bs, self.num_anchor, self.num_out_ch, ny * nx]).transpose([0, 1, 3, 2])
+            bs, _, ny, nx = head_out.shape
+            head_out = head_out.reshape(
+                [bs, self.num_anchor, self.num_out_ch, ny, nx]).transpose(
+                    [0, 1, 3, 4, 2])
+            # head_out.shape [bs, self.num_anchor, ny, nx, self.num_out_ch]
 
             bbox, score = self.postprocessing_by_level(head_out, self.stride[i],
                                                        self.anchors[i], ny, nx)
@@ -285,12 +287,10 @@ class YOLOv5Head(nn.Layer):
 
     def make_grid(self, nx, ny, anchor):
         yv, xv = paddle.meshgrid([paddle.arange(ny), paddle.arange(nx)])
-        grid = paddle.stack((xv, yv), axis=2).reshape([ny * nx, 2])
-        grid = grid.expand([1, self.num_anchor, ny * nx, 2])
-
-        anchor_grid = anchor.reshape([self.num_anchor, 1, 1, 2]).expand(
-            (self.num_anchor, ny, nx, 2)).reshape([self.num_anchor, ny * nx, 2])
-        anchor_grid = anchor_grid.expand([1, self.num_anchor, ny * nx, 2])
+        grid = paddle.stack(
+            (xv, yv), axis=2).expand([1, self.num_anchor, ny, nx, 2])
+        anchor_grid = anchor.reshape([1, self.num_anchor, 1, 1, 2]).expand(
+            (1, self.num_anchor, ny, nx, 2))
         return grid, anchor_grid
 
 
@@ -336,7 +336,7 @@ class YOLOXHead(nn.Layer):
             self.stem_conv.append(BaseConv(in_c, feat_channels, 1, 1, act=act))
 
             self.conv_cls.append(
-                nn.Sequential(*[
+                nn.Sequential(* [
                     ConvBlock(
                         feat_channels, feat_channels, 3, 1, act=act), ConvBlock(
                             feat_channels, feat_channels, 3, 1, act=act),
@@ -348,7 +348,7 @@ class YOLOXHead(nn.Layer):
                 ]))
 
             self.conv_reg.append(
-                nn.Sequential(*[
+                nn.Sequential(* [
                     ConvBlock(
                         feat_channels, feat_channels, 3, 1, act=act),
                     ConvBlock(

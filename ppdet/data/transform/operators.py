@@ -2537,7 +2537,7 @@ class BboxPixelXYXY2NormCXCYWH(BaseOperator):
     [x0, y0, x1, y1] -> [center_x, center_y, width, height]
     """
 
-    def __init__(self, clip=False, eps=1E-3): ###
+    def __init__(self, clip=True, eps=1E-3):  ###
         super(BboxPixelXYXY2NormCXCYWH, self).__init__()
         self.clip = clip
         self.eps = eps
@@ -3856,7 +3856,7 @@ class LetterBox(BaseOperator):
         scale_w_ratio = new_w / w0
         sample['scale_factor'] = np.asarray(
             [scale_h_ratio, scale_w_ratio], dtype=np.float32)
-        
+
         # apply bbox only when trainning
         if 'gt_bbox' in sample and len(sample['gt_bbox']) > 0:
             gt_bboxes = sample['gt_bbox']
@@ -3924,10 +3924,10 @@ class DecodeNormResize(BaseOperator):
         else:
             resized_img = im
         #print('  im  load_resized_img   ',im.shape, im.sum(), resized_img.shape, resized_img.sum())
-        
+
         if self.to_rgb:
             resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
-        
+
         sample['image'] = resized_img
         sample['scale_factor'] = np.array([r, r], dtype=np.float32)
         return sample, r
@@ -3965,7 +3965,7 @@ class DecodeNormResize(BaseOperator):
         else:
             sample['scale_factor'] = np.asarray(
                 [im_scale_y, im_scale_x], dtype=np.float32)
-        
+
         # train reader
         if 'gt_bbox' in sample:
             sample['gt_bbox'] *= before_r
