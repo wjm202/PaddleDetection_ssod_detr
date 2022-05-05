@@ -225,8 +225,7 @@ class MosaicPerspective(BaseOperator):
             # x1b, y1b, x2b, y2b: small image
             if i == 0:
                 # top left. background
-                image = np.ones(
-                    (s * 2, s * 2, c), dtype=np.uint8) * self.fill_value
+                image = np.full((s * 2, s * 2, c), self.fill_value, dtype=np.uint8) 
                 x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc
                 x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h
             elif i == 1:
@@ -278,7 +277,7 @@ class MosaicPerspective(BaseOperator):
 
         # Perspective
         P = np.eye(3)
-        P[2, 0] = random.uniform(-perspective,
+        P[2, 0] = random.uniform(-perspective, 
                                  perspective)  # x perspective (about y)
         P[2, 1] = random.uniform(-perspective,
                                  perspective)  # y perspective (about x)
@@ -378,7 +377,7 @@ class MosaicPerspective(BaseOperator):
         sample = sample[:-1]  # exclude last one (mixup)
         assert len(sample) == 4 or len(
             sample) == 9, 'YOLOv5 Mosaic need 4 or 9 samples'
-
+        
         if random.random() >= self.mosaic_prob:
             return sample[0]
         random.shuffle(sample)
@@ -398,7 +397,7 @@ class MosaicPerspective(BaseOperator):
                 (mosaic_img.shape[0] - eps, mosaic_img.shape[1] - eps))
 
         sample = sample[0]  # list to one sample
-        sample['image'] = mosaic_img.astype(np.uint8)
+        sample['image'] = mosaic_img ############################ .astype(np.uint8)
         sample['gt_bbox'] = mosaic_gt_bboxes
         sample['gt_class'] = gt_classes
 
@@ -406,7 +405,7 @@ class MosaicPerspective(BaseOperator):
             sample.pop('difficult')
 
         return sample
-
+    
     def clip_coords(self, boxes, shape):
         # Clip bounding xyxy bounding boxes to image shape (height, width
         boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, shape[1])  # x1, x2
@@ -2537,7 +2536,7 @@ class BboxPixelXYXY2NormCXCYWH(BaseOperator):
     [x0, y0, x1, y1] -> [center_x, center_y, width, height]
     """
 
-    def __init__(self, clip=True, eps=1E-3):  ###
+    def __init__(self, clip=False, eps=1E-3):  ### 5.5 false
         super(BboxPixelXYXY2NormCXCYWH, self).__init__()
         self.clip = clip
         self.eps = eps
@@ -3870,7 +3869,7 @@ class LetterBox(BaseOperator):
 @register_op
 class DecodeNormResize(BaseOperator):
     def __init__(self, target_size, keep_ratio=True, to_rgb=False,
-                 mosaic=False):
+        mosaic=True):
         super(DecodeNormResize, self).__init__()
         self.keep_ratio = keep_ratio
         if not isinstance(target_size, (Integral, Sequence)):
@@ -3889,6 +3888,7 @@ class DecodeNormResize(BaseOperator):
             sample['image'] = cv2.imread(img_file)  # BGR
             sample.pop('im_file')
         im = sample['image']
+        sample = self.bbox_norm(sample)
 
         if 'keep_ori_im' in sample and sample['keep_ori_im']:
             sample['ori_image'] = im
@@ -3920,54 +3920,68 @@ class DecodeNormResize(BaseOperator):
             resized_img = cv2.resize(
                 im, (int(im.shape[1] * r), int(im.shape[0] * r)),
                 interpolation=cv2.INTER_LINEAR
-                if (self.mosaic or r > 1) else cv2.INTER_AREA).astype(np.uint8)
+                if (self.mosaic or r > 1) else cv2.INTER_AREA) ########## .astype(np.uint8)
         else:
             resized_img = im
         #print('  im  load_resized_img   ',im.shape, im.sum(), resized_img.shape, resized_img.sum())
-
+        h,w = resized_img.shape[:2]
         if self.to_rgb:
             resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
-
+        
         sample['image'] = resized_img
-        sample['scale_factor'] = np.array([r, r], dtype=np.float32)
-        return sample, r
+        sample['scale_factor'] = np.array([h / im.shape[0], w / im.shape[1]], dtype=np.float32)
+        return sample
+
+    def bbox_norm(self,sample):
+        assert 'gt_bbox' in sample
+        bbox = sample['gt_bbox']
+        height, width = sample['image'].shape[:2]
+        y = bbox.copy()
+        y[:, 0] = ((bbox[:, 0] + bbox[:, 2]) / 2) / width  # x center
+        y[:, 1] = ((bbox[:, 1] + bbox[:, 3]) / 2) / height  # y center
+        y[:, 2] = (bbox[:, 2] - bbox[:, 0]) / width  # width
+        y[:, 3] = (bbox[:, 3] - bbox[:, 1]) / height  # height
+        sample['gt_bbox'] = y
+        return sample
+
 
     def apply(self, sample, context=None):
-        sample, before_r = self.load_resized_img(sample, self.target_size)
-        image = sample['image']
-        im_shape = image.shape
-        if self.keep_ratio:  # always true
-            im_size_min = np.min(im_shape[0:2])
-            im_size_max = np.max(im_shape[0:2])
-
-            target_size_min = np.min(self.target_size)
-            target_size_max = np.max(self.target_size)
-
-            im_scale = min(target_size_min / im_size_min,
-                           target_size_max / im_size_max)
-
-            resize_h = im_scale * float(im_shape[0])
-            resize_w = im_scale * float(im_shape[1])
-
-            im_scale_x = im_scale
-            im_scale_y = im_scale
-        else:
-            resize_h, resize_w = self.target_size
-            im_scale_y = resize_h / im_shape[0]
-            im_scale_x = resize_w / im_shape[1]
-
-        sample['im_shape'] = np.asarray([resize_h, resize_w], dtype=np.float32)
-        if 'scale_factor' in sample:
-            scale_factor = sample['scale_factor']
-            sample['scale_factor'] = np.asarray(
-                [scale_factor[0] * im_scale_y, scale_factor[1] * im_scale_x],
-                dtype=np.float32)
-        else:
-            sample['scale_factor'] = np.asarray(
-                [im_scale_y, im_scale_x], dtype=np.float32)
-
-        # train reader
-        if 'gt_bbox' in sample:
-            sample['gt_bbox'] *= before_r
+        sample = self.load_resized_img(sample, self.target_size)
+        # image = sample['image']
+        # im_shape = image.shape
+        # if self.keep_ratio: # always true
+        #     im_size_min = np.min(im_shape[0:2])
+        #     im_size_max = np.max(im_shape[0:2])
+        #
+        #     target_size_min = np.min(self.target_size)
+        #     target_size_max = np.max(self.target_size)
+        #
+        #     im_scale = min(target_size_min / im_size_min,
+        #                    target_size_max / im_size_max)
+        #
+        #     resize_h = im_scale * float(im_shape[0])
+        #     resize_w = im_scale * float(im_shape[1])
+        #
+        #     im_scale_x = im_scale
+        #     im_scale_y = im_scale
+        # else:
+        #     resize_h, resize_w = self.target_size
+        #     im_scale_y = resize_h / im_shape[0]
+        #     im_scale_x = resize_w / im_shape[1]
+        #
+        # sample['im_shape'] = np.asarray([resize_h, resize_w], dtype=np.float32)
+        # if 'scale_factor' in sample:
+        #     scale_factor = sample['scale_factor']
+        #     sample['scale_factor'] = np.asarray(
+        #         [scale_factor[0] * im_scale_y, scale_factor[1] * im_scale_x],
+        #         dtype=np.float32)
+        # else:
+        #     sample['scale_factor'] = np.asarray(
+        #         [im_scale_y, im_scale_x], dtype=np.float32)
+        
+        # # train reader
+        # if 'gt_bbox' in sample:
+        #     # norm_gt_box = sample['gt_bbox']
+        #     sample['gt_bbox'] *= before_r
 
         return sample
