@@ -355,8 +355,8 @@ class YOLOv5Loss(nn.Layer):
                 tobj[b, a, gj, gi] = (1.0 - self.gr) + self.gr * score_iou  # iou ratio
 
             # Classification
-            t = paddle.full_like(ps[:, 5:], self.cn)
-            t[range(n), t_cls] = self.cp
+            t = paddle.full_like(ps[:, 5:], self.cls_neg_label)
+            t[range(n), t_cls] = self.cls_pos_label
             loss_cls = self.BCEcls(ps[:, 5:], t)
 
         obji = self.BCEobj(pi[:, :, :, :, 4], tobj) # [4, 3, 80, 80]
