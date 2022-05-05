@@ -1128,7 +1128,7 @@ class Resize(BaseOperator):
             im_scale_x = resize_w / im_shape[1]
 
         im = self.apply_image(sample['image'], [im_scale_x, im_scale_y])
-        sample['image'] = im
+        sample['image'] = im.astype(np.float32)
         sample['im_shape'] = np.asarray([resize_h, resize_w], dtype=np.float32)
         if 'scale_factor' in sample:
             scale_factor = sample['scale_factor']
@@ -1358,7 +1358,7 @@ class CropWithSampling(BaseOperator):
            [max sample, max trial, min scale, max scale,
             min aspect ratio, max aspect ratio,
             min overlap, max overlap]
-            avoid_no_bbox (bool): whether to to avoid the
+            avoid_no_bbox (bool): whether to avoid the
                                   situation where the box does not appear.
         """
         super(CropWithSampling, self).__init__()
@@ -1449,7 +1449,7 @@ class CropWithDataAchorSampling(BaseOperator):
             das_anchor_scales (list[float]): a list of anchor scales in data
                 anchor smapling.
             min_size (float): minimum size of sampled bbox.
-            avoid_no_bbox (bool): whether to to avoid the
+            avoid_no_bbox (bool): whether to avoid the
                                   situation where the box does not appear.
         """
         super(CropWithDataAchorSampling, self).__init__()
@@ -2506,7 +2506,7 @@ class AugmentHSV(BaseOperator):
         else:
             cv2.cvtColor(img_hsv, cv2.COLOR_HSV2RGB, dst=img)
 
-        sample['image'] = img
+        sample['image'] = img.astype(np.float32)
         return sample
 
 
@@ -3482,7 +3482,7 @@ class Mosaic(BaseOperator):
 
         # warpAffine
         img = cv2.warpAffine(
-            img, M, dsize=input_dim, borderValue=(114, 114, 114))
+            img, M, dsize=tuple(input_dim), borderValue=(114, 114, 114))
 
         num_gts = len(labels)
         if num_gts > 0:

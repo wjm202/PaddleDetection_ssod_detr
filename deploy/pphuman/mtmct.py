@@ -113,8 +113,8 @@ def save_mtmct_vis_results(camera_results, captures, output_dir):
         cid = camera_ids[idx]
         basename = os.path.basename(video_file)
         video_out_name = "vis_" + basename
-        print("Start visualizing output video: {}".format(video_out_name))
         out_path = os.path.join(save_dir, video_out_name)
+        print("Start visualizing output video: {}".format(out_path))
 
         # Get Video info : resolution, fps, frame count
         width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -321,6 +321,8 @@ def res2dict(multi_res):
         for tid, res in c_res.items():
             key = "c" + str(cid) + "_t" + str(tid)
             if key not in cid_tid_dict:
+                if len(res["rects"]) < 10:
+                    continue
                 cid_tid_dict[key] = res
                 cid_tid_dict[key]['mean_feat'] = distill_idfeat(res)
     return cid_tid_dict

@@ -109,8 +109,9 @@ class Pipeline(object):
         self.input = self._parse_input(image_file, image_dir, video_file,
                                        video_dir, camera_id)
         if self.multi_camera:
-            self.predictor = [
-                PipePredictor(
+            self.predictor = []
+            for name in self.input:
+                predictor_item = PipePredictor(
                     cfg,
                     is_video=True,
                     multi_camera=True,
@@ -123,8 +124,10 @@ class Pipeline(object):
                     trt_opt_shape=trt_opt_shape,
                     cpu_threads=cpu_threads,
                     enable_mkldnn=enable_mkldnn,
-                    output_dir=output_dir) for i in self.input
-            ]
+                    output_dir=output_dir)
+                predictor_item.set_file_name(name)
+                self.predictor.append(predictor_item)
+
         else:
             self.predictor = PipePredictor(
                 cfg,
@@ -534,8 +537,9 @@ class PipePredictor(object):
                     self.pipe_timer.total_time.end()
                 if self.cfg['visual']:
                     _, _, fps = self.pipe_timer.get_total_time()
-                    im = self.visualize_video(frame, mot_res, frame_id,
-                                              fps)  # visualize
+                    im = self.visualize_video(frame, mot_res, frame_id, fps,
+                                              entrance, records,
+                                              center_traj)  # visualize
                     writer.write(im)
                     if self.file_name is None:  # use camera_id
                         cv2.imshow('PPHuman', im)

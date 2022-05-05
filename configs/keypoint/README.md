@@ -24,6 +24,7 @@
       - [Bottom-Up模型独立部署](#bottom-up模型独立部署)
       - [与多目标跟踪联合部署](#与多目标跟踪模型fairmot联合部署)
     - [完整部署教程及Demo](#4完整部署教程及Demo)
+
 - [自定义数据训练](#自定义数据训练)
 - [BenchMark](#benchmark)
 
@@ -78,7 +79,15 @@ MPII数据集
 | :---- | ---|----- | :--------: | :------------: | :----------------------------------------------------------: | -------------------------------------------- |
 | HRNet-w32 | Top-Down|256x256  |    90.6    |      38.5      | [hrnet_w32_256x256_mpii.pdparams](https://paddledet.bj.bcebos.com/models/keypoint/hrnet_w32_256x256_mpii.pdparams) | [config](./hrnet/hrnet_w32_256x256_mpii.yml) |
 
+场景模型
+| 模型 | 方案 | 输入尺寸 | 精度 | 预测速度 |模型权重 | 部署模型 | 说明|
+| :---- | ---|----- | :--------: | :--------: | :------------: |:------------: |:-------------------: |
+| HRNet-w32 + DarkPose | Top-Down|256x192  |  AP: 87.1 (业务数据集)| 单人2.9ms |[下载链接](https://bj.bcebos.com/v1/paddledet/models/pipeline/dark_hrnet_w32_256x192.pdparams) |[下载链接](https://bj.bcebos.com/v1/paddledet/models/pipeline/dark_hrnet_w32_256x192.zip) | 针对摔倒场景特别优化，该模型应用于[PP-Human](../../deploy/pphuman/README.md) |
+
+
 我们同时推出了基于LiteHRNet（Top-Down）针对移动端设备优化的实时关键点检测模型[PP-TinyPose](./tiny_pose/README.md), 欢迎体验。
+
+
 
 ## 快速开始
 
@@ -176,6 +185,7 @@ python deploy/python/mot_keypoint_unite_infer.py --mot_model_dir=output_inferenc
  跟踪模型导出教程请参考[文档](../mot/README.md)。
 
 ### 4、完整部署教程及Demo
+
 
 ​ 我们提供了PaddleInference(服务器端)、PaddleLite(移动端)、第三方部署(MNN、OpenVino)支持。无需依赖训练代码，deploy文件夹下相应文件夹提供独立完整部署代码。 详见 [部署文档](https://github.com/PaddlePaddle/PaddleDetection/blob/develop/deploy/README.md)介绍。
 
