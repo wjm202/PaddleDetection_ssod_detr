@@ -9,8 +9,6 @@ TrainReader:
     - DecodeNormResize:
         target_size: *input_size
         mosaic: True
-        # keep_ratio: True
-    #- BboxPixelXYXY2NormCXCYWH: {}
     - MosaicPerspective: {mosaic_prob: 1.0, target_size: 640} # x y w h
     #- LetterBox: {target_size: *input_size, auto: False, scaleup: False}
     #- Albumentations: {}

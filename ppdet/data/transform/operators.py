@@ -174,9 +174,6 @@ class RandomHSV(BaseOperator):
         return sample
 
 
-from IPython import embed
-
-
 @register_op
 class MosaicPerspective(BaseOperator):
     """
@@ -3868,10 +3865,8 @@ class LetterBox(BaseOperator):
 
 @register_op
 class DecodeNormResize(BaseOperator):
-    def __init__(self, target_size, keep_ratio=True, to_rgb=False,
-        mosaic=True):
+    def __init__(self, target_size, to_rgb=False, mosaic=True):
         super(DecodeNormResize, self).__init__()
-        self.keep_ratio = keep_ratio
         if not isinstance(target_size, (Integral, Sequence)):
             raise TypeError(
                 "Type of target_size is invalid. Must be Integer or List or Tuple, now is {}".
@@ -3915,7 +3910,6 @@ class DecodeNormResize(BaseOperator):
 
         # get resized img
         r = min(target_size[0] / im.shape[0], target_size[1] / im.shape[1])
-        # self.augment = True
         if r != 1:  # if sizes are not equal
             resized_img = cv2.resize(
                 im, (int(im.shape[1] * r), int(im.shape[0] * r)),
@@ -3923,7 +3917,7 @@ class DecodeNormResize(BaseOperator):
                 if (self.mosaic or r > 1) else cv2.INTER_AREA) ########## .astype(np.uint8)
         else:
             resized_img = im
-        #print('  im  load_resized_img   ',im.shape, im.sum(), resized_img.shape, resized_img.sum())
+
         h,w = resized_img.shape[:2]
         if self.to_rgb:
             resized_img = cv2.cvtColor(resized_img, cv2.COLOR_BGR2RGB)
@@ -3944,44 +3938,6 @@ class DecodeNormResize(BaseOperator):
         sample['gt_bbox'] = y
         return sample
 
-
     def apply(self, sample, context=None):
         sample = self.load_resized_img(sample, self.target_size)
-        # image = sample['image']
-        # im_shape = image.shape
-        # if self.keep_ratio: # always true
-        #     im_size_min = np.min(im_shape[0:2])
-        #     im_size_max = np.max(im_shape[0:2])
-        #
-        #     target_size_min = np.min(self.target_size)
-        #     target_size_max = np.max(self.target_size)
-        #
-        #     im_scale = min(target_size_min / im_size_min,
-        #                    target_size_max / im_size_max)
-        #
-        #     resize_h = im_scale * float(im_shape[0])
-        #     resize_w = im_scale * float(im_shape[1])
-        #
-        #     im_scale_x = im_scale
-        #     im_scale_y = im_scale
-        # else:
-        #     resize_h, resize_w = self.target_size
-        #     im_scale_y = resize_h / im_shape[0]
-        #     im_scale_x = resize_w / im_shape[1]
-        #
-        # sample['im_shape'] = np.asarray([resize_h, resize_w], dtype=np.float32)
-        # if 'scale_factor' in sample:
-        #     scale_factor = sample['scale_factor']
-        #     sample['scale_factor'] = np.asarray(
-        #         [scale_factor[0] * im_scale_y, scale_factor[1] * im_scale_x],
-        #         dtype=np.float32)
-        # else:
-        #     sample['scale_factor'] = np.asarray(
-        #         [im_scale_y, im_scale_x], dtype=np.float32)
-        
-        # # train reader
-        # if 'gt_bbox' in sample:
-        #     # norm_gt_box = sample['gt_bbox']
-        #     sample['gt_bbox'] *= before_r
-
         return sample
