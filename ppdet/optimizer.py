@@ -187,6 +187,32 @@ class LinearWarmup(object):
 
 
 @serializable
+class YOLOV5LRDecay(object):
+    def __init__(self, max_epochs=300, min_lr_ratio=0.01, use_warmup=True):
+        self.max_epochs = max_epochs
+        self.min_lr_ratio = min_lr_ratio
+        self.use_warmup = use_warmup
+
+    def __call__(self, base_lr=None, boundary=None, step_per_epoch=None, value=None):
+        assert base_lr is not None, "either base LR or values should be provided"
+
+        max_iters = self.max_epochs * int(step_per_epoch)
+        # if boundary is not None and value is not None:
+        warmup_iters = int(boundary[-1])  # len(boundary)
+
+        for i in range(warmup_iters + 1, max_iters):
+            boundary.append(i)
+            epoch_i = i // step_per_epoch-1
+            if epoch_i==2:
+                epoch_i+=1
+            decayed_lr = base_lr * (
+                (1 - epoch_i / self.max_epochs) *
+                (1.0 - self.min_lr_ratio) + self.min_lr_ratio)
+            value.append(decayed_lr)
+        return optimizer.lr.PiecewiseDecay(boundary, value)
+
+
+@serializable
 class BurninWarmup(object):
     """
     Warm up learning rate in burnin mode
@@ -251,21 +277,10 @@ class LearningRate(object):
 
     def __init__(self,
                  base_lr=0.01,
-                 schedulers=[PiecewiseDecay(), LinearWarmup()]):
+                 schedulers=[YOLOV5LRDecay(), LinearWarmup()]):
         super(LearningRate, self).__init__()
         self.base_lr = base_lr
-        self.schedulers = []
-
-        schedulers = copy.deepcopy(schedulers)
-        for sched in schedulers:
-            if isinstance(sched, dict):
-                # support dict sched instantiate
-                module = sys.modules[__name__]
-                type = sched.pop("name")
-                scheduler = getattr(module, type)(**sched)
-                self.schedulers.append(scheduler)
-            else:
-                self.schedulers.append(sched)
+        self.schedulers = schedulers
 
     def __call__(self, step_per_epoch):
         assert len(self.schedulers) >= 1
@@ -276,10 +291,11 @@ class LearningRate(object):
         # TODO: split warmup & decay
         # warmup
         boundary, value = self.schedulers[1](self.base_lr, step_per_epoch)
+        # boundary_iter = 3 * step_per_epoch
         # decay
-        decay_lr = self.schedulers[0](self.base_lr, boundary, value,
-                                      step_per_epoch)
-        return decay_lr
+        decay_lr_opt = self.schedulers[0](self.base_lr, boundary,
+                                      step_per_epoch,value)
+        return decay_lr_opt
 
 
 @register
@@ -331,7 +347,7 @@ class OptimizerBuilder():
             for group in param_groups:
                 assert isinstance(group,
                                   dict) and 'params' in group and isinstance(
-                                      group['params'], list), ''
+                    group['params'], list), ''
                 _params = {
                     n: p
                     for n, p in model.named_parameters()

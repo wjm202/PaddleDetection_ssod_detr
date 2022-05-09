@@ -45,6 +45,7 @@ from ppdet.data.source.sniper_coco import SniperCOCODataSet
 from ppdet.data.source.category import get_categories
 import ppdet.utils.stats as stats
 from ppdet.utils import profiler
+from ppdet.modeling.initializer import reset_initialized_parameter
 
 from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator
 from .export_utils import _dump_infer_config, _prune_input_spec
@@ -102,7 +103,10 @@ class Trainer(object):
             self.model = self.cfg.model
             self.is_loaded_weights = True
 
-        if cfg.architecture == 'YOLOX':
+        reset_initialized_parameter(self.model)
+        self.model.yolo_head._initialize_biases()
+
+        if cfg.architecture in ['YOLOX', 'YOLOv5']:
             for k, m in self.model.named_sublayers():
                 if isinstance(m, nn.BatchNorm2D):
                     m._epsilon = 1e-3  # for amp(fp16)
@@ -393,6 +397,8 @@ class Trainer(object):
             scaler = amp.GradScaler(
                 enable=self.cfg.use_gpu or self.cfg.use_npu,
                 init_loss_scaling=1024)
+        else:
+            scaler = amp.GradScaler(enable=False)
 
         self.status.update({
             'epoch_id': self.start_epoch,
@@ -414,6 +420,7 @@ class Trainer(object):
 
         self._compose_callback.on_train_begin(self.status)
 
+        nw = 3 * len(self.loader)
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -422,6 +429,18 @@ class Trainer(object):
             model.train()
             iter_tic = time.time()
             for step_id, data in enumerate(self.loader):
+                # if self.cfg.architecture == 'YOLOv5':
+                ni = len(self.loader) * epoch_id + step_id
+                # yolov5 Warmup
+                if ni <= nw:
+                    xi = [0, nw]
+                    self.optimizer._momentum = np.interp(ni, xi, [0.8, 0.937])
+                    self.optimizer._default_dict['momentum'] = np.interp(
+                        ni, xi, [0.8, 0.937])
+                # else:
+                #     self.optimizer._momentum = 0.937
+                #     self.optimizer._default_dict['momentum'] = 0.937
+
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
@@ -432,27 +451,43 @@ class Trainer(object):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
                         outputs = model(data)
-                        loss = outputs['loss']
-
+                    loss = outputs['loss']
+                    '''
                     # model backward
                     scaled_loss = scaler.scale(loss)
                     scaled_loss.backward()
                     # in dygraph mode, optimizer.minimize is equal to optimizer.step
                     scaler.minimize(self.optimizer, scaled_loss)
+                    '''
+                    self.optimizer.clear_grad()
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
                 else:
+                    '''
                     # model forward
                     outputs = model(data)
                     loss = outputs['loss']
                     # model backward
                     loss.backward()
                     self.optimizer.step()
+                    '''
+                    with amp.auto_cast(enable=False):
+                        outputs = model(data)
+                    loss = outputs['loss']
+                    #self.optimizer.clear_grad()
+                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
+                    self.optimizer.clear_grad()
+
                 curr_lr = self.optimizer.get_lr()
                 self.lr.step()
                 if self.cfg.get('unstructured_prune'):
                     self.pruner.step()
-                self.optimizer.clear_grad()
+                # self.optimizer.clear_grad()
                 self.status['learning_rate'] = curr_lr
-
+             
                 if self._nranks < 2 or self._local_rank == 0:
                     self.status['training_staus'].update(outputs)
 

@@ -1,15 +1,15 @@
-# Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved. 
-#   
-# Licensed under the Apache License, Version 2.0 (the "License");   
-# you may not use this file except in compliance with the License.  
-# You may obtain a copy of the License at   
-#   
-#     http://www.apache.org/licenses/LICENSE-2.0    
-# 
-# Unless required by applicable law or agreed to in writing, software   
-# distributed under the License is distributed on an "AS IS" BASIS, 
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  
-# See the License for the specific language governing permissions and   
+# Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
 # limitations under the License.
 
 import paddle
@@ -989,42 +989,69 @@ class PPYOLOPAN(nn.Layer):
         return [ShapeSpec(channels=c) for c in self._out_channels]
 
 
+class Upsample(nn.Layer):
+    # Upsampleing the layer
+    def __init__(self, size=None, scale_factor=None,
+                 mode='nearest', align_corners=False) -> None:
+        super(Upsample, self).__init__()
+        self.name = type(self).__name__
+        self.size = size
+        if isinstance(scale_factor, tuple):
+            self.scale_factor = tuple(float(factor) for factor in scale_factor)
+        else:
+            self.scale_factor = float(scale_factor) if scale_factor else None
+        self.mode = mode
+        self.align_corners = align_corners
+
+    def forward(self, input):
+        return F.interpolate(input, self.size, self.scale_factor, self.mode, self.align_corners)
+
+    def extra_repr(self) -> str:
+        if self.scale_factor is not None:
+            info = 'scale_factor=' + str(self.scale_factor)
+        else:
+            info = 'size=' + str(self.size)
+        info += ', mode=' + self.mode
+        return info
+
+
 @register
 @serializable
 class YOLOCSPPAN(nn.Layer):
     """
     YOLO CSP-PAN, used in YOLOv5 and YOLOX.
     """
-    __shared__ = ['depth_mult', 'act']
+    __shared__ = ['depth_factor', 'width_factor', 'act']
 
     def __init__(self,
-                 depth_mult=1.0,
+                 depth_factor=1.0,
+                 width_factor=1.0,
                  in_channels=[256, 512, 1024],
                  depthwise=False,
                  act='silu'):
         super(YOLOCSPPAN, self).__init__()
         self.in_channels = in_channels
-        self._out_channels = in_channels
+        self._out_channels = [int(x * width_factor) for x in in_channels]
         Conv = DWConv if depthwise else BaseConv
 
         self.upsample = nn.Upsample(scale_factor=2, mode="nearest")
-
+        #self.upsample = Upsample(scale_factor=2, mode="nearest") #F.interpolate(input, self.size, self.scale_factor, self.mode, self.align_corners)
         # top-down fpn
         self.lateral_convs = nn.LayerList()
         self.fpn_blocks = nn.LayerList()
         for idx in range(len(in_channels) - 1, 0, -1):
             self.lateral_convs.append(
                 BaseConv(
-                    int(in_channels[idx]),
-                    int(in_channels[idx - 1]),
+                    int(in_channels[idx] * width_factor),
+                    int(in_channels[idx - 1] * width_factor),
                     1,
                     1,
                     act=act))
             self.fpn_blocks.append(
                 CSPLayer(
-                    int(in_channels[idx - 1] * 2),
-                    int(in_channels[idx - 1]),
-                    round(3 * depth_mult),
+                    int(in_channels[idx - 1] * 2 * width_factor),
+                    int(in_channels[idx - 1] * width_factor),
+                    round(3 * depth_factor),
                     shortcut=False,
                     depthwise=depthwise,
                     act=act))
@@ -1035,23 +1062,22 @@ class YOLOCSPPAN(nn.Layer):
         for idx in range(len(in_channels) - 1):
             self.downsample_convs.append(
                 Conv(
-                    int(in_channels[idx]),
-                    int(in_channels[idx]),
+                    int(in_channels[idx] * width_factor),
+                    int(in_channels[idx] * width_factor),
                     3,
                     stride=2,
                     act=act))
             self.pan_blocks.append(
                 CSPLayer(
-                    int(in_channels[idx] * 2),
-                    int(in_channels[idx + 1]),
-                    round(3 * depth_mult),
+                    int(in_channels[idx] * 2 * width_factor),
+                    int(in_channels[idx + 1] * width_factor),
+                    round(3 * depth_factor),
                     shortcut=False,
                     depthwise=depthwise,
                     act=act))
 
     def forward(self, feats, for_mot=False):
         assert len(feats) == len(self.in_channels)
-
         # top-down fpn
         inner_outs = [feats[-1]]
         for idx in range(len(self.in_channels) - 1, 0, -1):
@@ -1061,10 +1087,11 @@ class YOLOCSPPAN(nn.Layer):
                 feat_heigh)
             inner_outs[0] = feat_heigh
 
-            upsample_feat = self.upsample(feat_heigh)
+            upsample_feat = self.upsample(feat_heigh) # can not work if odd
+            #upsample_feat = F.interpolate(feat_heigh, size=[feat_low.shape[2], feat_low.shape[3]], mode='nearest')
+
             inner_out = self.fpn_blocks[len(self.in_channels) - 1 - idx](
-                paddle.concat(
-                    [upsample_feat, feat_low], axis=1))
+                paddle.concat([upsample_feat, feat_low], axis=1))
             inner_outs.insert(0, inner_out)
 
         # bottom-up pan
@@ -1073,12 +1100,12 @@ class YOLOCSPPAN(nn.Layer):
             feat_low = outs[-1]
             feat_height = inner_outs[idx + 1]
             downsample_feat = self.downsample_convs[idx](feat_low)
-            out = self.pan_blocks[idx](paddle.concat(
-                [downsample_feat, feat_height], axis=1))
+            out = self.pan_blocks[idx](
+                paddle.concat([downsample_feat, feat_height], axis=1))
             outs.append(out)
 
         return outs
-
+    
     @classmethod
     def from_config(cls, cfg, input_shape):
         return {'in_channels': [i.channels for i in input_shape], }
