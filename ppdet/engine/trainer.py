@@ -45,6 +45,7 @@ from ppdet.data.source.sniper_coco import SniperCOCODataSet
 from ppdet.data.source.category import get_categories
 import ppdet.utils.stats as stats
 from ppdet.utils import profiler
+from ppdet.modeling.initializer import reset_initialized_parameter
 
 from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator
 from .export_utils import _dump_infer_config, _prune_input_spec
@@ -102,7 +103,11 @@ class Trainer(object):
             self.model = self.cfg.model
             self.is_loaded_weights = True
 
-        if cfg.architecture == 'YOLOX':
+        if self.cfg.architecture == 'YOLOv5':
+            reset_initialized_parameter(self.model)
+            self.model.yolo_head._initialize_biases()
+
+        if cfg.architecture in ['YOLOX', 'YOLOv5']:
             for k, m in self.model.named_sublayers():
                 if isinstance(m, nn.BatchNorm2D):
                     m._epsilon = 1e-3  # for amp(fp16)
@@ -393,6 +398,8 @@ class Trainer(object):
             scaler = amp.GradScaler(
                 enable=self.cfg.use_gpu or self.cfg.use_npu,
                 init_loss_scaling=1024)
+        else:
+            scaler = amp.GradScaler(enable=False)
 
         self.status.update({
             'epoch_id': self.start_epoch,
@@ -422,11 +429,24 @@ class Trainer(object):
             model.train()
             iter_tic = time.time()
             for step_id, data in enumerate(self.loader):
+                if self.cfg.architecture == 'YOLOv5':
+                    # TODO: YOLOv5 Warmup, always 3 epoch
+                    nw = 3 * len(self.loader)
+                    ni = len(self.loader) * epoch_id + step_id
+                    # yolov5 Warmup
+                    if ni <= nw:
+                        xi = [0, nw]
+                        self.optimizer._momentum = np.interp(ni, xi,
+                                                             [0.8, 0.937])
+                        self.optimizer._default_dict['momentum'] = np.interp(
+                            ni, xi, [0.8, 0.937])
+
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
                 data['epoch_id'] = epoch_id
+                data['num_gpus'] = self._nranks
 
                 if self.cfg.get('amp', False):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
