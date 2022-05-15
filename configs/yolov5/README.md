@@ -3,13 +3,13 @@
 ## Model Zoo
 ### YOLOv5 on COCO
 
-| 网络网络        | 输入尺寸   | 图片数/GPU | 学习率策略 |推理时间(fps) | Box AP |    下载链接       | 配置文件 |
-| :------------- | :------- | :-------: | :------: | :---------: | :-----: | :-------------: | :-----: |
-| YOLOv5-n        |  640     |    8      |   300e    |     ----    |  27.9  | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_n_300e_coco.pdparams) | [配置文件](./yolov5_n_300e_coco.yml) |
-| YOLOv5-s        |  640     |    8      |   300e    |     ----    |  36.8  | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_s_300e_coco.pdparams) | [配置文件](./yolov5_s_300e_coco.yml) |
-| YOLOv5-m        |  640     |    8      |   300e    |     ----    |  45.2  | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_m_300e_coco.pdparams) | [配置文件](./yolov5_m_300e_coco.yml) |
-| YOLOv5-l        |  640     |    8      |   300e    |     ----    |  48.5  | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_l_300e_coco.pdparams) | [配置文件](./yolov5_l_300e_coco.yml) |
-| YOLOv5-x        |  640     |    8      |   300e    |     ----    |  50.6  | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_x_300e_coco.pdparams) | [配置文件](./yolov5_x_300e_coco.yml) |
+| 网络网络        | 输入尺寸   | 图片数/GPU | 学习率策略 |推理时间(fps) |   mAP  |   AP50  |   下载链接       | 配置文件 |
+| :------------- | :------- | :-------: | :------: | :---------: | :-----: |:-----: | :-------------: | :-----: |
+| YOLOv5-n        |  640     |    8      |   300e    |     ----    |  28.0  | 45.7 | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_n_300e_coco.pdparams) | [配置文件](./yolov5_n_300e_coco.yml) |
+| YOLOv5-s        |  640     |    8      |   300e    |     ----    |  37.0  | 55.9 | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_s_300e_coco.pdparams) | [配置文件](./yolov5_s_300e_coco.yml) |
+| YOLOv5-m        |  640     |    8      |   300e    |     ----    |  45.3  | 63.8 | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_m_300e_coco.pdparams) | [配置文件](./yolov5_m_300e_coco.yml) |
+| YOLOv5-l        |  640     |    8      |   300e    |     ----    |  48.6  | 66.9 | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_l_300e_coco.pdparams) | [配置文件](./yolov5_l_300e_coco.yml) |
+| YOLOv5-x        |  640     |    8      |   300e    |     ----    |  50.6  | 68.7 | [下载链接](https://paddledet.bj.bcebos.com/models/yolov5_x_300e_coco.pdparams) | [配置文件](./yolov5_x_300e_coco.yml) |
 
 **注意:**
   - YOLOv5模型训练使用COCO train2017作为训练集，Box AP为在COCO val2017上的`mAP(IoU=0.5:0.95)`结果；
