@@ -44,10 +44,11 @@ from ppdet.metrics import RBoxMetric, JDEDetMetric, SNIPERCOCOMetric
 from ppdet.data.source.sniper_coco import SniperCOCODataSet
 from ppdet.data.source.category import get_categories
 import ppdet.utils.stats as stats
+from ppdet.utils.fuse_utils import fuse_conv_bn
 from ppdet.utils import profiler
 from ppdet.modeling.initializer import reset_initialized_parameter
 
-from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator
+from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator, WandbCallback
 from .export_utils import _dump_infer_config, _prune_input_spec
 
 from ppdet.utils.logger import setup_logger
@@ -68,11 +69,13 @@ class Trainer(object):
         self.is_loaded_weights = False
 
         # build data loader
+        capital_mode = self.mode.capitalize()
         if cfg.architecture in MOT_ARCH and self.mode in ['eval', 'test']:
-            self.dataset = create('{}MOTDataset'.format(self.mode.capitalize(
-            )))()
+            self.dataset = self.cfg['{}MOTDataset'.format(
+                capital_mode)] = create('{}MOTDataset'.format(capital_mode))()
         else:
-            self.dataset = create('{}Dataset'.format(self.mode.capitalize()))()
+            self.dataset = self.cfg['{}Dataset'.format(capital_mode)] = create(
+                '{}Dataset'.format(capital_mode))()
 
         if cfg.architecture == 'DeepSORT' and self.mode == 'train':
             logger.error('DeepSORT has no need of training on mot dataset.')
@@ -83,7 +86,7 @@ class Trainer(object):
             self.dataset.set_images(images)
 
         if self.mode == 'train':
-            self.loader = create('{}Reader'.format(self.mode.capitalize()))(
+            self.loader = create('{}Reader'.format(capital_mode))(
                 self.dataset, cfg.worker_num)
 
         if cfg.architecture == 'JDE' and self.mode == 'train':
@@ -187,6 +190,8 @@ class Trainer(object):
                 self._callbacks.append(VisualDLWriter(self))
             if self.cfg.get('save_proposals', False):
                 self._callbacks.append(SniperProposalsGenerator(self))
+            if self.cfg.get('use_wandb', False) or 'wandb' in self.cfg:
+                self._callbacks.append(WandbCallback(self))
             self._compose_callback = ComposeCallback(self._callbacks)
         elif self.mode == 'eval':
             self._callbacks = [LogPrinter(self)]
@@ -207,7 +212,7 @@ class Trainer(object):
         classwise = self.cfg['classwise'] if 'classwise' in self.cfg else False
         if self.cfg.metric == 'COCO' or self.cfg.metric == "SNIPERCOCO":
             # TODO: bias should be unified
-            bias = self.cfg['bias'] if 'bias' in self.cfg else 0
+            bias = 1 if self.cfg.get('bias', False) else 0
             output_eval = self.cfg['output_eval'] \
                 if 'output_eval' in self.cfg else None
             save_prediction_only = self.cfg.get('save_prediction_only', False)
@@ -376,6 +381,9 @@ class Trainer(object):
     def train(self, validate=False):
         assert self.mode == 'train', "Model not in 'train' mode"
         Init_mark = False
+        if validate:
+            self.cfg['EvalDataset'] = self.cfg.EvalDataset = create(
+                "EvalDataset")()
 
         sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
                    self.cfg.use_gpu and self._nranks > 1)
@@ -783,6 +791,11 @@ class Trainer(object):
 
     def export(self, output_dir='output_inference'):
         self.model.eval()
+
+        if hasattr(self.cfg, 'export') and 'fuse_conv_bn' in self.cfg[
+                'export'] and self.cfg['export']['fuse_conv_bn']:
+            self.model = fuse_conv_bn(self.model)
+
         model_name = os.path.splitext(os.path.split(self.cfg.filename)[-1])[0]
         save_dir = os.path.join(output_dir, model_name)
         if not os.path.exists(save_dir):
@@ -792,7 +805,7 @@ class Trainer(object):
             save_dir)
 
         # dy2st and save model
-        if 'slim' not in self.cfg or self.cfg['slim_type'] != 'QAT':
+        if 'slim' not in self.cfg or 'QAT' not in self.cfg['slim_type']:
             paddle.jit.save(
                 static_model,
                 os.path.join(save_dir, 'model'),

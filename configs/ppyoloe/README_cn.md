@@ -39,7 +39,7 @@ PP-YOLOE由以下方法组成
 - 参考[速度测试](#速度测试)以复现PP-YOLOE推理速度测试结果。
 - 如果你设置了`--run_benchmark=True`, 你首先需要安装以下依赖`pip install pynvml psutil GPUtil`。
 
-## 使用教程
+## 使用说明
 
 ### 训练
 
@@ -138,6 +138,7 @@ PP-YOLOE可以使用以下方式进行部署：
   - Paddle Inference [Python](../../deploy/python) & [C++](../../deploy/cpp)
   - [Paddle-TensorRT](../../deploy/TENSOR_RT.md)
   - [PaddleServing](https://github.com/PaddlePaddle/Serving)
+  - [PaddleSlim模型量化](../slim)
 
 接下来，我们将介绍PP-YOLOE如何使用Paddle Inference在TensorRT FP16模式下部署
 
