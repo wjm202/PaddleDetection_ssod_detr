@@ -26,6 +26,7 @@ from ..backbones.csp_darknet import BaseConv, DWConv
 from ..losses import IouLoss
 from ppdet.modeling.assigners.simota_assigner import SimOTAAssigner
 from ppdet.modeling.bbox_utils import bbox_overlaps
+from ppdet.modeling.layers import MultiClassNMS
 
 __all__ = ['YOLOv3Head', 'YOLOXHead', 'YOLOv5Head']
 
@@ -406,7 +407,7 @@ class YOLOXHead(nn.Layer):
 
 @register
 class YOLOv5Head(nn.Layer):
-    __shared__ = ['num_classes', 'data_format']
+    __shared__ = ['num_classes', 'data_format', 'trt', 'exclude_nms']
     __inject__ = ['loss', 'nms']
 
     def __init__(self,
@@ -418,7 +419,9 @@ class YOLOv5Head(nn.Layer):
                  stride=[8, 16, 32],
                  loss='YOLOv5Loss',
                  data_format='NCHW',
-                 nms='MultiClassNMS'):
+                 nms='MultiClassNMS',
+                 trt=False,
+                 exclude_nms=False):
         """
         Head for YOLOv5
 
@@ -445,6 +448,9 @@ class YOLOv5Head(nn.Layer):
         self.loss = loss
         self.data_format = data_format
         self.nms = nms
+        if isinstance(self.nms, MultiClassNMS) and trt:
+            self.nms.trt = trt
+        self.exclude_nms = exclude_nms
 
         self.num_anchor = len(self.anchors[0])  # self.na
         self.num_out_ch = self.num_classes + 5  # self.no
@@ -527,8 +533,12 @@ class YOLOv5Head(nn.Layer):
         scale_factor = scale_factor.flip(-1).tile([1, 2]).unsqueeze(1)
         pred_bboxes /= scale_factor
 
-        bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
-        return bbox_pred, bbox_num
+        if self.exclude_nms:
+            # `exclude_nms=True` just use in benchmark
+            return pred_bboxes.sum(), pred_scores.sum()
+        else:
+            bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+            return bbox_pred, bbox_num
 
     def postprocessing_by_level(self, head_out, stride, anchor, ny, nx):
         grid, anchor_grid = self.make_grid(nx, ny, anchor)

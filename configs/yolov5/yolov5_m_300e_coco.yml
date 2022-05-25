@@ -5,12 +5,9 @@ _BASE_: [
   '_base_/yolov5_cspdarknet.yml',
   '_base_/yolov5_reader.yml',
 ]
-depth_mult: 1.33
-width_mult: 1.25
+depth_mult: 0.67
+width_mult: 0.75
 
 log_iter: 100
 snapshot_epoch: 10
-weights: output/yolov5_x_coco/model_final
-
-TrainReader:
-  batch_size: 2
+weights: output/yolov5_m_300e_coco/model_final
