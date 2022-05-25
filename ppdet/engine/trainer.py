@@ -398,6 +398,9 @@ class Trainer(object):
                 enable=self.cfg.use_gpu or self.cfg.use_npu,
                 init_loss_scaling=self.cfg.get('init_loss_scaling', 1024))
             model = paddle.amp.decorate(models=model, level=amp_level)
+        else:
+            scaler = amp.GradScaler(enable=False)
+
         # get distributed model
         if self.cfg.get('fleet', False):
             model = fleet.distributed_model(model)
@@ -407,14 +410,6 @@ class Trainer(object):
                 'find_unused_parameters'] if 'find_unused_parameters' in self.cfg else False
             model = paddle.DataParallel(
                 self.model, find_unused_parameters=find_unused_parameters)
-
-        # enabel auto mixed precision mode
-        if self.cfg.get('amp', False):
-            scaler = amp.GradScaler(
-                enable=self.cfg.use_gpu or self.cfg.use_npu,
-                init_loss_scaling=1024)
-        else:
-            scaler = amp.GradScaler(enable=False)
 
         self.status.update({
             'epoch_id': self.start_epoch,
