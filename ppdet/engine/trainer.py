@@ -399,7 +399,7 @@ class Trainer(object):
                 init_loss_scaling=self.cfg.get('init_loss_scaling', 1024))
             model = paddle.amp.decorate(models=model, level=amp_level)
         else:
-            scaler = amp.GradScaler(enable=False)
+            scaler = paddle.amp.GradScaler(enable=False)
 
         # get distributed model
         if self.cfg.get('fleet', False):
