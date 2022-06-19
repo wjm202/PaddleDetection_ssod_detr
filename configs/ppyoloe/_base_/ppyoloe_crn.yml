@@ -21,6 +21,8 @@ CustomCSPPAN:
   block_num: 3
   act: 'swish'
   spp: true
+  cbam: False
+  ca: False
 
 PPYOLOEHead:
   fpn_strides: [32, 16, 8]

@@ -1361,3 +1361,90 @@ class ConvMixer(nn.Layer):
                         dim, dim, kernel_size, groups=dim, padding="same"))),
                 ActBn(nn.Conv2D(dim, dim, 1))) for i in range(depth)
         ])
+
+
+class CAM(nn.Layer):
+    """Channel Attention Module of CBAM"""
+
+    def __init__(self, in_channels, ratio=16):
+        super(CAM, self).__init__()
+        mid_channels = in_channels // ratio
+        self.avg_pool = nn.AdaptiveAvgPool2D(1)
+        self.max_pool = nn.AdaptiveAvgPool2D(1)
+        self.shared_MLP = nn.Sequential(
+            #nn.Linear(in_channels, mid_channels),
+            nn.Conv2D(
+                in_channels, mid_channels, 1, bias_attr=False),
+            nn.ReLU(),
+            #nn.Linear(mid_channels, in_channels),
+            nn.Conv2D(
+                mid_channels, in_channels, 1, bias_attr=False), )
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = self.shared_MLP(self.avg_pool(x))
+        max_out = self.shared_MLP(self.max_pool(x))
+        return self.sigmoid(avg_out + max_out)
+
+
+class SAM(nn.Layer):
+    """Spatial Attention Module of CBAM"""
+
+    def __init__(self):
+        super(SAM, self).__init__()
+        self.conv2d = nn.Conv2D(2, 1, kernel_size=7, stride=1, padding=3)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        avg_out = paddle.mean(x, axis=1, keepdim=True)
+        max_out = paddle.max(x, axis=1, keepdim=True)
+        out = paddle.concat([avg_out, max_out], axis=1)
+        out = self.sigmoid(self.conv2d(out))
+        return out
+
+
+class CBAM(nn.Layer):
+    """CBAM: Convolutional Block Attention Module"""
+
+    def __init__(self, in_channels):
+        super(CBAM, self).__init__()
+        self.channel_attention = CAM(in_channels)
+        self.spatial_attention = SAM()
+
+    def forward(self, x):
+        out = self.channel_attention(x) * x
+        out = self.spatial_attention(out) * out
+        return out
+
+
+class CoordAtt(nn.Layer):
+    def __init__(self, inp, oup, reduction=32):
+        super(CoordAtt, self).__init__()
+        self.pool_h = nn.AdaptiveAvgPool2D((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2D((1, None))
+
+        mip = max(8, inp // reduction)
+        self.conv1 = nn.Conv2D(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2D(mip)
+        #self.act = nn.hard_swish() # #h_swish()
+        self.conv_h = nn.Conv2D(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2D(mip, oup, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        identity = x
+        h, w = x.shape[2:]
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).transpose([0, 1, 3, 2])
+
+        y = paddle.concat([x_h, x_w], axis=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = F.hardswish(y)  # self.act(y)
+
+        x_h, x_w = paddle.split(y, [h, w], axis=2)
+        x_w = x_w.transpose([0, 1, 3, 2])
+
+        a_h = F.sigmoid(self.conv_h(x_h))
+        a_w = F.sigmoid(self.conv_w(x_w))
+        out = identity * a_w * a_h
+        return out

@@ -20,6 +20,8 @@ from ppdet.modeling.layers import DropBlock
 from ppdet.modeling.ops import get_act_fn
 from ..backbones.cspresnet import ConvBNLayer, BasicBlock
 from ..shape_spec import ShapeSpec
+from paddle.nn.initializer import Constant
+from ..layers import CBAM, CoordAtt
 
 __all__ = ['CustomCSPPAN']
 
@@ -93,23 +95,26 @@ class CSPStage(nn.Layer):
 class CustomCSPPAN(nn.Layer):
     __shared__ = ['norm_type', 'data_format', 'width_mult', 'depth_mult', 'trt']
 
-    def __init__(self,
-                 in_channels=[256, 512, 1024],
-                 out_channels=[1024, 512, 256],
-                 norm_type='bn',
-                 act='leaky',
-                 stage_fn='CSPStage',
-                 block_fn='BasicBlock',
-                 stage_num=1,
-                 block_num=3,
-                 drop_block=False,
-                 block_size=3,
-                 keep_prob=0.9,
-                 spp=False,
-                 data_format='NCHW',
-                 width_mult=1.0,
-                 depth_mult=1.0,
-                 trt=False):
+    def __init__(
+            self,
+            in_channels=[256, 512, 1024],
+            out_channels=[1024, 512, 256],
+            norm_type='bn',
+            act='leaky',
+            stage_fn='CSPStage',
+            block_fn='BasicBlock',
+            stage_num=1,
+            block_num=3,
+            drop_block=False,
+            block_size=3,
+            keep_prob=0.9,
+            spp=False,
+            cbam=False,
+            ca=False,  ###
+            data_format='NCHW',
+            width_mult=1.0,
+            depth_mult=1.0,
+            trt=False):
 
         super(CustomCSPPAN, self).__init__()
         out_channels = [max(round(c * width_mult), 1) for c in out_channels]
@@ -121,6 +126,19 @@ class CustomCSPPAN(nn.Layer):
         self.data_format = data_format
         self._out_channels = out_channels
         in_channels = in_channels[::-1]
+
+        self.cbam = cbam
+        self.ca = ca
+        # if self.cbam or self.ca:
+        #     self.fpn_att = nn.LayerList()
+        #     for c in [448]: #[in_channels[0]]:
+        #         if self.cbam:
+        #             self.fpn_att.append(CBAM(c))
+        #         elif self.ca:
+        #             self.fpn_att.append(CoordAtt(c, c))
+        #         else:
+        #             raise ValueError("NOT impelete")
+
         fpn_stages = []
         fpn_routes = []
         for i, (ch_in, ch_out) in enumerate(zip(in_channels, out_channels)):
@@ -182,6 +200,7 @@ class CustomCSPPAN(nn.Layer):
                                    block_num,
                                    act=act,
                                    spp=False))
+                #spp=True)) #
             if drop_block:
                 stage.add_sublayer('drop', DropBlock(block_size, keep_prob))
 
@@ -190,13 +209,31 @@ class CustomCSPPAN(nn.Layer):
         self.pan_stages = nn.LayerList(pan_stages[::-1])
         self.pan_routes = nn.LayerList(pan_routes[::-1])
 
+        #self.fpn_weight = self.create_parameter(
+        #    shape=[2], default_initializer=Constant(1.))
+        #self.pan_weight = self.create_parameter(
+        #    shape=[2], default_initializer=Constant(1.))
+
+        if self.cbam or self.ca:
+            self.pan_att = nn.LayerList()
+            for c in self._out_channels:
+                if self.cbam:
+                    self.pan_att.append(CBAM(c))
+                elif self.ca:
+                    self.pan_att.append(CoordAtt(c, c))
+                else:
+                    raise ValueError("NOT impelete")
+
     def forward(self, blocks, for_mot=False):
-        blocks = blocks[::-1]
+        blocks = blocks[::
+                        -1]  # [8, 1024, 18, 18] [8, 512, 36, 36] [8, 256, 72, 72]
         fpn_feats = []
 
         for i, block in enumerate(blocks):
             if i > 0:
                 block = paddle.concat([route, block], axis=1)
+                # if i == len(blocks)-1 and (self.ca or self.cbam):
+                #     block = self.fpn_att[0](block)
             route = self.fpn_stages[i](block)
             fpn_feats.append(route)
 
@@ -204,17 +241,25 @@ class CustomCSPPAN(nn.Layer):
                 route = self.fpn_routes[i](route)
                 route = F.interpolate(
                     route, scale_factor=2., data_format=self.data_format)
+                #route = route * self.fpn_weight[i]
 
         pan_feats = [fpn_feats[-1], ]
         route = fpn_feats[-1]
         for i in reversed(range(self.num_blocks - 1)):
             block = fpn_feats[i]
             route = self.pan_routes[i](route)
+            #route = route * self.pan_weight[i]
             block = paddle.concat([route, block], axis=1)
             route = self.pan_stages[i](block)
             pan_feats.append(route)
 
-        return pan_feats[::-1]
+        if self.cbam or self.ca:
+            att_feats = pan_feats[::-1]  # [8, 768, 22, 22] .. [8, 192, 88, 88]
+            for i, att in enumerate(self.pan_att):
+                att_feats[i] = att(att_feats[i])
+            return att_feats
+        else:
+            return pan_feats[::-1]
 
     @classmethod
     def from_config(cls, cfg, input_shape):
