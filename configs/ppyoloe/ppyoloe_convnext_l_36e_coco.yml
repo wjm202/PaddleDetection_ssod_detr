@@ -1,0 +1,36 @@
+_BASE_: [
+  '../datasets/coco_detection.yml',
+  '../runtime.yml',
+  './_base_/ppyoloe_convnext.yml',
+  './_base_/ppyoloe_reader.yml',
+]
+
+log_iter: 100
+snapshot_epoch: 3
+weights: output/ppyoloe_convnext_l_36e_coco/model_final
+
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/convnext_tiny_1k_224_ema.pdparams
+depth_mult: 1.0
+width_mult: 1.0
+
+TrainReader:
+  batch_size: 8
+
+epoch: 36
+
+PPYOLOEHead:
+  static_assigner_epoch: 4
+
+LearningRate:
+  base_lr: 0.0002
+  schedulers:
+  - !PiecewiseDecay
+    gamma: 0.1
+    milestones: [400]
+    use_warmup: false
+
+OptimizerBuilder:
+  regularizer: false
+  optimizer:
+    type: AdamW
+    weight_decay: 0.0005

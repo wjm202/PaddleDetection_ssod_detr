@@ -29,7 +29,7 @@ import numpy as np
 
 from ppdet.core.workspace import register, serializable
 from ..shape_spec import ShapeSpec
-from .transformer_utils import DropPath, trunc_normal_
+from .transformer_utils import DropPath, trunc_normal_, zeros_
 
 __all__ = ['ConvNeXt']
 
@@ -122,7 +122,6 @@ class ConvNeXt(nn.Layer):
     r""" ConvNeXt
         A Pypaddle impl of : `A ConvNet for the 2020s`  -
           https://arxiv.org/pdf/2201.03545.pdf
-
     Args:
         in_chans (int): Number of input image channels. Default: 3
         depths (tuple(int)): Number of blocks at each stage. Default: [3, 3, 9, 3]
@@ -201,8 +200,8 @@ class ConvNeXt(nn.Layer):
 
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv2D, nn.Linear)):
-            trunc_normal_(m.weight, std=.02)
-            nn.init.constant_(m.bias, 0)
+            trunc_normal_(m.weight)
+            zeros_(m.bias)
 
     def forward_features(self, x):
         output = []
