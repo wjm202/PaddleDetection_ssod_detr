@@ -1,7 +1,6 @@
 _BASE_: [
   '../datasets/visdrone_detection.yml',
   '../runtime.yml',
-  './_base_/optimizer_300e.yml',
   './_base_/yolox_convnext.yml',
   './_base_/yolox_reader.yml'
 ]
