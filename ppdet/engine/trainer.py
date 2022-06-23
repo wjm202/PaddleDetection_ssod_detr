@@ -393,7 +393,7 @@ class Trainer(object):
             scaler = paddle.amp.GradScaler(
                 enable=self.cfg.use_gpu or self.cfg.use_npu,
                 init_loss_scaling=self.cfg.get('init_loss_scaling', 1024))
-            model = paddle.amp.decorate(models=model, level=amp_level)
+            #model = paddle.amp.decorate(models=model, level=amp_level)
         # get distributed model
         if self.cfg.get('fleet', False):
             model = fleet.distributed_model(model)

@@ -9,10 +9,26 @@ depth_mult: 0.33
 width_mult: 0.50
 
 log_iter: 100
-snapshot_epoch: 10
+snapshot_epoch: 5
 weights: output/yolox_convnext_s_300e_coco/model_final
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/convnext_tiny_1k_224_ema.pdparams
 
 
+TrainReader:
+  batch_size: 8
+  mosaic_epoch: 30
+
+YOLOXHead:
+  l1_epoch: 20
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 1000
+    keep_top_k: 100
+    score_threshold: 0.01
+    nms_threshold: 0.7
+
+
+epoch: 36
 LearningRate:
   base_lr: 0.0002
   schedulers:

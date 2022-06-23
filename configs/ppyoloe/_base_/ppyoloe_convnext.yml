@@ -9,10 +9,9 @@ YOLOv3:
   post_process: ~
 
 ConvNeXt:
-  in_chans: 3
   depths: [3, 3, 9, 3]
   dims: [96, 192, 384, 768]
-  drop_path_rate: 0.1
-  head_init_scale: 1.
   return_idx: [1, 2, 3]
+  drop_path_rate: 0.4
+  layer_scale_init_value: 1.0
   pretrained: https://paddledet.bj.bcebos.com/models/pretrained/convnext_tiny_1k_224_ema.pdparams
