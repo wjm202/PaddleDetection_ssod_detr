@@ -18,4 +18,13 @@ CustomCSPPAN:
   out_channels: [768, 384, 192, 64]
 
 PPYOLOEHead:
-  fpn_strides: [32, 16, 8, 4]
+  static_assigner_epoch: -1
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 1000
+    keep_top_k: 100
+    score_threshold: 0.01
+    nms_threshold: 0.6
+
+PPYOLOEHead:
+  fpn_strides: [4] #[32, 16, 8]

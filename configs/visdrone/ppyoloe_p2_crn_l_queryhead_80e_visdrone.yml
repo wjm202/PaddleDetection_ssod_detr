@@ -1,0 +1,45 @@
+_BASE_: [
+  'ppyoloe_crn_l_80e_visdrone.yml',
+]
+weights: output/ppyoloe_p2_crn_l_80e_visdrone/model_final
+
+pretrain_weights: https://paddledet.bj.bcebos.com/models/ppyoloe_crn_l_300e_coco.pdparams
+
+TrainReader:
+  batch_size: 4
+
+LearningRate:
+  base_lr: 0.005
+
+
+CSPResNet:
+  return_idx: [0, 1, 2, 3]
+
+CustomCSPPAN:
+  out_channels: [768, 384, 192, 64]
+
+PPYOLOEHead:
+  fpn_strides: [32, 16, 8]
+  grid_cell_scale: 5.0
+  grid_cell_offset: 0.5
+  static_assigner_epoch: 100
+  use_varifocal_loss: True
+  with_query: True #
+  loss_weight: {class: 1.0, iou: 2.5, dfl: 0.5, query: 10.0}
+  static_assigner:
+    name: ATSSAssigner
+    topk: 9
+  assigner:
+    name: TaskAlignedAssigner
+    topk: 13
+    alpha: 1.0
+    beta: 6.0
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 10000
+    keep_top_k: 300
+    score_threshold: 0.01
+    nms_threshold: 0.7
+
+PPYOLOEHead:
+  fpn_strides: [32, 16, 8, 4]

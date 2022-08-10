@@ -16,7 +16,7 @@ import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
 from ppdet.core.workspace import register
-
+from IPython import embed
 from ..bbox_utils import batch_distance2bbox
 from ..losses import GIoULoss
 from ..initializer import bias_init_with_prob, constant_, normal_
@@ -63,6 +63,7 @@ class PPYOLOEHead(nn.Layer):
                  assigner='TaskAlignedAssigner',
                  nms='MultiClassNMS',
                  eval_size=None,
+                 with_query=False,
                  loss_weight={
                      'class': 1.0,
                      'iou': 2.5,
@@ -79,6 +80,7 @@ class PPYOLOEHead(nn.Layer):
         self.grid_cell_offset = grid_cell_offset
         self.reg_max = reg_max
         self.iou_loss = GIoULoss()
+        self.with_query = with_query
         self.loss_weight = loss_weight
         self.use_varifocal_loss = use_varifocal_loss
         self.eval_size = eval_size
@@ -93,22 +95,33 @@ class PPYOLOEHead(nn.Layer):
         # stem
         self.stem_cls = nn.LayerList()
         self.stem_reg = nn.LayerList()
+        if self.with_query:
+            self.stem_query = nn.LayerList()
+
         act = get_act_fn(
             act, trt=trt) if act is None or isinstance(act,
                                                        (str, dict)) else act
-        for in_c in self.in_channels:
+        for in_c in self.in_channels[::-1]:
             self.stem_cls.append(ESEAttn(in_c, act=act))
             self.stem_reg.append(ESEAttn(in_c, act=act))
+            if self.with_query:
+                self.stem_query.append(ESEAttn(in_c, act=act))
         # pred head
         self.pred_cls = nn.LayerList()
         self.pred_reg = nn.LayerList()
-        for in_c in self.in_channels:
+        if self.with_query:
+            self.pred_query = nn.LayerList()
+        for in_c in self.in_channels[::-1]:
             self.pred_cls.append(
                 nn.Conv2D(
                     in_c, self.num_classes, 3, padding=1))
             self.pred_reg.append(
                 nn.Conv2D(
                     in_c, 4 * (self.reg_max + 1), 3, padding=1))
+            if self.with_query:
+                self.pred_query.append(
+                    nn.Conv2D(
+                        in_c, 4 * (self.reg_max + 1), 3, padding=1))
         # projection conv
         self.proj_conv = nn.Conv2D(self.reg_max + 1, 1, 1, bias_attr=False)
         self.proj_conv.skip_quant = True
@@ -125,6 +138,10 @@ class PPYOLOEHead(nn.Layer):
             constant_(cls_.bias, bias_cls)
             constant_(reg_.weight)
             constant_(reg_.bias, 1.0)
+        if self.with_query:
+            for query_ in self.pred_query:
+                constant_(query_.weight)
+                constant_(query_.bias, 1.0) 
 
         self.proj = paddle.linspace(0, self.reg_max, self.reg_max + 1)
         self.proj_conv.weight.set_value(
@@ -143,22 +160,35 @@ class PPYOLOEHead(nn.Layer):
                 self.grid_cell_offset)
 
         cls_score_list, reg_distri_list = [], []
+        if self.with_query:
+            query_distri_list = []
         for i, feat in enumerate(feats):
             avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
             cls_logit = self.pred_cls[i](self.stem_cls[i](feat, avg_feat) +
                                          feat)
             reg_distri = self.pred_reg[i](self.stem_reg[i](feat, avg_feat))
+            if self.with_query:
+                query_distri = self.pred_query[i](self.stem_query[i](feat, avg_feat))
             # cls and reg
             cls_score = F.sigmoid(cls_logit)
             cls_score_list.append(cls_score.flatten(2).transpose([0, 2, 1]))
             reg_distri_list.append(reg_distri.flatten(2).transpose([0, 2, 1]))
+            if self.with_query:
+                query_distri_list.append(query_distri.flatten(2).transpose([0, 2, 1]))
+
         cls_score_list = paddle.concat(cls_score_list, axis=1)
         reg_distri_list = paddle.concat(reg_distri_list, axis=1)
-
-        return self.get_loss([
-            cls_score_list, reg_distri_list, anchors, anchor_points,
-            num_anchors_list, stride_tensor
-        ], targets)
+        if self.with_query:
+            query_distri_list = paddle.concat(query_distri_list, axis=1)
+            return self.get_loss([
+                cls_score_list, reg_distri_list, anchors, anchor_points,
+                num_anchors_list, stride_tensor
+            ], targets, query_distri_list)
+        else:
+            return self.get_loss([
+                cls_score_list, reg_distri_list, anchors, anchor_points,
+                num_anchors_list, stride_tensor
+            ], targets)
 
     def _generate_anchors(self, feats=None):
         # just use in eval time
@@ -190,13 +220,22 @@ class PPYOLOEHead(nn.Layer):
         else:
             anchor_points, stride_tensor = self._generate_anchors(feats)
         cls_score_list, reg_dist_list = [], []
+
+        # self.pred_cls = self.pred_cls[::-1]
+        # self.pred_reg = self.pred_reg[::-1]
+        # self.stem_cls = self.stem_cls[::-1]
+        # self.stem_reg = self.stem_reg[::-1]
+        #self.proj_conv = self.proj_conv[::-1]
         for i, feat in enumerate(feats):
             b, _, h, w = feat.shape
             l = h * w
             avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
-            cls_logit = self.pred_cls[i](self.stem_cls[i](feat, avg_feat) +
-                                         feat)
+            cls_logit = self.pred_cls[i](self.stem_cls[i](feat, avg_feat) + feat)
             reg_dist = self.pred_reg[i](self.stem_reg[i](feat, avg_feat))
+            if self.with_query:
+                query_dist = self.pred_query[i](self.stem_query[i](feat, avg_feat))
+                reg_dist += query_dist
+
             reg_dist = reg_dist.reshape([-1, 4, self.reg_max + 1, l]).transpose(
                 [0, 2, 1, 3])
             reg_dist = self.proj_conv(F.softmax(reg_dist, axis=1))
@@ -211,6 +250,8 @@ class PPYOLOEHead(nn.Layer):
         return cls_score_list, reg_dist_list, anchor_points, stride_tensor
 
     def forward(self, feats, targets=None):
+        # [2, 768, 20, 20] [2, 384, 40, 40] [2, 192, 80, 80] [2, 64, 160, 160]
+        feats = [feats[-1]]
         assert len(feats) == len(self.fpn_strides), \
             "The size of feats is not equal to size of fpn_strides"
 
