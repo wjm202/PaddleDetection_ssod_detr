@@ -235,11 +235,14 @@ class TrainReader(BaseDataLoader):
 
 
 from IPython import embed
+
+
 class SemiBaseDataLoader(BaseDataLoader):
     __shared__ = ['num_classes']
 
     def __init__(self,
                  sample_transforms=[],
+                 strong_sample_transforms=[],
                  batch_transforms=[],
                  batch_size=1,
                  shuffle=True,
@@ -247,20 +250,27 @@ class SemiBaseDataLoader(BaseDataLoader):
                  num_classes=80,
                  collate_batch=True,
                  **kwargs):
-        super(SemiBaseDataLoader, self).__init__(sample_transforms, batch_transforms,
-                                          batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, **kwargs)
+        super(SemiBaseDataLoader, self).__init__(
+            sample_transforms, batch_transforms, batch_size, shuffle, drop_last,
+            num_classes, collate_batch, **kwargs)
+        # new added
+        self._strong_batch_transforms = Compose(
+            strong_sample_transforms, num_classes=num_classes)
 
-    def __call__(self,
-                 dataset,
-                 worker_num,
-                 batch_sampler=None,
-                 return_list=False):
+    def __call__(
+            self,
+            dataset,
+            worker_num,
+            strong_aug=False,  # new added
+            batch_sampler=None,
+            return_list=False):
         self.dataset = dataset
         self.dataset.check_or_download_dataset()
         self.dataset.parse_dataset()
-        self.dataset.parse_dataset_semi() # new added
+        self.dataset.parse_dataset_semi()  # new added
         # get data
+        if strong_aug:
+            self._sample_transforms = self._strong_batch_transforms  # new added
         self.dataset.set_transform(self._sample_transforms)
         # set kwargs
         self.dataset.set_kwargs(**self.kwargs)
@@ -304,6 +314,7 @@ class SupTrainReader(SemiBaseDataLoader):
 
     def __init__(self,
                  sample_transforms=[],
+                 strong_sample_transforms=[],
                  batch_transforms=[],
                  batch_size=1,
                  shuffle=True,
@@ -311,9 +322,10 @@ class SupTrainReader(SemiBaseDataLoader):
                  num_classes=80,
                  collate_batch=True,
                  **kwargs):
-        super(SupTrainReader, self).__init__(sample_transforms, batch_transforms,
-                                          batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, **kwargs)
+        super(SupTrainReader, self).__init__(
+            sample_transforms, strong_sample_transforms, batch_transforms,
+            batch_size, shuffle, drop_last, num_classes, collate_batch,
+            **kwargs)
 
 
 @register
@@ -322,6 +334,7 @@ class UnsupTrainReader(SemiBaseDataLoader):
 
     def __init__(self,
                  sample_transforms=[],
+                 strong_sample_transforms=[],
                  batch_transforms=[],
                  batch_size=1,
                  shuffle=True,
@@ -329,9 +342,10 @@ class UnsupTrainReader(SemiBaseDataLoader):
                  num_classes=80,
                  collate_batch=True,
                  **kwargs):
-        super(UnsupTrainReader, self).__init__(sample_transforms, batch_transforms,
-                                          batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, **kwargs)
+        super(UnsupTrainReader, self).__init__(
+            sample_transforms, strong_sample_transforms, batch_transforms,
+            batch_size, shuffle, drop_last, num_classes, collate_batch,
+            **kwargs)
 
 
 @register

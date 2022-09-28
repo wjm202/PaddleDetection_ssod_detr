@@ -94,13 +94,25 @@ class Trainer(object):
         if self.mode == 'train':
             self.semi_supervised = self.cfg.get('semi_supervised', False)
             if self.semi_supervised:
-                assert cfg.architecture in ['DenseTeacher'], 'SSOD only support DenseTeacher, {} is not supported now.'.format(cfg.architecture)
-                self.loader = create('SupTrainReader')(self.dataset, cfg.worker_num)
+                assert cfg.architecture in [
+                    'DenseTeacher'
+                ], 'SSOD only support DenseTeacher, {} is not supported now.'.format(
+                    cfg.architecture)
+                # self.dataset =  # defalut sup dataset
+                self.loader = create('SupTrainReader')(
+                    self.dataset, cfg.worker_num, strong_aug=False)  # sup_werk
+                self.loader_sup_strong = create('SupTrainReader')(
+                    self.dataset, cfg.worker_num, strong_aug=True)
 
-                self.dataset_unsup = self.cfg['UnsupTrainDataset'] = create('UnsupTrainDataset')()
-                self.loader_unsup = create('UnsupTrainReader')(self.dataset_unsup, cfg.worker_num)
+                self.dataset_unsup = self.cfg['UnsupTrainDataset'] = create(
+                    'UnsupTrainDataset')()
+                self.loader_unsup_weak = create('UnsupTrainReader')(
+                    self.dataset_unsup, cfg.worker_num, strong_aug=False)
+                self.loader_unsup_strong = create('UnsupTrainReader')(
+                    self.dataset_unsup, cfg.worker_num, strong_aug=True)
             else:
-                self.loader = create('TrainReader')(self.dataset, cfg.worker_num)
+                self.loader = create('TrainReader')(self.dataset,
+                                                    cfg.worker_num)
 
         if cfg.architecture == 'JDE' and self.mode == 'train':
             cfg['JDEEmbeddingHead'][
@@ -189,7 +201,9 @@ class Trainer(object):
             self.ema_start_steps = self.cfg.get('ema_start_steps', 3000)
         else:
             if self.semi_supervised:
-                logger.warning("Semi-Supervised Learning not work, please set 'use_ema: True' in config.")
+                logger.warning(
+                    "Semi-Supervised Learning not work, please set 'use_ema: True' in config."
+                )
 
         self._nranks = dist.get_world_size()
         self._local_rank = dist.get_rank()
@@ -386,6 +400,15 @@ class Trainer(object):
         self.start_epoch = 0
         load_pretrain_weight(self.model, weights)
         logger.debug("Load weights {} to start training".format(weights))
+
+    def load_weights_ssod(self, weights):
+        if self.is_loaded_weights:
+            return
+        self.start_epoch = 0
+        load_pretrain_weight(self.model.teacher, weights)
+        load_pretrain_weight(self.model.student, weights)
+        logger.info("Load weights {} to start training for teacher and student".
+                    format(weights))
 
     def load_weights_sde(self, det_weights, reid_weights):
         if self.model.detector:
@@ -584,7 +607,7 @@ class Trainer(object):
 
     def semi_train(self, validate=False):
         # no amp, no use_fused_allreduce_gradients, no pruner
-        assert self.use_ema == True, "semi_train not work, please set 'use_ema: True' in config."
+        # assert self.use_ema == True, "semi_train not work, please set 'use_ema: True' in config."
         self.semi_start_steps = self.cfg.get('semi_start_steps', 5000)
 
         Init_mark = False
@@ -598,19 +621,16 @@ class Trainer(object):
                    self.cfg.use_gpu and self._nranks > 1)
         if sync_bn:
             model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-            # ema_model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(ema_model)
 
         # get distributed model
         if self.cfg.get('fleet', False):
             model = fleet.distributed_model(model)
-            # ema_model = fleet.distributed_model(ema_model)
             self.optimizer = fleet.distributed_optimizer(self.optimizer)
         elif self._nranks > 1:
-            find_unused_parameters = self.cfg.get('find_unused_parameters', False)
+            find_unused_parameters = self.cfg.get('find_unused_parameters',
+                                                  False)
             model = paddle.DataParallel(
                 model, find_unused_parameters=find_unused_parameters)
-            # ema_model = paddle.DataParallel(
-            #     ema_model, find_unused_parameters=find_unused_parameters)
 
         self.status.update({
             'epoch_id': self.start_epoch,
@@ -624,10 +644,6 @@ class Trainer(object):
             self.cfg.log_iter, fmt='{avg:.4f}')
         self.status['training_staus'] = stats.TrainingStats(self.cfg.log_iter)
 
-        if self.cfg.get('print_flops', False):
-            flops_loader = create('{}Reader'.format(self.mode.capitalize()))(
-                self.dataset, self.cfg.worker_num)
-            self._flops(flops_loader)
         profiler_options = self.cfg.get('profiler_options', None)
 
         self._compose_callback.on_train_begin(self.status)
@@ -636,33 +652,43 @@ class Trainer(object):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
             self._compose_callback.on_epoch_begin(self.status)
-            self.loader.dataset.set_epoch(epoch_id)
-            self.loader_unsup.dataset.set_epoch(epoch_id)
+
+            self.loader.dataset.set_epoch(epoch_id)  # _sup_weak
+            self.loader_sup_strong.dataset.set_epoch(epoch_id)
+            self.loader_unsup_weak.dataset.set_epoch(epoch_id)
+            self.loader_unsup_strong.dataset.set_epoch(epoch_id)
 
             model.train()
-            # ema_model.model.train()
             iter_tic = time.time()
-            for step_id, (data_sup, data_unsup) in enumerate(zip(self.loader, self.loader_unsup)):
+            for step_id, (
+                    data_sup_w, data_sup_s, data_unsup_w,
+                    data_unsup_s) in enumerate(
+                        zip(self.loader, self.loader_sup_strong,
+                            self.loader_unsup_weak, self.loader_unsup_strong)):
+                # print(data_sup_w['im_id'], data_sup_s['im_id'], data_unsup_w['im_id'], data_unsup_s['im_id'])
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
-                data_sup['epoch_id'] = epoch_id
-                data_unsup['epoch_id'] = epoch_id
-                
-                ### TODO, write another reader or do strong aug here
-                data_sup_strong = copy.deepcopy(data_sup)
-                data_unsup_strong = copy.deepcopy(data_unsup)
+                data_sup_w['epoch_id'] = epoch_id
+                data_sup_s['epoch_id'] = epoch_id
+                data_unsup_w['epoch_id'] = epoch_id
+                data_unsup_s['epoch_id'] = epoch_id
+
+                train_cfg = self.cfg.DenseTeacher['train_cfg']
 
                 # model forward
-                outputs = model.student(data_sup)
-                losses_sup = outputs['loss']
+                # data_sup_w.extend(data_sup_s) ### TODO
+                loss_dict_sup = model.student(data_sup_w)
+                losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
 
-                curr_iter = len(self.loader) * epoch_id + step_id
-                if 1: #curr_iter > self.semi_start_steps:
-                    train_cfg = self.cfg.DenseTeacher['train_cfg']
+                losses = losses_sup.detach()
+                loss_dict = loss_dict_sup
+                loss_dict.update({'loss_sup': loss_dict['loss']})  ### new added
 
+                curr_iter = len(self.loader) * epoch_id + step_id
+                if 1:  #curr_iter > self.semi_start_steps:
                     unsup_weight = train_cfg['unsup_weight']
                     if train_cfg['suppress'] == 'exp':
                         tar_iter = self.semi_start_steps + 2000
@@ -676,30 +702,42 @@ class Trainer(object):
                     elif train_cfg['suppress'] == 'linear':
                         tar_iter = self.semi_start_steps * 2
                         if curr_iter <= tar_iter:
-                            unsup_weight *= (curr_iter - self.semi_start_steps) / self.semi_start_steps
+                            unsup_weight *= (curr_iter - self.semi_start_steps
+                                             ) / self.semi_start_steps
                     else:
                         raise ValueError
 
-                    data_unsup_strong['get_data'] = True
-                    student_logits, student_deltas, student_quality = model.student(data_unsup_strong)
+                    data_unsup_s['get_data'] = True
+                    student_logits, student_deltas, student_quality = model.student(
+                        data_unsup_s)  # see fcos_head.py forward
 
                     with paddle.no_grad():
-                        data_unsup['is_teacher'] = True
-                        teacher_logits, teacher_deltas, teacher_quality = model.teacher(data_unsup)
+                        data_unsup_w['is_teacher'] = True
+                        teacher_logits, teacher_deltas, teacher_quality = model.teacher(
+                            data_unsup_w)  # see fcos_head.py forward
 
-                    loss_dict_unsup = model.student.fcos_head.get_distill_loss([student_logits, student_deltas, student_quality],
-                                                            [teacher_logits, teacher_deltas, teacher_quality])
-                    distill_weights = train_cfg.loss_weight
-                    # loss_dict_unsup = {k: (v * unsup_weight) if v.requires_grad else v for k, v in loss_dict_unsup.items()}
-                    loss_dict_unsup = {k: v * distill_weights[k] for k, v in loss_dict_unsup.items()}
+                    loss_dict_unsup = model.student.fcos_head.get_distill_loss(
+                        [student_logits, student_deltas, student_quality],
+                        [teacher_logits, teacher_deltas, teacher_quality])
+                    distill_weights = train_cfg['loss_weight']
+                    loss_dict_unsup = {
+                        k: v * distill_weights[k]
+                        for k, v in loss_dict_unsup.items()
+                    }
 
                     losses_unsup = sum([
-                        metrics_value for metrics_value in loss_dict_unsup.values()
-                        if metrics_value.requires_grad
-                    ])
+                        metrics_value
+                        for metrics_value in loss_dict_unsup.values()
+                    ]) * unsup_weight
                     losses_unsup.backward()
+
                     loss_dict.update(loss_dict_unsup)
+                    loss_dict.update({
+                        'loss_unsup_distill': losses_unsup
+                    })  ### new added
                     losses += losses_unsup.detach()
+                    loss_dict[
+                        'loss'] = losses  # total = 'loss_sup' + 'loss_unsup_distill'
 
                 self.optimizer.step()
 
@@ -709,7 +747,7 @@ class Trainer(object):
                 self.status['learning_rate'] = curr_lr
 
                 if self._nranks < 2 or self._local_rank == 0:
-                    self.status['training_staus'].update(outputs)
+                    self.status['training_staus'].update(loss_dict)  # outputs
 
                 self.status['batch_time'].update(time.time() - iter_tic)
                 self._compose_callback.on_step_end(self.status)

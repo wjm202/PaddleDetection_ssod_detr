@@ -19,7 +19,7 @@ ema_start_steps: 3000
 
 ### model config
 architecture: DenseTeacher
-pretrain_weights: ~ #https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
 DenseTeacher:
   teacher: FCOS
   student: FCOS
@@ -28,7 +28,7 @@ DenseTeacher:
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: 'linear'
-    loss_weight: {cls: 4.0, reg: 1.0, ctn: 1.0}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 1.0}
     gamma: 2.0
   test_cfg:
     inference_on: student
@@ -39,8 +39,8 @@ metric: COCO
 num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
-    image_dir: val2017 #
-    anno_path: annotations/instances_val2017.json #
+    image_dir: train2017
+    anno_path: annotations/instances_train2017.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
     sup_file: 'dataset/coco/coco_supervision.txt'
@@ -50,8 +50,8 @@ TrainDataset:
 
 UnsupTrainDataset:
   !SemiCOCODataSet
-    image_dir: val2017 #
-    anno_path: annotations/instances_val2017.json #
+    image_dir: train2017
+    anno_path: annotations/instances_train2017.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
     sup_file: 'dataset/coco/coco_supervision.txt'
@@ -62,7 +62,7 @@ UnsupTrainDataset:
 EvalDataset:
   !COCODataSet
     image_dir: val2017
-    anno_path: annotations/instances_val2017_8img.json
+    anno_path: annotations/instances_val2017.json
     dataset_dir: dataset/coco
 
 TestDataset:
@@ -72,13 +72,19 @@ TestDataset:
 
 
 ### data_aug config
-worker_num: 0
+worker_num: 2 # set 0 for single gpu debug
 SupTrainReader:
   sample_transforms:
     - Decode: {}
-    - Resize: {target_size: [260, 480], keep_ratio: true, interp: 1}
+    - Resize: {target_size: [260, 480], keep_ratio: true, interp: 1} # for less gpu debug
     - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
+  strong_sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [260, 480], keep_ratio: true, interp: 1} # for less gpu debug
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    - RandomFlip: {}
+    - RandomGaussianBlur: {} # new added
   batch_transforms:
     - Permute: {}
     - PadBatch: {pad_to_stride: 128}
@@ -97,6 +103,12 @@ UnsupTrainReader:
     - Resize: {target_size: [260, 480], keep_ratio: true, interp: 1}
     - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
+  strong_sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [260, 480], keep_ratio: true, interp: 1} # for less gpu debug
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    - RandomFlip: {}
+    - RandomGaussianBlur: {} # new added
   batch_transforms:
     - Permute: {}
     - PadBatch: {pad_to_stride: 128}
@@ -106,13 +118,13 @@ UnsupTrainReader:
 
 
 ### other config
-epoch: 24
+epoch: 240
 LearningRate:
   base_lr: 0.001
   schedulers:
   - !PiecewiseDecay
     gamma: 0.1
-    milestones: [24]
+    milestones: [240]
   - !LinearWarmup
     start_factor: 0.001
     steps: 1000
