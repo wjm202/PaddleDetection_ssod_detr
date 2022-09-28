@@ -65,6 +65,7 @@ class ModelEMA(object):
             k: weakref.ref(p)
             for k, p in model.state_dict().items()
         }
+        # self.model = model # TODO
 
     def reset(self):
         self.step = 0

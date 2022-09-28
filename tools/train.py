@@ -129,7 +129,11 @@ def run(FLAGS, cfg):
         trainer.load_weights(cfg.pretrain_weights)
 
     # training
-    trainer.train(FLAGS.eval)
+    semi_supervised = cfg.get('semi_supervised', False)
+    if semi_supervised:
+        trainer.semi_train(FLAGS.eval)
+    else:
+        trainer.train(FLAGS.eval)
 
 
 def main():
