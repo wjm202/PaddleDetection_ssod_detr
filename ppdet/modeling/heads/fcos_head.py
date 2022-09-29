@@ -265,14 +265,9 @@ class FCOSHead(nn.Layer):
             if get_data:
                 return [cls_logits_list, bboxes_reg_list, centerness_list]
 
-            losses = {}
             fcos_head_outs = [cls_logits_list, bboxes_reg_list, centerness_list]
             losses_fcos = self.get_loss(fcos_head_outs, targets)
-            losses.update(losses_fcos)
-
-            total_loss = paddle.add_n(list(losses.values()))
-            losses.update({'loss': total_loss})
-            return losses
+            return losses_fcos
         else:
             # eval or infer
             locations_list = []
@@ -392,21 +387,20 @@ class FCOSHead(nn.Layer):
             F.sigmoid(student_logits),
             teacher_probs,
             weight=mask,
-            reduction="sum", ) / fg_num
+            reduction="sum") / fg_num
 
-        loss_deltas = (self.iou_loss(
-            student_deltas[b_mask],
-            teacher_deltas[b_mask], ) * teacher_quality[b_mask]).mean()
-
+        loss_deltas = (self.iou_loss(student_deltas[b_mask],
+                                     teacher_deltas[b_mask]) *
+                       teacher_quality[b_mask]).mean()
         loss_quality = F.binary_cross_entropy(
             F.sigmoid(student_quality[b_mask]),
             F.sigmoid(teacher_quality[b_mask]),
-            reduction='mean', )
+            reduction='mean')
 
         return {
             "distill_loss_cls": loss_logits,
-            "distill_loss_ctn": loss_quality,
             "distill_loss_box": loss_deltas,
+            "distill_loss_ctn": loss_quality,
         }
 
 
@@ -416,7 +410,7 @@ def permute_to_N_HWA_K(tensor, K):
     """
     N, _, H, W = tensor.shape
     tensor = tensor.reshape([N, -1, K, H, W]).transpose([0, 3, 4, 1, 2])
-    tensor = tensor.reshape([N, -1, K])  # Size=(N,HWA,K)
+    tensor = tensor.reshape([N, -1, K])
     return tensor
 
 

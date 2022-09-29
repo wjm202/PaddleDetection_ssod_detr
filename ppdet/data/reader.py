@@ -254,6 +254,7 @@ class SemiBaseDataLoader(BaseDataLoader):
             sample_transforms, batch_transforms, batch_size, shuffle, drop_last,
             num_classes, collate_batch, **kwargs)
         # new added
+        strong_sample_transforms = sample_transforms + strong_sample_transforms
         self._strong_batch_transforms = Compose(
             strong_sample_transforms, num_classes=num_classes)
 

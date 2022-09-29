@@ -665,7 +665,7 @@ class Trainer(object):
                     data_unsup_s) in enumerate(
                         zip(self.loader, self.loader_sup_strong,
                             self.loader_unsup_weak, self.loader_unsup_strong)):
-                # print(data_sup_w['im_id'], data_sup_s['im_id'], data_unsup_w['im_id'], data_unsup_s['im_id'])
+                # print(step_id, data_sup_w['im_id'], data_sup_s['im_id'], data_unsup_w['im_id'], data_unsup_s['im_id'])
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
@@ -679,31 +679,33 @@ class Trainer(object):
 
                 # model forward
                 # data_sup_w.extend(data_sup_s) ### TODO
-                loss_dict_sup = model.student(data_sup_w)
+                loss_dict_sup = model.teacher(data_sup_w)
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
 
                 losses = losses_sup.detach()
                 loss_dict = loss_dict_sup
-                loss_dict.update({'loss_sup': loss_dict['loss']})  ### new added
+                loss_dict.update({
+                    'loss_sup_sum': loss_dict['loss']
+                })  ### new added
 
                 curr_iter = len(self.loader) * epoch_id + step_id
-                if 1:  #curr_iter > self.semi_start_steps:
+                st_iter = self.semi_start_steps
+                if curr_iter > st_iter:
                     unsup_weight = train_cfg['unsup_weight']
                     if train_cfg['suppress'] == 'exp':
-                        tar_iter = self.semi_start_steps + 2000
+                        tar_iter = st_iter + 2000
                         if curr_iter <= tar_iter:
                             scale = np.exp((curr_iter - tar_iter) / 1000)
                             unsup_weight *= scale
                     elif train_cfg['suppress'] == 'step':
-                        tar_iter = self.semi_start_steps * 2
+                        tar_iter = st_iter * 2
                         if curr_iter <= tar_iter:
                             unsup_weight *= 0.25
                     elif train_cfg['suppress'] == 'linear':
-                        tar_iter = self.semi_start_steps * 2
+                        tar_iter = st_iter * 2
                         if curr_iter <= tar_iter:
-                            unsup_weight *= (curr_iter - self.semi_start_steps
-                                             ) / self.semi_start_steps
+                            unsup_weight *= (curr_iter - st_iter) / st_iter
                     else:
                         raise ValueError
 
@@ -732,12 +734,10 @@ class Trainer(object):
                     losses_unsup.backward()
 
                     loss_dict.update(loss_dict_unsup)
-                    loss_dict.update({
-                        'loss_unsup_distill': losses_unsup
-                    })  ### new added
+                    loss_dict.update({'loss_unsup_sum': losses_unsup})
                     losses += losses_unsup.detach()
-                    loss_dict[
-                        'loss'] = losses  # total = 'loss_sup' + 'loss_unsup_distill'
+                    loss_dict['loss'] = losses
+                    # total = 'loss_sup_sum' + 'loss_unsup_sum'
 
                 self.optimizer.step()
 

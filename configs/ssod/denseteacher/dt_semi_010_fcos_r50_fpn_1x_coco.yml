@@ -80,10 +80,6 @@ SupTrainReader:
     - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
   strong_sample_transforms:
-    - Decode: {}
-    - Resize: {target_size: [260, 480], keep_ratio: true, interp: 1} # for less gpu debug
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
-    - RandomFlip: {}
     - RandomGaussianBlur: {} # new added
   batch_transforms:
     - Permute: {}
@@ -104,10 +100,6 @@ UnsupTrainReader:
     - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
   strong_sample_transforms:
-    - Decode: {}
-    - Resize: {target_size: [260, 480], keep_ratio: true, interp: 1} # for less gpu debug
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
-    - RandomFlip: {}
     - RandomGaussianBlur: {} # new added
   batch_transforms:
     - Permute: {}
