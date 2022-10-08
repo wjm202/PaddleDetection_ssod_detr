@@ -156,3 +156,13 @@ class ModelEMA(object):
                 if paddle.is_floating_point(v):
                     v *= decay
                     v += (1.0 - decay) * msd[k].detach()
+
+    def resume(self, state_dict, step=0):
+        for k, v in state_dict.items():
+            if k in self.model.state_dict():
+                if self.model.state_dict()[k].dtype == v.dtype:
+                    self.model.state_dict()[k] = v
+                else:
+                    self.model.state_dict()[k] = v.astype(self.model.state_dict(
+                    )[k].dtype)
+        self.step = step

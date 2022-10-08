@@ -1,0 +1,1 @@
+python -m paddle.distributed.launch --log_dir=log_dir/densetecher10% --gpus 3  tools/train.py -c configs/ssod/denseteacher/dt_semi_010_fcos_r50_fpn_1x_coco.yml --amp  -r output/dt_semi_010_fcos_r50_fpn_1x_coco/0.pdparams 

@@ -59,15 +59,6 @@ class DenseTeacher(BaseArch):
         }
 
     def _forward(self):
-        body_feats = self.teacher.backbone(self.inputs)
-        fpn_feats = self.teacher.neck(body_feats)
-
-        if not self.training:
-            fcos_head_outs = self.teacher.fcos_head(fpn_feats)
-            bbox_pred, bbox_num = self.teacher.fcos_head.post_process(
-                fcos_head_outs, self.inputs['scale_factor'])
-            return {'bbox': bbox_pred, 'bbox_num': bbox_num}
-
         return True
 
     def freeze(self, model):  #wjm modify

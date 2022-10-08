@@ -155,6 +155,7 @@ class FCOSHead(nn.Layer):
         self.nms = nms
         if isinstance(self.nms, MultiClassNMS) and trt:
             self.nms.trt = trt
+        self.iou_loss = GIoULoss()
 
         conv_cls_name = "fcos_head_cls"
         bias_init_value = -math.log((1 - self.prior_prob) / self.prior_prob)
@@ -204,8 +205,6 @@ class FCOSHead(nn.Layer):
             scale_reg = self.add_sublayer(feat_name, ScaleReg())
             self.scales_regs.append(scale_reg)
 
-        self.iou_loss = GIoULoss()
-
     def _compute_locations_by_level(self, fpn_stride, feature, num_shift=0.5):
         """
         Compute locations of anchor points of each FPN layer
@@ -246,7 +245,7 @@ class FCOSHead(nn.Layer):
             else:
                 centerness = self.fcos_head_centerness(fcos_cls_feat)
             if self.norm_reg_targets:
-                bbox_reg = F.relu(bbox_reg)
+                bbox_reg = F.relu(bbox_reg)  #wjm add
                 if not self.training:
                     # eval or infer
                     bbox_reg = bbox_reg * fpn_stride
@@ -255,7 +254,6 @@ class FCOSHead(nn.Layer):
             cls_logits_list.append(cls_logits)
             bboxes_reg_list.append(bbox_reg)
             centerness_list.append(centerness)
-
         is_teacher = targets.get('is_teacher', False)
         if is_teacher:
             return [cls_logits_list, bboxes_reg_list, centerness_list]
@@ -397,12 +395,13 @@ class FCOSHead(nn.Layer):
         loss_deltas = (
             self.iou_loss(
                 inputs,  #wjm add
-                targets) * targets).mean()
+                targets) * teacher_deltas[b_mask]).mean()
+
         loss_quality = F.binary_cross_entropy(
             F.sigmoid(student_quality[b_mask]),
             F.sigmoid(teacher_quality[b_mask]),
             reduction='mean')
-
+        print(loss_deltas)
         return {
             "distill_loss_cls": loss_logits,
             "distill_loss_box": loss_deltas,
@@ -444,4 +443,64 @@ def QFLv2(
         loss = loss[valid].mean()
     elif reduction == "sum":
         loss = loss[valid].sum()
+    return loss
+
+
+def iou_loss(inputs,
+             targets,
+             weight=None,
+             box_mode="xyxy",
+             loss_type="iou",
+             smooth=False,
+             reduction="none"):
+
+    if box_mode == "ltrb":
+        inputs = paddle.concat((-inputs[..., :2], inputs[..., 2:]), axis=-1)
+        targets = paddle.concat((-targets[..., :2], targets[..., 2:]), axis=-1)
+    elif box_mode != "xyxy":
+        raise NotImplementedError
+
+    eps = 1.1920928955078125e-07
+
+    inputs_area = (inputs[..., 2] - inputs[..., 0]).clip_(min=0) \
+        * (inputs[..., 3] - inputs[..., 1]).clip_(min=0)
+    targets_area = (targets[..., 2] - targets[..., 0]).clip_(min=0) \
+        * (targets[..., 3] - targets[..., 1]).clip_(min=0)
+
+    w_intersect = (paddle.minimum(inputs[..., 2], targets[..., 2]) -
+                   paddle.maximum(inputs[..., 0], targets[..., 0])).clip_(min=0)
+    h_intersect = (paddle.minimum(inputs[..., 3], targets[..., 3]) -
+                   paddle.maximum(inputs[..., 1], targets[..., 1])).clip_(min=0)
+
+    area_intersect = w_intersect * h_intersect
+    area_union = targets_area + inputs_area - area_intersect
+    if smooth:
+        ious = (area_intersect + 1) / (area_union + 1)
+    else:
+        ious = area_intersect / area_union.clip(min=eps)
+
+    if loss_type == "iou":
+        loss = -ious.clip(min=eps).log()
+    elif loss_type == "linear_iou":
+        loss = 1 - ious
+    elif loss_type == "giou":
+        g_w_intersect = paddle.maximum(inputs[..., 2], targets[..., 2]) \
+            - paddle.minimum(inputs[..., 0], targets[..., 0])
+        g_h_intersect = paddle.maximum(inputs[..., 3], targets[..., 3]) \
+            - paddle.minimum(inputs[..., 1], targets[..., 1])
+        ac_uion = g_w_intersect * g_h_intersect
+        gious = ious - (ac_uion - area_union) / ac_uion.clip(min=eps)
+        loss = 1 - gious
+    else:
+        raise NotImplementedError
+    if weight is not None:
+        loss = loss * weight.reshape(loss.size())
+        if reduction == "mean":
+            loss = loss.sum() / max(weight.sum().item(), eps)
+    else:
+        if reduction == "mean":
+            loss = loss.mean()
+    if reduction == "sum":
+        loss = loss.sum()
+
     return loss

@@ -636,7 +636,7 @@ class Trainer(object):
                         custom_white_list=self.custom_white_list,
                         custom_black_list=self.custom_black_list,
                         level=self.amp_level):
-                    outs = self.model(data)
+                    outs = self.model.teacher(data)
             else:
                 outs = self.model(data)
 
@@ -661,6 +661,84 @@ class Trainer(object):
         self._compose_callback.on_epoch_end(self.status)
         # reset metric states for metric may performed multiple times
         self._reset_metrics()
+
+    def _eval_with_loader_semi(self, loader):
+        sample_num = 0
+        tic = time.time()
+        self._compose_callback.on_epoch_begin(self.status)
+        self.status['mode'] = 'eval'
+
+        self.model.eval()
+        if self.cfg.get('print_flops', False):
+            flops_loader = create('{}Reader'.format(self.mode.capitalize()))(
+                self.dataset, self.cfg.worker_num, self._eval_batch_sampler)
+            self._flops(flops_loader)
+        print("*****teacher evaluate*****")
+        for step_id, data in enumerate(loader):
+            self.status['step_id'] = step_id
+            self._compose_callback.on_step_begin(self.status)
+            # forward
+            if self.use_amp:
+                with paddle.amp.auto_cast(
+                        enable=self.cfg.use_gpu,
+                        custom_white_list=self.custom_white_list,
+                        custom_black_list=self.custom_black_list,
+                        level=self.amp_level):
+                    outs = self.model.teacher(data)
+            else:
+                outs = self.model.teacher(data)
+
+            # update metrics
+            for metric in self._metrics:
+                metric.update(data, outs)
+
+            # multi-scale inputs: all inputs have same im_id
+            if isinstance(data, typing.Sequence):
+                sample_num += data[0]['im_id'].numpy().shape[0]
+            else:
+                sample_num += data['im_id'].numpy().shape[0]
+            self._compose_callback.on_step_end(self.status)
+
+        self.status['sample_num'] = sample_num
+        self.status['cost_time'] = time.time() - tic
+
+        # accumulate metric to log out
+        for metric in self._metrics:
+            metric.accumulate()
+            metric.log()
+        self._compose_callback.on_epoch_end(self.status)
+        # reset metric states for metric may performed multiple times
+        self._reset_metrics()
+
+        print("*****student evaluate*****")
+        for step_id, data in enumerate(loader):
+            self.status['step_id'] = step_id
+            self._compose_callback.on_step_begin(self.status)
+            # forward
+            outs = self.model.student(data)
+
+            # update metrics
+            for metric in self._metrics:
+                metric.update(data, outs)
+
+            # multi-scale inputs: all inputs have same im_id
+            if isinstance(data, typing.Sequence):
+                sample_num += data[0]['im_id'].numpy().shape[0]
+            else:
+                sample_num += data['im_id'].numpy().shape[0]
+            self._compose_callback.on_step_end(self.status)
+
+        self.status['sample_num'] = sample_num
+        self.status['cost_time'] = time.time() - tic
+
+        # accumulate metric to log out
+        for metric in self._metrics:
+            metric.accumulate()
+            metric.log()
+        # self._compose_callback.on_epoch_end(self.status)
+        # reset metric states for metric may performed multiple times
+        self._reset_metrics()
+        self.status['mode'] = 'train'
 
     def semi_train(self, validate=False):
         # no amp, no use_fused_allreduce_gradients, no pruner
@@ -832,11 +910,11 @@ class Trainer(object):
 
             is_snapshot = (self._nranks < 2 or self._local_rank == 0) \
                        and ((epoch_id + 1) % self.cfg.snapshot_epoch == 0 or epoch_id == self.end_epoch - 1)
-            # if is_snapshot and self.use_ema:
-            #     # apply ema weight on model
-            #     weight = copy.deepcopy(self.model.state_dict())
-            #     self.model.set_dict(self.ema.apply())
-            #     self.status['weight'] = weight
+            if is_snapshot and self.use_ema:
+                # apply ema weight on model
+                weight = copy.deepcopy(self.model.state_dict())
+                self.model.set_dict(weight)
+                self.status['weight'] = weight
 
             self._compose_callback.on_epoch_end(self.status)
 
@@ -864,7 +942,8 @@ class Trainer(object):
 
                 with paddle.no_grad():
                     self.status['save_best_model'] = True
-                    self._eval_with_loader(self._eval_loader)
+                    self._eval_with_loader
+                    _semi(self._eval_loader)
 
             if is_snapshot and self.use_ema:
                 # reset original weight
@@ -884,7 +963,7 @@ class Trainer(object):
             self.model = paddle.DataParallel(
                 self.model, find_unused_parameters=find_unused_parameters)
         with paddle.no_grad():
-            self._eval_with_loader(self.loader)
+            self._eval_with_loader_semi(self.loader)
 
     def _eval_with_loader_slice(self,
                                 loader,
