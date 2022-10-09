@@ -106,10 +106,13 @@ class Trainer(object):
 
                 self.dataset_unsup = self.cfg['UnsupTrainDataset'] = create(
                     'UnsupTrainDataset')()
-                self.loader_unsup_weak = create('UnsupTrainReader')(
+                # self.loader_unsup_weak = create('UnsupTrainReader')(
+                #     self.dataset_unsup, cfg.worker_num, strong_aug=False)
+                # self.loader_unsup_strong = create('UnsupTrainReader')(
+                #     self.dataset_unsup, cfg.worker_num, strong_aug=True)
+                self.loader_unsup = create('UnsupTrainReader')(
                     self.dataset_unsup, cfg.worker_num, strong_aug=False)
-                self.loader_unsup_strong = create('UnsupTrainReader')(
-                    self.dataset_unsup, cfg.worker_num, strong_aug=True)
+
             else:
                 self.loader = create('TrainReader')(self.dataset,
                                                     cfg.worker_num)
@@ -793,21 +796,21 @@ class Trainer(object):
 
             self.loader.dataset.set_epoch(epoch_id)  # _sup_weak
             self.loader_sup_strong.dataset.set_epoch(epoch_id)
-            self.loader_unsup_weak.dataset.set_epoch(epoch_id)
-            self.loader_unsup_strong.dataset.set_epoch(epoch_id)
+            self.loader_unsup.dataset.set_epoch(epoch_id)
+            # self.loader_unsup_strong.dataset.set_epoch(epoch_id)
 
             model.train()
             iter_tic = time.time()
-            for step_id, (
-                    data_sup_w, data_sup_s, data_unsup_w,
-                    data_unsup_s) in enumerate(
-                        zip(self.loader, self.loader_sup_strong,
-                            self.loader_unsup_weak, self.loader_unsup_strong)):
+            for step_id, (data_sup_w, data_sup_s, data_unsup) in enumerate(
+                    zip(self.loader, self.loader_sup_strong,
+                        self.loader_unsup)):
                 # print(step_id, data_sup_w['im_id'], data_sup_s['im_id'], data_unsup_w['im_id'], data_unsup_s['im_id'])
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
+                data_unsup_w = data_unsup[0]
+                data_unsup_s = data_unsup[1]
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
                 data_unsup_w['epoch_id'] = epoch_id
@@ -943,7 +946,7 @@ class Trainer(object):
                 with paddle.no_grad():
                     self.status['save_best_model'] = True
                     self._eval_with_loader
-                    _semi(self._eval_loader)
+                    self._eval_with_loader_semi(self._eval_loader)
 
             if is_snapshot and self.use_ema:
                 # reset original weight

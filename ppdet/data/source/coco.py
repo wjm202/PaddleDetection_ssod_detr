@@ -555,3 +555,29 @@ class SemiCOCODataSet(COCODataSet):
         else:
             logger.info(
                 f'Use {len(self.roidbs)} unsup_samples data as UNLABELED')
+
+    def __getitem__(self, idx):
+        n = len(self.roidbs)
+        if self.repeat > 1:
+            idx %= n
+        # data batch
+        roidb = copy.deepcopy(self.roidbs[idx])
+        if self.mixup_epoch == 0 or self._epoch < self.mixup_epoch:
+            idx = np.random.randint(n)
+            roidb = [roidb, copy.deepcopy(self.roidbs[idx])]
+        elif self.cutmix_epoch == 0 or self._epoch < self.cutmix_epoch:
+            idx = np.random.randint(n)
+            roidb = [roidb, copy.deepcopy(self.roidbs[idx])]
+        elif self.mosaic_epoch == 0 or self._epoch < self.mosaic_epoch:
+            roidb = [roidb, ] + [
+                copy.deepcopy(self.roidbs[np.random.randint(n)])
+                for _ in range(4)
+            ]
+        if isinstance(roidb, Sequence):
+            for r in roidb:
+                r['curr_iter'] = self._curr_iter
+        else:
+            roidb['curr_iter'] = self._curr_iter
+        self._curr_iter += 1
+
+        return self.transform(roidb)

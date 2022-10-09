@@ -21,7 +21,7 @@ if sys.version_info >= (3, 0):
 else:
     pass
 import numpy as np
-
+import copy
 from paddle.io import DataLoader, DistributedBatchSampler
 from .utils import default_collate_fn
 
@@ -33,6 +33,77 @@ from ppdet.utils.logger import setup_logger
 logger = setup_logger('reader')
 
 MAIN_PID = os.getpid()
+
+
+class Semi_Compose(object):
+    def __init__(self, transforms, num_classes=80, Unsup=False):
+        assert len(transforms) == 2, "aug bang！！！！！"
+        self.transforms_weak = transforms[0]
+        self.transforms_strong = transforms[1]
+        self.transforms_cls_weak = []
+        self.transforms_cls_strong = []
+        self.Unsup = Unsup
+        for t in self.transforms_weak:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+
+                self.transforms_cls_weak.append(f)
+        for t in self.transforms_strong:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+
+                self.transforms_cls_strong.append(f)
+
+    def __call__(self, data):
+        assert type(self.Unsup) == bool, "UNSUP参数没传进去"
+        if self.Unsup is True:
+            for f in self.transforms_cls_weak:
+                try:
+                    weak_data = f(data)
+                except Exception as e:
+                    stack_info = traceback.format_exc()
+                    logger.warning("fail to map sample transform [{}] "
+                                   "with error: {} and stack:\n{}".format(
+                                       f, e, str(stack_info)))
+                    raise e
+            w_data = copy.deepcopy(weak_data)
+            for f in self.transforms_cls_strong:
+                try:
+                    strong_data = f(w_data)
+                except Exception as e:
+                    stack_info = traceback.format_exc()
+                    logger.warning("fail to map sample transform [{}] "
+                                   "with error: {} and stack:\n{}".format(
+                                       f, e, str(stack_info)))
+                    raise e
+            return [weak_data, strong_data]
+
+        else:
+            for f in self.transforms_cls_weak:
+                try:
+                    weak_data = f(data)
+                except Exception as e:
+                    stack_info = traceback.format_exc()
+                    logger.warning("fail to map sample transform [{}] "
+                                   "with error: {} and stack:\n{}".format(
+                                       f, e, str(stack_info)))
+                    raise e
+            for f in self.transforms_cls_strong:
+                try:
+                    strong_data = f(weak_data)
+                except Exception as e:
+                    stack_info = traceback.format_exc()
+                    logger.warning("fail to map sample transform [{}] "
+                                   "with error: {} and stack:\n{}".format(
+                                       f, e, str(stack_info)))
+                    raise e
+            return strong_data
 
 
 class Compose(object):
@@ -60,6 +131,125 @@ class Compose(object):
                 raise e
 
         return data
+
+
+class Semi_BatchCompose(Compose):
+    def __init__(self, transforms, num_classes=80, collate_batch=True):
+        super(Semi_BatchCompose, self).__init__(transforms, num_classes)
+        self.collate_batch = collate_batch
+
+    def __call__(self, data):
+        if type(data[0]) is list:
+            #weak
+            data_unsup_weak = []
+            data_unsup_strong = []
+            for i in range(len(data)):
+                data_unsup_weak.append(data[i][0])
+                data_unsup_strong.append(data[i][1])
+            data = [data_unsup_weak, data_unsup_strong]
+
+            batch_data = []
+            #unsup_weak
+            for f in self.transforms_cls:
+                try:
+                    data[0] = f(data[0])
+                except Exception as e:
+                    stack_info = traceback.format_exc()
+                    logger.warning("fail to map batch transform [{}] "
+                                   "with error: {} and stack:\n{}".format(
+                                       f, e, str(stack_info)))
+                    raise e
+
+            # remove keys which is not needed by model
+            extra_key = ['h', 'w', 'flipped']
+            for k in extra_key:
+                for sample in data[0]:
+                    if k in sample:
+                        sample.pop(k)
+
+            # batch data, if user-define batch function needed
+            # use user-defined here
+            if self.collate_batch:
+                batch_data_weak = default_collate_fn(data[0])
+            else:
+                batch_data_weak = {}
+                for k in data[0].keys():
+                    tmp_data = []
+                    for i in range(len(data[0])):
+                        tmp_data.append(data[0][i][k])
+                    if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                        tmp_data = np.stack(tmp_data, axis=0)
+                    batch_data_weak[k] = tmp_data
+            batch_data.append(batch_data_weak)
+
+            #unsup_strong 
+            for f in self.transforms_cls:
+                try:
+                    data[1] = f(data[1])
+                except Exception as e:
+                    stack_info = traceback.format_exc()
+                    logger.warning("fail to map batch transform [{}] "
+                                   "with error: {} and stack:\n{}".format(
+                                       f, e, str(stack_info)))
+                    raise e
+
+            # remove keys which is not needed by model
+            extra_key = ['h', 'w', 'flipped']
+            for k in extra_key:
+                for sample in data[1]:
+                    if k in sample:
+                        sample.pop(k)
+
+            # batch data, if user-define batch function needed
+            # use user-defined here
+            if self.collate_batch:
+                batch_data_strong = default_collate_fn(data[1])
+            else:
+                batch_data_strong = {}
+                for k in data[1].keys():
+                    tmp_data = []
+                    for i in range(len(data[1])):
+                        tmp_data.append(data[1][i][k])
+                    if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                        tmp_data = np.stack(tmp_data, axis=0)
+                    batch_data_strong[k] = tmp_data
+            batch_data.append(batch_data_strong)
+            return batch_data
+
+            # assert type(batch_data_weak["curr_iter"] ) is int
+
+        else:
+            for f in self.transforms_cls:
+                try:
+                    data = f(data)
+                except Exception as e:
+                    stack_info = traceback.format_exc()
+                    logger.warning("fail to map batch transform [{}] "
+                                   "with error: {} and stack:\n{}".format(
+                                       f, e, str(stack_info)))
+                    raise e
+
+            # remove keys which is not needed by model
+            extra_key = ['h', 'w', 'flipped']
+            for k in extra_key:
+                for sample in data:
+                    if k in sample:
+                        sample.pop(k)
+
+            # batch data, if user-define batch function needed
+            # use user-defined here
+            if self.collate_batch:
+                batch_data = default_collate_fn(data)
+            else:
+                batch_data = {}
+                for k in data[0].keys():
+                    tmp_data = []
+                    for i in range(len(data)):
+                        tmp_data.append(data[i][k])
+                    if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                        tmp_data = np.stack(tmp_data, axis=0)
+                    batch_data[k] = tmp_data
+            return batch_data
 
 
 class BatchCompose(Compose):
@@ -98,7 +288,7 @@ class BatchCompose(Compose):
                 if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
                     tmp_data = np.stack(tmp_data, axis=0)
                 batch_data[k] = tmp_data
-        return batch_data
+        return
 
 
 class BaseDataLoader(object):
@@ -216,24 +406,6 @@ class BaseDataLoader(object):
         return self.__next__()
 
 
-@register
-class TrainReader(BaseDataLoader):
-    __shared__ = ['num_classes']
-
-    def __init__(self,
-                 sample_transforms=[],
-                 batch_transforms=[],
-                 batch_size=1,
-                 shuffle=True,
-                 drop_last=True,
-                 num_classes=80,
-                 collate_batch=True,
-                 **kwargs):
-        super(TrainReader, self).__init__(sample_transforms, batch_transforms,
-                                          batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, **kwargs)
-
-
 class SemiBaseDataLoader(BaseDataLoader):
     __shared__ = ['num_classes']
 
@@ -246,14 +418,21 @@ class SemiBaseDataLoader(BaseDataLoader):
                  drop_last=True,
                  num_classes=80,
                  collate_batch=True,
+                 UNSUP=False,
                  **kwargs):
         super(SemiBaseDataLoader, self).__init__(
             sample_transforms, batch_transforms, batch_size, shuffle, drop_last,
             num_classes, collate_batch, **kwargs)
-        # new added
-        strong_sample_transforms = sample_transforms + strong_sample_transforms
-        self._strong_batch_transforms = Compose(
-            strong_sample_transforms, num_classes=num_classes)
+        self.UNSUP = UNSUP
+        self._sample_transforms_sup_weak = Compose(
+            sample_transforms, num_classes=num_classes)
+        self._sample_transforms = Semi_Compose(
+            [sample_transforms, strong_sample_transforms],
+            num_classes=num_classes,
+            Unsup=self.UNSUP)
+
+        self._batch_transforms = Semi_BatchCompose(batch_transforms,
+                                                   num_classes, collate_batch)
 
     def __call__(
             self,
@@ -267,11 +446,16 @@ class SemiBaseDataLoader(BaseDataLoader):
         self.dataset.parse_dataset()
         # self.dataset.parse_dataset_semi()  # new added
         # get data
-        if strong_aug:
-            self._sample_transforms = self._strong_batch_transforms  # new added
-        self.dataset.set_transform(self._sample_transforms)
+        if self.UNSUP == False and strong_aug == False:
+            self.dataset.set_transform(self._sample_transforms_sup_weak)
+            self.dataset.set_kwargs(**self.kwargs)
+        else:
+            self.dataset.set_transform(self._sample_transforms)
+            self.dataset.set_kwargs(**self.kwargs)
         # set kwargs
-        self.dataset.set_kwargs(**self.kwargs)
+        # else:
+        #    self.dataset.set_transform(self._strong_sup_transforms)
+        #    self.dataset.set_kwargs(**self.kwargs)
         # batch sampler
         if batch_sampler is None:
             self._batch_sampler = DistributedBatchSampler(
@@ -304,6 +488,24 @@ class SemiBaseDataLoader(BaseDataLoader):
         self.loader = iter(self.dataloader)
 
         return self
+
+
+@register
+class TrainReader(BaseDataLoader):
+    __shared__ = ['num_classes']
+
+    def __init__(self,
+                 sample_transforms=[],
+                 batch_transforms=[],
+                 batch_size=1,
+                 shuffle=True,
+                 drop_last=True,
+                 num_classes=80,
+                 collate_batch=True,
+                 **kwargs):
+        super(TrainReader, self).__init__(sample_transforms, batch_transforms,
+                                          batch_size, shuffle, drop_last,
+                                          num_classes, collate_batch, **kwargs)
 
 
 @register
