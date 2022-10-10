@@ -51,7 +51,7 @@ from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, Wife
 from .export_utils import _dump_infer_config, _prune_input_spec
 
 from paddle.distributed.fleet.utils.hybrid_parallel_util import fused_allreduce_gradients
-
+import paddle
 from ppdet.utils.logger import setup_logger
 logger = setup_logger('ppdet.engine')
 from IPython import embed
@@ -677,7 +677,7 @@ class Trainer(object):
                 self.dataset, self.cfg.worker_num, self._eval_batch_sampler)
             self._flops(flops_loader)
         print("*****teacher evaluate*****")
-        for step_id, data in enumerate(loader):
+        for step_id, data in enumerate(self.loader):
             self.status['step_id'] = step_id
             self._compose_callback.on_step_begin(self.status)
             # forward
@@ -751,28 +751,66 @@ class Trainer(object):
         if validate:
             self.cfg['EvalDataset'] = self.cfg.EvalDataset = create(
                 "EvalDataset")()
+        sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
+                   self.cfg.use_gpu and self._nranks > 1)
+        if sync_bn:
+            # self.model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+            #     self.model)
+            self.model.teacher = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+                self.model.teacher)
+            self.model.student = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+                self.model.student)
 
         model = self.model
+        if self.cfg.get('fleet', False):
+            # model = fleet.distributed_model(model)
+            model.teacher = fleet.distributed_model(model.teacher)
+            model.student = fleet.distributed_model(model.student)
+            self.optimizer = fleet.distributed_optimizer(self.optimizer)
+        elif self._nranks > 1:
+            find_unused_parameters = self.cfg[
+                'find_unused_parameters'] if 'find_unused_parameters' in self.cfg else False
+            # model = paddle.DataParallel(
+            #     self.model, find_unused_parameters=find_unused_parameters)
+            model.teacher = paddle.DataParallel(
+                self.model.teacher, find_unused_parameters=True)
+            model.student = paddle.DataParallel(
+                self.model.student, find_unused_parameters=True)
+            model.student = model.student._layers
+            model.teacher = model.teacher._layers
+
+        # enabel auto mixed precision mode
+        # if self.cfg.get('amp', False):
+        #     scaler = amp.GradScaler(
+        #         enable=self.cfg.use_gpu or self.cfg.use_npu,
+        #         init_loss_scaling=1024)
         # try:
         #    ema_model = self.ema #wjm 
         # except ValueError as e:
         #      print("{}:Please set use_ ema=true".format(e))
 
-        sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
-                   self.cfg.use_gpu and self._nranks > 1)
-        if sync_bn:
-            model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-
-        # get distributed model
-        if self.cfg.get('fleet', False):
-            model = fleet.distributed_model(model)
-            self.optimizer = fleet.distributed_optimizer(self.optimizer)
-        elif self._nranks > 1:
-            find_unused_parameters = self.cfg.get('find_unused_parameters',
-                                                  False)
-            model = paddle.DataParallel(
-                model, find_unused_parameters=find_unused_parameters)
-            model = model._layers  #wjm add
+        # sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
+        #            self.cfg.use_gpu and self._nranks > 1)
+        # if sync_bn:
+        #     self.model.teacher = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+        #         self.model.teacher)
+        #     self.model.student = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+        #         self.model.student)
+        # model = self.model
+        # # get distributed model
+        # if self.cfg.get('fleet', False):
+        #     model.teacher = fleet.distributed_model(model.teacher)
+        #     model.student = fleet.distributed_model(model.student)
+        #     self.optimizer = fleet.distributed_optimizer(self.optimizer)
+        # elif self._nranks > 1:
+        #     find_unused_parameters = self.cfg.get('find_unused_parameters',
+        #                                           False)
+        #     model.student = paddle.DataParallel(
+        #         model.student, find_unused_parameters=find_unused_parameters)
+        #     import pdb
+        #     pdb.set_trace()
+        #     model.teacher = paddle.DataParallel(model.teacher, find_unused_parameters=find_unused_parameters)
+        # model = model._layers  #wjm add
         self.status.update({
             'epoch_id': self.start_epoch,
             'step_id': 0,
@@ -798,9 +836,20 @@ class Trainer(object):
             self.loader_sup_strong.dataset.set_epoch(epoch_id)
             self.loader_unsup.dataset.set_epoch(epoch_id)
             # self.loader_unsup_strong.dataset.set_epoch(epoch_id)
-
-            model.train()
+            model.student.train()
+            model.teacher.eval()
             iter_tic = time.time()
+            loss_dict = {
+                'loss': paddle.to_tensor([0]),
+                'loss_cls': paddle.to_tensor([0]),
+                'loss_box': paddle.to_tensor([0]),
+                'loss_ctn': paddle.to_tensor([0]),
+                'loss_sup_sum': paddle.to_tensor([0]),
+                'distill_loss_cls': paddle.to_tensor([0]),
+                'distill_loss_box': paddle.to_tensor([0]),
+                'distill_loss_ctn': paddle.to_tensor([0]),
+                'loss_unsup_sum': paddle.to_tensor([0])
+            }
             for step_id, (data_sup_w, data_sup_s, data_unsup) in enumerate(
                     zip(self.loader, self.loader_sup_strong,
                         self.loader_unsup)):
@@ -828,11 +877,15 @@ class Trainer(object):
                 loss_dict_sup_w = model.student(data_sup_w)  # wjm add
                 loss_dict_sup = model.student(data_sup_s)  # wjm add
                 loss_dict_sup['loss'] += loss_dict_sup_w['loss']  # wjm add
+                loss_dict_sup['loss_cls'] += loss_dict_sup_w['loss_cls']
+                loss_dict_sup['loss_box'] += loss_dict_sup_w['loss_box']
+                loss_dict_sup['loss_ctn'] += loss_dict_sup_w['loss_ctn']
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
 
                 losses = losses_sup.detach()
-                loss_dict = loss_dict_sup
+                # loss_dict = loss_dict_sup
+                loss_dict.update(loss_dict_sup)
                 loss_dict.update({
                     'loss_sup_sum': loss_dict['loss']
                 })  ### new added
@@ -865,7 +918,6 @@ class Trainer(object):
                         data_unsup_w['is_teacher'] = True
                         teacher_logits, teacher_deltas, teacher_quality = model.teacher(
                             data_unsup_w)  # see fcos_head.py forward
-
                     loss_dict_unsup = model.student.fcos_head.get_distill_loss(
                         [student_logits, student_deltas, student_quality],
                         [teacher_logits, teacher_deltas, teacher_quality])
@@ -945,7 +997,6 @@ class Trainer(object):
 
                 with paddle.no_grad():
                     self.status['save_best_model'] = True
-                    self._eval_with_loader
                     self._eval_with_loader_semi(self._eval_loader)
 
             if is_snapshot and self.use_ema:

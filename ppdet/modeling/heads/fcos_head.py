@@ -401,7 +401,6 @@ class FCOSHead(nn.Layer):
             F.sigmoid(student_quality[b_mask]),
             F.sigmoid(teacher_quality[b_mask]),
             reduction='mean')
-        print(loss_deltas)
         return {
             "distill_loss_cls": loss_logits,
             "distill_loss_box": loss_deltas,

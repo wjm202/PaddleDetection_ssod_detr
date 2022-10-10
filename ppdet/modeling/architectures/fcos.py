@@ -61,8 +61,8 @@ class FCOS(BaseArch):
     def _forward(self):
         body_feats = self.backbone(self.inputs)
         fpn_feats = self.neck(body_feats)
-
-        if self.training:
+        is_teacher = self.inputs.get('is_teacher', False)
+        if self.training or is_teacher:
             losses = self.fcos_head(fpn_feats, self.inputs)
             return losses
         else:
