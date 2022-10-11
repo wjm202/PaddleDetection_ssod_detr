@@ -180,6 +180,7 @@ class Trainer(object):
                 logger.warning(
                     "Samples in dataset are less than batch_size, please set smaller batch_size in TrainReader."
                 )
+            steps_per_epoch = int(steps_per_epoch / self.loader.batch_size)
             self.lr = create('LearningRate')(steps_per_epoch)
             self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
 
@@ -751,17 +752,18 @@ class Trainer(object):
         if validate:
             self.cfg['EvalDataset'] = self.cfg.EvalDataset = create(
                 "EvalDataset")()
+
+        model = self.model
         sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
                    self.cfg.use_gpu and self._nranks > 1)
         if sync_bn:
             # self.model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
             #     self.model)
-            self.model.teacher = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
-                self.model.teacher)
-            self.model.student = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+            model.teacher = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+                model.teacher)
+            model.student = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
                 self.model.student)
 
-        model = self.model
         if self.cfg.get('fleet', False):
             # model = fleet.distributed_model(model)
             model.teacher = fleet.distributed_model(model.teacher)
@@ -770,14 +772,8 @@ class Trainer(object):
         elif self._nranks > 1:
             find_unused_parameters = self.cfg[
                 'find_unused_parameters'] if 'find_unused_parameters' in self.cfg else False
-            # model = paddle.DataParallel(
-            #     self.model, find_unused_parameters=find_unused_parameters)
-            model.teacher = paddle.DataParallel(
-                self.model.teacher, find_unused_parameters=True)
-            model.student = paddle.DataParallel(
-                self.model.student, find_unused_parameters=True)
-            model.student = model.student._layers
-            model.teacher = model.teacher._layers
+            model = paddle.DataParallel(
+                model, find_unused_parameters=find_unused_parameters)
 
         self.status.update({
             'epoch_id': self.start_epoch,
@@ -791,6 +787,10 @@ class Trainer(object):
             self.cfg.log_iter, fmt='{avg:.4f}')
         self.status['training_staus'] = stats.TrainingStats(self.cfg.log_iter)
 
+        if self.cfg.get('print_flops', False):
+            flops_loader = create('{}Reader'.format(self.mode.capitalize()))(
+                self.dataset, self.cfg.worker_num)
+            self._flops(flops_loader)
         profiler_options = self.cfg.get('profiler_options', None)
 
         self._compose_callback.on_train_begin(self.status)
@@ -799,11 +799,14 @@ class Trainer(object):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
             self._compose_callback.on_epoch_begin(self.status)
-
             self.loader.dataset.set_epoch(epoch_id)  # _sup_weak
             self.loader_sup_strong.dataset.set_epoch(epoch_id)
             self.loader_unsup.dataset.set_epoch(epoch_id)
             # self.loader_unsup_strong.dataset.set_epoch(epoch_id)
+            if self._nranks > 1:
+                model.student = model._layers.student
+                model.teacher = model._layers.teacher
+
             model.student.train()
             model.teacher.eval()
             iter_tic = time.time()
@@ -905,7 +908,7 @@ class Trainer(object):
                     loss_dict.update({'loss_unsup_sum': losses_unsup})
                     losses += losses_unsup.detach()
                     loss_dict['loss'] = losses
-                    # total = 'loss_sup_sum' + 'loss_unsup_sum'
+                    # total = 'l oss_sup_sum' + 'loss_unsup_sum'
 
                 self.optimizer.step()
 

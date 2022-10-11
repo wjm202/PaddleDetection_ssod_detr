@@ -246,9 +246,7 @@ class FCOSHead(nn.Layer):
                 centerness = self.fcos_head_centerness(fcos_cls_feat)
             if self.norm_reg_targets:
                 bbox_reg = F.relu(bbox_reg)  #wjm add
-                if not self.training:
-                    # eval or infer
-                    bbox_reg = bbox_reg * fpn_stride
+                bbox_reg = bbox_reg * fpn_stride  ####必须改成这种形式才能保证eval和train对齐！！！！！！！！
             else:
                 bbox_reg = paddle.exp(bbox_reg)
             cls_logits_list.append(cls_logits)
