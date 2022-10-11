@@ -140,5 +140,5 @@ if __name__ == "__main__":
     parser.add_argument("--seed-offset", type=int, default=0)
     args = parser.parse_args()
     print(args)
-    DATA_DIR = "dataset/coco"
+    DATA_DIR = "wgisd/coco"
     prepare_coco_data(args.seed, args.percent, args.version, args.seed_offset)

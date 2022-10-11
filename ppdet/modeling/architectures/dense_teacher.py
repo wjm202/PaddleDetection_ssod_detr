@@ -42,8 +42,8 @@ class DenseTeacher(BaseArch):
         self.student = student
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
-        # if train_cfg is not None:  #wjm modify
-        #     self.freeze(self.teacher)
+        if train_cfg is not None:  #wjm modify
+            self.freeze(self.teacher)
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
@@ -61,10 +61,10 @@ class DenseTeacher(BaseArch):
     def _forward(self):
         return True
 
-    # def freeze(self, model):  #wjm modify
-    #     model.eval()
-    #     for param in model.parameters():
-    #         param.stop_gradient = True
+    def freeze(self, model):  #wjm modify
+        model.eval()
+        for param in model.parameters():
+            param.stop_gradient = True
 
     def get_loss(self):
         return self._forward()

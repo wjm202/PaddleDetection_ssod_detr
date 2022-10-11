@@ -677,7 +677,7 @@ class Trainer(object):
                 self.dataset, self.cfg.worker_num, self._eval_batch_sampler)
             self._flops(flops_loader)
         print("*****teacher evaluate*****")
-        for step_id, data in enumerate(self.loader):
+        for step_id, data in enumerate(loader):
             self.status['step_id'] = step_id
             self._compose_callback.on_step_begin(self.status)
             # forward
@@ -779,38 +779,6 @@ class Trainer(object):
             model.student = model.student._layers
             model.teacher = model.teacher._layers
 
-        # enabel auto mixed precision mode
-        # if self.cfg.get('amp', False):
-        #     scaler = amp.GradScaler(
-        #         enable=self.cfg.use_gpu or self.cfg.use_npu,
-        #         init_loss_scaling=1024)
-        # try:
-        #    ema_model = self.ema #wjm 
-        # except ValueError as e:
-        #      print("{}:Please set use_ ema=true".format(e))
-
-        # sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
-        #            self.cfg.use_gpu and self._nranks > 1)
-        # if sync_bn:
-        #     self.model.teacher = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
-        #         self.model.teacher)
-        #     self.model.student = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
-        #         self.model.student)
-        # model = self.model
-        # # get distributed model
-        # if self.cfg.get('fleet', False):
-        #     model.teacher = fleet.distributed_model(model.teacher)
-        #     model.student = fleet.distributed_model(model.student)
-        #     self.optimizer = fleet.distributed_optimizer(self.optimizer)
-        # elif self._nranks > 1:
-        #     find_unused_parameters = self.cfg.get('find_unused_parameters',
-        #                                           False)
-        #     model.student = paddle.DataParallel(
-        #         model.student, find_unused_parameters=find_unused_parameters)
-        #     import pdb
-        #     pdb.set_trace()
-        #     model.teacher = paddle.DataParallel(model.teacher, find_unused_parameters=find_unused_parameters)
-        # model = model._layers  #wjm add
         self.status.update({
             'epoch_id': self.start_epoch,
             'step_id': 0,
@@ -953,13 +921,13 @@ class Trainer(object):
                 self._compose_callback.on_step_end(self.status)
                 # Note: ema_start_steps
                 if self.use_ema and curr_iter == self.ema_start_steps:  #wjm add
-                    # Start
-                    weight = copy.deepcopy(self.model.student.state_dict())
-                    self.model.teacher.set_dict(weight)  #将教师模型参数与学生同步
+                    self.ema.update(model, decay=0)
+                    self.model.teacher.set_dict(self.ema.apply())  #wjm 10.10
                 elif self.use_ema and curr_iter > self.ema_start_steps:  #wjm add
                     self.ema.update(model)
-                    weight = copy.deepcopy(self.model.state_dict())
-                    self.status['weight'] = weight
+                    # weight = copy.deepcopy(self.model.student.state_dict())
+                    self.model.teacher.set_dict(self.ema.apply())
+                    # self.status['weight'] = weight
                 iter_tic = time.time()
 
 
