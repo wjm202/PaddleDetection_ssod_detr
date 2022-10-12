@@ -65,29 +65,30 @@ class Semi_Compose(object):
         if self.Unsup is True:
             for f in self.transforms_cls_weak:
                 try:
-                    weak_data = f(data)
+                    data = f(data)
                 except Exception as e:
                     stack_info = traceback.format_exc()
                     logger.warning("fail to map sample transform [{}] "
                                    "with error: {} and stack:\n{}".format(
                                        f, e, str(stack_info)))
                     raise e
-            w_data = copy.deepcopy(weak_data)
+            weak_data = copy.deepcopy(data)  #wjm10.12
             for f in self.transforms_cls_strong:
                 try:
-                    strong_data = f(w_data)
+                    weak_data = f(weak_data)
                 except Exception as e:
                     stack_info = traceback.format_exc()
                     logger.warning("fail to map sample transform [{}] "
                                    "with error: {} and stack:\n{}".format(
                                        f, e, str(stack_info)))
                     raise e
-            return [weak_data, strong_data]
+            strong_data = copy.deepcopy(weak_data)
+            return [data, strong_data]
 
         else:
             for f in self.transforms_cls_weak:
                 try:
-                    weak_data = f(data)
+                    data = f(data)
                 except Exception as e:
                     stack_info = traceback.format_exc()
                     logger.warning("fail to map sample transform [{}] "
@@ -96,13 +97,14 @@ class Semi_Compose(object):
                     raise e
             for f in self.transforms_cls_strong:
                 try:
-                    strong_data = f(weak_data)
+                    data = f(data)
                 except Exception as e:
                     stack_info = traceback.format_exc()
                     logger.warning("fail to map sample transform [{}] "
                                    "with error: {} and stack:\n{}".format(
                                        f, e, str(stack_info)))
                     raise e
+            strong_data = copy.deepcopy(data)
             return strong_data
 
 
@@ -181,7 +183,6 @@ class Semi_BatchCompose(Compose):
                         tmp_data = np.stack(tmp_data, axis=0)
                     batch_data_weak[k] = tmp_data
             batch_data.append(batch_data_weak)
-
             #unsup_strong 
             for f in self.transforms_cls:
                 try:
@@ -214,7 +215,10 @@ class Semi_BatchCompose(Compose):
                         tmp_data = np.stack(tmp_data, axis=0)
                     batch_data_strong[k] = tmp_data
             batch_data.append(batch_data_strong)
-            return batch_data
+            return {
+                'batch_data_weak': batch_data[0],
+                'batch_data_strong': batch_data[1]
+            }
 
             # assert type(batch_data_weak["curr_iter"] ) is int
 
@@ -444,19 +448,14 @@ class SemiBaseDataLoader(BaseDataLoader):
         self.dataset = dataset
         self.dataset.check_or_download_dataset()
         self.dataset.parse_dataset()
-        # self.dataset.parse_dataset_semi()  # new added
-        # get data
+
         if self.UNSUP == False and strong_aug == False:
             self.dataset.set_transform(self._sample_transforms_sup_weak)
             self.dataset.set_kwargs(**self.kwargs)
         else:
             self.dataset.set_transform(self._sample_transforms)
             self.dataset.set_kwargs(**self.kwargs)
-        # set kwargs
-        # else:
-        #    self.dataset.set_transform(self._strong_sup_transforms)
-        #    self.dataset.set_kwargs(**self.kwargs)
-        # batch sampler
+
         if batch_sampler is None:
             self._batch_sampler = DistributedBatchSampler(
                 self.dataset,

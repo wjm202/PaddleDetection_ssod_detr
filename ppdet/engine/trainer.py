@@ -195,7 +195,7 @@ class Trainer(object):
                 level=self.amp_level)
         self.use_ema = ('use_ema' in cfg and cfg['use_ema'])
         if self.use_ema:
-            ema_decay = self.cfg.get('ema_decay', 0.9998)
+            ema_decay = self.cfg.get('ema_decay', 0.9996)
             ema_decay_type = self.cfg.get('ema_decay_type', 'threshold')
             cycle_epoch = self.cfg.get('cycle_epoch', -1)
             ema_black_list = self.cfg.get('ema_black_list', None)
@@ -821,6 +821,8 @@ class Trainer(object):
                 'distill_loss_ctn': paddle.to_tensor([0]),
                 'loss_unsup_sum': paddle.to_tensor([0])
             }
+            #     for step_id, (data_unsup_w, data_unsup_s) in enumerate(
+            # self.loader_unsup):
             for step_id, (data_sup_w, data_sup_s, data_unsup) in enumerate(
                     zip(self.loader, self.loader_sup_strong,
                         self.loader_unsup)):
@@ -829,13 +831,13 @@ class Trainer(object):
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
-                data_unsup_w = data_unsup[0]
-                data_unsup_s = data_unsup[1]
+
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
-                data_unsup_w['epoch_id'] = epoch_id
-                data_unsup_s['epoch_id'] = epoch_id
-
+                data_unsup['epoch_id'] = epoch_id
+                # data_unsup_s['epoch_id'] = epoch_id
+                data_unsup_w = data_unsup['batch_data_weak']
+                data_unsup_s = data_unsup['batch_data_strong']
                 train_cfg = self.cfg.DenseTeacher['train_cfg']
 
                 # model forward

@@ -551,7 +551,6 @@ class SemiCOCODataSet(COCODataSet):
 
         if self.supervised:
             logger.info(f'Use {len(self.roidbs)} sup_samples data as LABELED')
-            self.sup_data = len(self.roidbs)
         else:
             logger.info(
                 f'Use {len(self.roidbs)} unsup_samples data as UNLABELED')
