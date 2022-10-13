@@ -387,15 +387,6 @@ class FCOSHead(nn.Layer):
             weight=mask,
             reduction="sum") / fg_num
 
-        b_mask_np = np.array(b_mask)
-        teacher_deltas_np = np.array(teacher_deltas)
-        teacher_deltasb_mask_np = np.array(teacher_deltas[b_mask])
-        teacher_deltasb_masksum_np = np.array(teacher_deltas[b_mask].sum())
-        np.savetxt('b_mask_np.txt', b_mask_np)
-        np.savetxt('teacher_deltas_np.txt', teacher_deltas_np)
-        np.savetxt('teacher_deltasb_mask_np.txt', teacher_deltasb_mask_np)
-        np.savetxt('teacher_deltasb_masksum_np.txt', teacher_deltasb_masksum_np)
-
         inputs = paddle.concat(
             (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
             axis=-1)  #wjm add
@@ -415,6 +406,7 @@ class FCOSHead(nn.Layer):
             "distill_loss_cls": loss_logits,
             "distill_loss_box": loss_deltas,
             "distill_loss_ctn": loss_quality,
+            "fore_ground_sum": fg_num,
         }
 
 

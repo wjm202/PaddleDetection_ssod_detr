@@ -821,8 +821,10 @@ class Trainer(object):
                 'distill_loss_cls': paddle.to_tensor([0]),
                 'distill_loss_box': paddle.to_tensor([0]),
                 'distill_loss_ctn': paddle.to_tensor([0]),
-                'loss_unsup_sum': paddle.to_tensor([0])
+                'loss_unsup_sum': paddle.to_tensor([0]),
+                "fore_ground_sum": paddle.to_tensor([0])
             }
+            # fg_dict={"fore_ground_sum" : 0}
             #     for step_id, (data_unsup_w, data_unsup_s) in enumerate(
             # self.loader_unsup):
             for step_id, (data_sup_w, data_sup_s, data_unsup) in enumerate(
@@ -900,6 +902,8 @@ class Trainer(object):
                     loss_dict_unsup = model.student.fcos_head.get_distill_loss(
                         [student_logits, student_deltas, student_quality],
                         [teacher_logits, teacher_deltas, teacher_quality])
+                    fg_num = loss_dict_unsup["fore_ground_sum"]
+                    del loss_dict_unsup["fore_ground_sum"]
                     distill_weights = train_cfg['loss_weight']
                     loss_dict_unsup = {
                         k: v * distill_weights[k]
@@ -915,6 +919,7 @@ class Trainer(object):
                     loss_dict.update(loss_dict_unsup)
                     loss_dict.update({'loss_unsup_sum': losses_unsup})
                     losses += losses_unsup.detach()
+                    loss_dict.update({"fore_ground_sum": fg_num})
                     loss_dict['loss'] = losses
                     # total = 'l oss_sup_sum' + 'loss_unsup_sum'
 
@@ -927,6 +932,7 @@ class Trainer(object):
 
                 if self._nranks < 2 or self._local_rank == 0:
                     self.status['training_staus'].update(loss_dict)  # outputs
+                    # self.status['training_staus'].update(fg_dict)
 
                 self.status['batch_time'].update(time.time() - iter_tic)
                 self._compose_callback.on_step_end(self.status)
