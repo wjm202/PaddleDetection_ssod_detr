@@ -26,7 +26,7 @@ from IPython import embed
 from ppdet.core.workspace import register
 from ppdet.modeling.layers import ConvNormLayer, MultiClassNMS
 from ppdet.modeling.losses import GIoULoss
-
+import numpy as np
 __all__ = ['FCOSFeat', 'FCOSHead']
 
 
@@ -347,24 +347,24 @@ class FCOSHead(nn.Layer):
 
         student_logits = paddle.concat(
             [permute_to_N_HWA_K(x, nc)
-             for x in student_logits], 1).reshape([-1, nc])
+             for x in student_logits], axis=1).reshape([-1, nc])
         teacher_logits = paddle.concat(
             [permute_to_N_HWA_K(x, nc)
-             for x in teacher_logits], 1).reshape([-1, nc])
+             for x in teacher_logits], axis=1).reshape([-1, nc])
 
         student_deltas = paddle.concat(
             [permute_to_N_HWA_K(x, 4)
-             for x in student_deltas], 1).reshape([-1, 4])
+             for x in student_deltas], axis=1).reshape([-1, 4])
         teacher_deltas = paddle.concat(
             [permute_to_N_HWA_K(x, 4)
              for x in teacher_deltas], 1).reshape([-1, 4])
 
         student_quality = paddle.concat(
             [permute_to_N_HWA_K(x, 1)
-             for x in student_quality], 1).reshape([-1, 1])
+             for x in student_quality], axis=1).reshape([-1, 1])
         teacher_quality = paddle.concat(
             [permute_to_N_HWA_K(x, 1)
-             for x in teacher_quality], 1).reshape([-1, 1])
+             for x in teacher_quality], axis=1).reshape([-1, 1])
 
         with paddle.no_grad():
             # Region Selection
@@ -386,6 +386,16 @@ class FCOSHead(nn.Layer):
             teacher_probs,
             weight=mask,
             reduction="sum") / fg_num
+
+        b_mask_np = np.array(b_mask)
+        teacher_deltas_np = np.array(teacher_deltas)
+        teacher_deltasb_mask_np = np.array(teacher_deltas[b_mask])
+        teacher_deltasb_masksum_np = np.array(teacher_deltas[b_mask].sum())
+        np.savetxt('b_mask_np.txt', b_mask_np)
+        np.savetxt('teacher_deltas_np.txt', teacher_deltas_np)
+        np.savetxt('teacher_deltasb_mask_np.txt', teacher_deltasb_mask_np)
+        np.savetxt('teacher_deltasb_masksum_np.txt', teacher_deltasb_masksum_np)
+
         inputs = paddle.concat(
             (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
             axis=-1)  #wjm add
@@ -393,9 +403,9 @@ class FCOSHead(nn.Layer):
             (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
             axis=-1)  #wjm add
         loss_deltas = (
-            self.iou_loss(
+            iou_loss(
                 inputs,  #wjm add
-                targets) * teacher_deltas[b_mask]).mean()
+                targets) * teacher_quality[b_mask]).mean()
 
         loss_quality = F.binary_cross_entropy(
             F.sigmoid(student_quality[b_mask]),
@@ -412,6 +422,7 @@ def permute_to_N_HWA_K(tensor, K):
     """
     Transpose/reshape a tensor from (N, (A x K), H, W) to (N, (HxWxA), K)
     """
+    assert tensor.dim() == 4, tensor.shape
     N, _, H, W = tensor.shape
     tensor = tensor.reshape([N, -1, K, H, W]).transpose([0, 3, 4, 1, 2])
     tensor = tensor.reshape([N, -1, K])
@@ -442,4 +453,35 @@ def QFLv2(
         loss = loss[valid].mean()
     elif reduction == "sum":
         loss = loss[valid].sum()
+    return loss
+
+
+def iou_loss(inputs, targets):
+
+    eps = 1.1920928955078125e-07
+
+    inputs_area = (inputs[..., 2] - inputs[..., 0]).clip_(min=0) \
+        * (inputs[..., 3] - inputs[..., 1]).clip_(min=0)
+    targets_area = (targets[..., 2] - targets[..., 0]).clip_(min=0) \
+        * (targets[..., 3] - targets[..., 1]).clip_(min=0)
+
+    w_intersect = (paddle.minimum(inputs[..., 2], targets[..., 2]) -
+                   paddle.maximum(inputs[..., 0], targets[..., 0])).clip_(min=0)
+    h_intersect = (paddle.minimum(inputs[..., 3], targets[..., 3]) -
+                   paddle.maximum(inputs[..., 1], targets[..., 1])).clip_(min=0)
+
+    area_intersect = w_intersect * h_intersect
+    area_union = targets_area + inputs_area - area_intersect
+
+    ious = area_intersect / area_union.clip(min=eps)
+
+
+    g_w_intersect = paddle.maximum(inputs[..., 2], targets[..., 2]) \
+        - paddle.minimum(inputs[..., 0], targets[..., 0])
+    g_h_intersect = paddle.maximum(inputs[..., 3], targets[..., 3]) \
+        - paddle.minimum(inputs[..., 1], targets[..., 1])
+    ac_uion = g_w_intersect * g_h_intersect
+    gious = ious - (ac_uion - area_union) / ac_uion.clip(min=eps)
+    loss = 1 - gious
+
     return loss

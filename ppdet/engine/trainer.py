@@ -432,8 +432,10 @@ class Trainer(object):
             self.start_epoch = load_weight(self.model.student_model, weights,
                                            self.optimizer)
         else:
-            self.start_epoch = load_weight(self.model, weights, self.optimizer,
-                                           self.ema if self.use_ema else None)
+            self.start_epoch = load_weight(self.model, weights, self.optimizer)
+
+            # self.start_epoch = load_weight(self.model, weights, self.optimizer,
+            #                    self.ema if self.use_ema else None)
         logger.debug("Resume weights of epoch {}".format(self.start_epoch))
 
     def train(self, validate=False):
@@ -847,6 +849,9 @@ class Trainer(object):
                 sup_weak.extend(sup_strong)
                 loss_dict_sup = self.model(sup_weak)
                 '''
+                # for  k,v    in data_sup_s.items():
+                #     v =paddle.concat([v,data_sup_w[k]])
+                # data_sup_w=dict(data_sup_w,**data_sup_s)
                 loss_dict_sup_w = model.student(data_sup_w)  # wjm add
                 loss_dict_sup = model.student(data_sup_s)  # wjm add
                 loss_dict_sup['loss'] += loss_dict_sup_w['loss']  # wjm add
@@ -891,6 +896,7 @@ class Trainer(object):
                         data_unsup_w['is_teacher'] = True
                         teacher_logits, teacher_deltas, teacher_quality = model.teacher(
                             data_unsup_w)  # see fcos_head.py forward
+
                     loss_dict_unsup = model.student.fcos_head.get_distill_loss(
                         [student_logits, student_deltas, student_quality],
                         [teacher_logits, teacher_deltas, teacher_quality])

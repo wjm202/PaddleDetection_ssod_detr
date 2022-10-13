@@ -1,8 +1,8 @@
 _BASE_: [
   '../../fcos/fcos_r50_fpn_1x_coco.yml',
 ]
-log_iter: 1
-snapshot_epoch: 1
+log_iter: 20
+snapshot_epoch: 3
 weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
@@ -10,11 +10,11 @@ weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
 
 ### global config
 semi_supervised: True
-semi_start_steps: 4
+semi_start_steps: 5000
 use_ema: True
 ema_decay: 0.9996
 ema_decay_type: None
-ema_start_steps: 4
+ema_start_steps: 3000
 
 
 ### model config
@@ -41,8 +41,8 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    # anno_path: annotations/semi_supervised/instances_train2017.1@10.json
-    anno_path: annotations/instances_train2017_rand12.json
+    anno_path: annotations/semi_supervised/instances_train2017.1@10.json
+    # anno_path: annotations/instances_train2017_rand12.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
     # sup_file: 'dataset/coco/COCO_supervision.txt'
@@ -54,8 +54,8 @@ TrainDataset:
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    # anno_path: annotations/semi_supervised/instances_train2017.1@10-unlabeled.json
-    anno_path: annotations/instances_train2017_rand144.json
+    anno_path: annotations/semi_supervised/instances_train2017.1@10-unlabeled.json
+    # anno_path: annotations/instances_train2017_rand144.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
     # sup_file: 'dataset/coco/COCO_supervision.txt'
@@ -67,8 +67,8 @@ UnsupTrainDataset:
 EvalDataset:
   !COCODataSet
     image_dir: val2017
-    anno_path: annotations/instances_val2017_rand24.json
-    # anno_path: annotations/instances_val2017.json
+    # anno_path: annotations/instances_val2017_rand24.json
+    anno_path: annotations/instances_val2017.json
     dataset_dir: dataset/coco
 
 TestDataset:
@@ -78,7 +78,7 @@ TestDataset:
 
 
 ### data_aug config
-worker_num: 0 # set 0 for single gpu debug
+worker_num: 8 # set 0 for single gpu debug
 SupTrainReader:
   sample_transforms:
     - Decode: {}
@@ -95,7 +95,7 @@ SupTrainReader:
         center_sampling_radius: 1.5
         downsample_ratios: [8, 16, 32, 64, 128]
         norm_reg_targets: True
-  batch_size: 1
+  batch_size: 2
   shuffle: true
   drop_last: True
   UNSUP: False
