@@ -15,7 +15,7 @@ import sys
 import paddle
 from ppdet.core.workspace import register, serializable
 
-from .target import rpn_anchor_target, generate_proposal_target, generate_mask_target, libra_generate_proposal_target
+from .target import rpn_anchor_target, generate_proposal_target, generate_mask_target, libra_generate_proposal_target, generate_proposal_targetlm
 import numpy as np
 
 
@@ -156,8 +156,7 @@ class BBoxAssigner(object):
                  rpn_rois_num,
                  inputs,
                  stage=0,
-                 is_cascade=False,
-                 add_gt_as_proposals=True):
+                 is_cascade=False):
         gt_classes = inputs['gt_class']
         gt_boxes = inputs['gt_bbox']
         is_crowd = inputs.get('is_crowd', None)
@@ -167,8 +166,8 @@ class BBoxAssigner(object):
             rpn_rois, gt_classes, gt_boxes, self.batch_size_per_im,
             self.fg_fraction, self.fg_thresh, self.bg_thresh, self.num_classes,
             self.ignore_thresh, is_crowd, self.use_random, is_cascade,
-            self.cascade_iou[stage], self.assign_on_cpu, add_gt_as_proposals)
-        rois = outs[0]
+            self.cascade_iou[stage], self.assign_on_cpu)
+        rois = outs[0] # bbox
         rois_num = outs[-1]
         # tgt_labels, tgt_bboxes, tgt_gt_inds
         targets = outs[1:4]
@@ -366,11 +365,21 @@ class RBoxAssigner(object):
     def assign_anchor(self,
                       anchors,
                       gt_bboxes,
-                      gt_labels,
+                      gt_lables,
                       pos_iou_thr,
                       neg_iou_thr,
                       min_iou_thr=0.0,
                       ignore_iof_thr=-2):
+        """
+
+        Args:
+            anchors:
+            gt_bboxes:[M, 5] rc,yc,w,h,angle
+            gt_lables:
+
+        Returns:
+
+        """
         assert anchors.shape[1] == 4 or anchors.shape[1] == 5
         assert gt_bboxes.shape[1] == 4 or gt_bboxes.shape[1] == 5
         anchors_xc_yc = anchors
@@ -383,9 +392,9 @@ class RBoxAssigner(object):
         gt_bboxes_xc_yc = paddle.to_tensor(gt_bboxes_xc_yc)
 
         try:
-            from ext_op import rbox_iou
+            from rbox_iou_ops import rbox_iou
         except Exception as e:
-            print("import custom_ops error, try install ext_op " \
+            print("import custom_ops error, try install rbox_iou_ops " \
                   "following ppdet/ext_op/README.md", e)
             sys.stdout.flush()
             sys.exit(-1)
@@ -419,12 +428,12 @@ class RBoxAssigner(object):
         # (4) assign max_iou as pos_ids >=0
         anchor_gt_bbox_iou_inds = anchor_gt_bbox_inds[gt_bbox_anchor_iou_inds]
         # gt_bbox_anchor_iou_inds = np.logical_and(gt_bbox_anchor_iou_inds, anchor_gt_bbox_iou >= min_iou_thr)
-        labels[gt_bbox_anchor_iou_inds] = gt_labels[anchor_gt_bbox_iou_inds]
+        labels[gt_bbox_anchor_iou_inds] = gt_lables[anchor_gt_bbox_iou_inds]
 
         # (5) assign >= pos_iou_thr as pos_ids
         iou_pos_iou_thr_ids = anchor_gt_bbox_iou >= pos_iou_thr
         iou_pos_iou_thr_ids_box_inds = anchor_gt_bbox_inds[iou_pos_iou_thr_ids]
-        labels[iou_pos_iou_thr_ids] = gt_labels[iou_pos_iou_thr_ids_box_inds]
+        labels[iou_pos_iou_thr_ids] = gt_lables[iou_pos_iou_thr_ids_box_inds]
         return anchor_gt_bbox_inds, anchor_gt_bbox_iou, labels
 
     def __call__(self, anchors, gt_bboxes, gt_labels, is_crowd):
@@ -479,3 +488,80 @@ class RBoxAssigner(object):
             pos_labels_weights[neg_inds] = 1.0
         return (pos_labels, pos_labels_weights, bbox_targets, bbox_weights,
                 bbox_gt_bboxes, pos_inds, neg_inds)
+
+
+@register
+class BBoxAssignerLM(BBoxAssigner):
+    __shared__ = ['num_classes', 'assign_on_cpu']
+    """
+    RCNN targets assignment module
+
+    The assignment consists of three steps:
+        1. Match RoIs and ground-truth box, label the RoIs with foreground
+           or background sample
+        2. Sample anchors to keep the properly ratio between foreground and 
+           background
+        3. Generate the targets for classification and regression branch
+
+    Args:
+        batch_size_per_im (int): Total number of RoIs per image. 
+            default 512 
+        fg_fraction (float): Fraction of RoIs that is labeled
+            foreground, default 0.25
+        fg_thresh (float): Minimum overlap required between a RoI
+            and ground-truth box for the (roi, gt box) pair to be
+            a foreground sample. default 0.5
+        bg_thresh (float): Maximum overlap allowed between a RoI
+            and ground-truth box for the (roi, gt box) pair to be
+            a background sample. default 0.5
+        ignore_thresh(float): Threshold for ignoring the is_crowd ground-truth
+            if the value is larger than zero.
+        use_random (bool): Use random sampling to choose foreground and 
+            background boxes, default true
+        cascade_iou (list[iou]): The list of overlap to select foreground and
+            background of each stage, which is only used In Cascade RCNN.
+        num_classes (int): The number of class.
+        assign_on_cpu (bool): In case the number of gt box is too large, 
+            compute IoU on CPU, default false.
+    """
+
+    def __init__(self,
+                 batch_size_per_im=512,
+                 fg_fraction=.25,
+                 fg_thresh=.5,
+                 bg_thresh=.5,
+                 ignore_thresh=-1.,
+                 use_random=True,
+                 cascade_iou=[0.5, 0.6, 0.7],
+                 num_classes=80,
+                 assign_on_cpu=False):
+        super(BBoxAssignerLM, self).__init__(batch_size_per_im,
+                                            fg_fraction,
+                                            fg_thresh,
+                                            bg_thresh,
+                                            ignore_thresh,
+                                            use_random,
+                                            cascade_iou,
+                                            num_classes,
+                                            assign_on_cpu)
+
+    def assignlm(self,
+                 rpn_rois,
+                 rpn_rois_num,
+                 inputs,
+                 stage=0,
+                 is_cascade=False):
+        gt_classes = inputs['gt_class']
+        gt_boxes = inputs['gt_bbox']
+        gt_classes_ig = inputs['gt_class_ig']
+        gt_boxes_ig = inputs['gt_bbox_ig']  
+        is_crowd = inputs.get('is_crowd', None)
+
+        sampling_results = generate_proposal_targetlm(
+            rpn_rois, gt_classes, gt_boxes, gt_classes_ig, gt_boxes_ig, self.batch_size_per_im,
+            self.fg_fraction, self.fg_thresh, self.bg_thresh, self.num_classes,
+            self.ignore_thresh, is_crowd, self.use_random, is_cascade,
+            self.cascade_iou[stage], self.assign_on_cpu)
+
+        return sampling_results
+

@@ -74,6 +74,17 @@ class PadBatch(BaseOperator):
         coarsest_stride = self.pad_to_stride
 
         # multi scale input is nested list
+
+        # [dict1, [dict2, dict3]]
+        if any([isinstance(b, Sequence) for b in samples]):
+            flattened = []
+            for b in samples:
+                if isinstance(b, Sequence):
+                    flattened.extend(b)
+                else:
+                    flattened.extend([b])
+            samples = flattened
+
         if isinstance(samples,
                       typing.Sequence) and len(samples) > 0 and isinstance(
                           samples[0], typing.Sequence):

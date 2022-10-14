@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and   
 # limitations under the License.
 
+import copy
+
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
@@ -21,8 +23,37 @@ from ppdet.core.workspace import register
 from .anchor_generator import AnchorGenerator
 from .target_layer import RPNTargetAssign
 from .proposal_generator import ProposalGenerator
-from ..cls_utils import _get_class_default_kwargs
 
+
+def select_single_mlvl(mlvl_tensors, batch_id, detach=True):
+    """Extract a multi-scale single image tensor from a multi-scale batch
+    tensor based on batch index.
+
+    Note: The default value of detach is True, because the proposal gradient
+    needs to be detached during the training of the two-stage model. E.g
+    Cascade Mask R-CNN.
+
+    Args:
+        mlvl_tensors (list[Tensor]): Batch tensor for all scale levels,
+           each is a 4D-tensor.
+        batch_id (int): Batch index.
+        detach (bool): Whether detach gradient. Default True.
+
+    Returns:
+        list[Tensor]: Multi-scale single image tensor.
+    """
+    assert isinstance(mlvl_tensors, (list, tuple))
+    num_levels = len(mlvl_tensors)
+
+    if detach:
+        mlvl_tensor_list = [
+            mlvl_tensors[i][batch_id].detach() for i in range(num_levels)
+        ]
+    else:
+        mlvl_tensor_list = [
+            mlvl_tensors[i][batch_id] for i in range(num_levels)
+        ]
+    return mlvl_tensor_list
 
 class RPNFeat(nn.Layer):
     """
@@ -68,17 +99,14 @@ class RPNHead(nn.Layer):
             derived by from_config
     """
     __shared__ = ['export_onnx']
-    __inject__ = ['loss_rpn_bbox']
 
     def __init__(self,
-                 anchor_generator=_get_class_default_kwargs(AnchorGenerator),
-                 rpn_target_assign=_get_class_default_kwargs(RPNTargetAssign),
-                 train_proposal=_get_class_default_kwargs(ProposalGenerator,
-                                                          12000, 2000),
-                 test_proposal=_get_class_default_kwargs(ProposalGenerator),
+                 anchor_generator=AnchorGenerator().__dict__,
+                 rpn_target_assign=RPNTargetAssign().__dict__,
+                 train_proposal=ProposalGenerator(12000, 2000).__dict__,
+                 test_proposal=ProposalGenerator().__dict__,
                  in_channel=1024,
-                 export_onnx=False,
-                 loss_rpn_bbox=None):
+                 export_onnx=False):
         super(RPNHead, self).__init__()
         self.anchor_generator = anchor_generator
         self.rpn_target_assign = rpn_target_assign
@@ -93,7 +121,6 @@ class RPNHead(nn.Layer):
             self.train_proposal = ProposalGenerator(**train_proposal)
         if isinstance(test_proposal, dict):
             self.test_proposal = ProposalGenerator(**test_proposal)
-        self.loss_rpn_bbox = loss_rpn_bbox
 
         num_anchors = self.anchor_generator.num_anchors
         self.rpn_feat = RPNFeat(in_channel, in_channel)
@@ -126,19 +153,19 @@ class RPNHead(nn.Layer):
         return {'in_channel': input_shape.channels}
 
     def forward(self, feats, inputs):
-        rpn_feats = self.rpn_feat(feats)
+        rpn_feats = self.rpn_feat(feats) # list 5, [b,256,_,_]
         scores = []
         deltas = []
 
         for rpn_feat in rpn_feats:
             rrs = self.rpn_rois_score(rpn_feat)
             rrd = self.rpn_rois_delta(rpn_feat)
-            scores.append(rrs)
-            deltas.append(rrd)
+            scores.append(rrs) # list 5, [b,3,_,_]
+            deltas.append(rrd) # list 5, [b,12,_,_]
 
-        anchors = self.anchor_generator(rpn_feats)
-
-        rois, rois_num = self._gen_proposal(scores, deltas, anchors, inputs)
+        anchors = self.anchor_generator(rpn_feats) # list 5, [_,4]
+        # list b, [1000,4]
+        rois, rois_num = self._gen_proposal(scores, deltas, anchors, inputs) 
         if self.training:
             loss = self.get_loss(scores, deltas, anchors, inputs)
             return rois, rois_num, loss
@@ -191,7 +218,7 @@ class RPNHead(nn.Layer):
         else:
             bs_rois_collect = []
             bs_rois_num_collect = []
-
+            bs_rois_prob_collect = []
             batch_size = paddle.slice(paddle.shape(im_shape), [0], [0], [1])
 
             # Generate proposals for each level and each batch.
@@ -229,6 +256,7 @@ class RPNHead(nn.Layer):
                     topk_prob = rpn_prob_list[0].flatten()
 
                 bs_rois_collect.append(topk_rois)
+                bs_rois_prob_collect.append(F.sigmoid(topk_prob))
                 bs_rois_num_collect.append(paddle.shape(topk_rois)[0])
 
             bs_rois_num_collect = paddle.concat(bs_rois_num_collect)
@@ -238,8 +266,9 @@ class RPNHead(nn.Layer):
             output_rois_num = paddle.shape(onnx_topk_rois)[0]
         else:
             output_rois = bs_rois_collect
+            output_rois_prob = bs_rois_prob_collect
             output_rois_num = bs_rois_num_collect
-
+        self.output_rois_prob = output_rois_prob
         return output_rois, output_rois_num
 
     def get_loss(self, pred_scores, pred_deltas, anchors, inputs):
@@ -267,7 +296,7 @@ class RPNHead(nn.Layer):
                 shape=(v.shape[0], -1, 4)) for v in pred_deltas
         ]
         deltas = paddle.concat(deltas, axis=1)
-
+        # tgt_labels, tgt_bboxes, tgt_deltas, norm  # tgt_labels 0: positive 1: negative -1: ignore
         score_tgt, bbox_tgt, loc_tgt, norm = self.rpn_target_assign(inputs,
                                                                     anchors)
 
@@ -301,12 +330,7 @@ class RPNHead(nn.Layer):
             loc_tgt = paddle.concat(loc_tgt)
             loc_tgt = paddle.gather(loc_tgt, pos_ind)
             loc_tgt.stop_gradient = True
-
-            if self.loss_rpn_bbox is None:
-                loss_rpn_reg = paddle.abs(loc_pred - loc_tgt).sum()
-            else:
-                loss_rpn_reg = self.loss_rpn_bbox(loc_pred, loc_tgt).sum()
-
+            loss_rpn_reg = paddle.abs(loc_pred - loc_tgt).sum()
         return {
             'loss_rpn_cls': loss_rpn_cls / norm,
             'loss_rpn_reg': loss_rpn_reg / norm

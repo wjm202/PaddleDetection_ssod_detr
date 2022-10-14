@@ -931,7 +931,8 @@ def generate_proposals(scores,
 
     else:
         helper = LayerHelper('generate_proposals_v2', **locals())
-
+        # print("***"*30)
+        # print("[DEBUG]:locals()['scores'].stop_gradient:", locals()['scores'].stop_gradient)
         check_variable_and_dtype(scores, 'scores', ['float32'],
                                  'generate_proposals_v2')
         check_variable_and_dtype(bbox_deltas, 'bbox_deltas', ['float32'],
@@ -956,6 +957,7 @@ def generate_proposals(scores,
                 dtype='int32')
             rpn_rois_num.stop_gradient = True
             outputs['RpnRoisNum'] = rpn_rois_num
+            # print("DEBUG]: rpn_rois_num", rpn_rois_num)
 
         helper.append_op(
             type="generate_proposals_v2",
@@ -1024,3 +1026,8 @@ def get_static_shape(tensor):
     shape = paddle.shape(tensor)
     shape.stop_gradient = True
     return shape
+
+
+def paddle_distributed_is_initialized():
+    return core.is_compiled_with_dist(
+    ) and parallel_helper._is_parallel_ctx_initialized()

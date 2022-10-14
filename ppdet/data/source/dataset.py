@@ -13,20 +13,96 @@
 # limitations under the License.
 
 import os
-import copy
 import numpy as np
+import bisect
+
 try:
     from collections.abc import Sequence
 except Exception:
     from collections import Sequence
-from paddle.io import Dataset
+from paddle.io import Dataset, IterableDataset
 from ppdet.core.workspace import register, serializable
 from ppdet.utils.download import get_dataset_path
+import copy
 from ppdet.data import source
 
-from ppdet.utils.logger import setup_logger
-logger = setup_logger(__name__)
 
+class _ConcatDataset(Dataset):
+    """Dataset as a concatenation of multiple datasets.
+    This class is useful to assemble different existing datasets.
+    Args:
+        datasets(list of Dataset): List of datasets to be composed.
+    Returns:
+        Dataset: A Dataset which composes fields of multiple datasets.
+    """
+
+    @staticmethod
+    def cumsum(sequence):
+        r, s = [], 0
+        for e in sequence:
+            l = len(e)
+            r.append(l + s)
+            s += l
+        return r
+
+    def __init__(self, datasets):
+        self.datasets = list(datasets)
+        for idx in range(len(self.datasets)):
+            self.datasets[idx].check_or_download_dataset()
+            self.datasets[idx].parse_dataset()
+        assert len(self.datasets) > 0, "input datasets shoule not be empty"
+        for i, dataset in enumerate(self.datasets):
+            assert isinstance(dataset, Dataset), \
+                    "each input dataset should be paddle.io.Dataset"
+            assert not isinstance(dataset, IterableDataset), \
+                    "paddle.io.IterableDataset not supported"
+        self.cumulative_sizes = self.cumsum(self.datasets)
+
+    def __len__(self):
+        return self.cumulative_sizes[-1]
+
+    # def __getitem__(self, idx):
+        # sample = []
+        # for dataset in self.datasets:
+        #     sample.extend(to_list(dataset[idx]))
+        # return tuple(sample)
+
+    def __getitem__(self, idx):
+        if idx < 0:
+            if -idx > len(self):
+                raise ValueError("absolute value of index should not exceed dataset length")
+            idx = len(self) + idx
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+        # sup 
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+        return self.datasets[dataset_idx][sample_idx]
+
+    @property
+    def cummulative_sizes(self):
+        warnings.warn("cummulative_sizes attribute is renamed to "
+                      "cumulative_sizes", DeprecationWarning, stacklevel=2)
+        return self.cumulative_sizes
+
+
+class SemiDataset(_ConcatDataset):
+    """Wrapper for semisupervised od."""
+    def __init__(self, sup, unsup, **kwargs):
+        super().__init__([sup, unsup], **kwargs)
+    
+    @property
+    def sup(self):
+        return self.datasets[0]
+
+    @property
+    def unsup(self):
+        return self.datasets[1]
+    
+    def set_epoch(self, epoch_id):
+        self._epoch = epoch_id
+   
 
 @serializable
 class DetDataset(Dataset):
@@ -40,7 +116,6 @@ class DetDataset(Dataset):
         data_fields (list): key name of data dictionary, at least have 'image'.
         sample_num (int): number of samples to load, -1 means all.
         use_default_label (bool): whether to load default label list.
-        repeat (int): repeat times for dataset, use in benchmark.
     """
 
     def __init__(self,
@@ -50,7 +125,6 @@ class DetDataset(Dataset):
                  data_fields=['image'],
                  sample_num=-1,
                  use_default_label=None,
-                 repeat=1,
                  **kwargs):
         super(DetDataset, self).__init__()
         self.dataset_dir = dataset_dir if dataset_dir is not None else ''
@@ -59,29 +133,28 @@ class DetDataset(Dataset):
         self.data_fields = data_fields
         self.sample_num = sample_num
         self.use_default_label = use_default_label
-        self.repeat = repeat
         self._epoch = 0
         self._curr_iter = 0
 
     def __len__(self, ):
-        return len(self.roidbs) * self.repeat
+        return len(self.roidbs)
 
     def __call__(self, *args, **kwargs):
         return self
 
     def __getitem__(self, idx):
-        n = len(self.roidbs)
-        if self.repeat > 1:
-            idx %= n
         # data batch
         roidb = copy.deepcopy(self.roidbs[idx])
         if self.mixup_epoch == 0 or self._epoch < self.mixup_epoch:
+            n = len(self.roidbs)
             idx = np.random.randint(n)
             roidb = [roidb, copy.deepcopy(self.roidbs[idx])]
         elif self.cutmix_epoch == 0 or self._epoch < self.cutmix_epoch:
+            n = len(self.roidbs)
             idx = np.random.randint(n)
             roidb = [roidb, copy.deepcopy(self.roidbs[idx])]
         elif self.mosaic_epoch == 0 or self._epoch < self.mosaic_epoch:
+            n = len(self.roidbs)
             roidb = [roidb, ] + [
                 copy.deepcopy(self.roidbs[np.random.randint(n)])
                 for _ in range(4)
@@ -92,7 +165,6 @@ class DetDataset(Dataset):
         else:
             roidb['curr_iter'] = self._curr_iter
         self._curr_iter += 1
-
         return self.transform(roidb)
 
     def check_or_download_dataset(self):
@@ -208,59 +280,6 @@ class ImageFolder(DetDataset):
         self.image_dir = images
         self.roidbs = self._load_images()
 
-    def set_slice_images(self,
-                         images,
-                         slice_size=[640, 640],
-                         overlap_ratio=[0.25, 0.25]):
-        self.image_dir = images
-        ori_records = self._load_images()
-        try:
-            import sahi
-            from sahi.slicing import slice_image
-        except Exception as e:
-            logger.error(
-                'sahi not found, plaese install sahi. '
-                'for example: `pip install sahi`, see https://github.com/obss/sahi.'
-            )
-            raise e
-
-        sub_img_ids = 0
-        ct = 0
-        ct_sub = 0
-        records = []
-        for i, ori_rec in enumerate(ori_records):
-            im_path = ori_rec['im_file']
-            slice_image_result = sahi.slicing.slice_image(
-                image=im_path,
-                slice_height=slice_size[0],
-                slice_width=slice_size[1],
-                overlap_height_ratio=overlap_ratio[0],
-                overlap_width_ratio=overlap_ratio[1])
-
-            sub_img_num = len(slice_image_result)
-            for _ind in range(sub_img_num):
-                im = slice_image_result.images[_ind]
-                rec = {
-                    'image': im,
-                    'im_id': np.array([sub_img_ids + _ind]),
-                    'h': im.shape[0],
-                    'w': im.shape[1],
-                    'ori_im_id': np.array([ori_rec['im_id'][0]]),
-                    'st_pix': np.array(
-                        slice_image_result.starting_pixels[_ind],
-                        dtype=np.float32),
-                    'is_last': 1 if _ind == sub_img_num - 1 else 0,
-                } if 'image' in self.data_fields else {}
-                records.append(rec)
-            ct_sub += sub_img_num
-            ct += 1
-        print('{} samples and slice to {} sub_samples'.format(ct, ct_sub))
-        self.roidbs = records
-
-    def get_label_list(self):
-        # Only VOC dataset needs label list in ImageFold 
-        return self.anno_path
-
 
 @register
 class CommonDataset(object):
@@ -297,3 +316,148 @@ class EvalDataset(CommonDataset):
 @register
 class TestDataset(CommonDataset):
     pass
+
+
+
+@serializable
+class ConcatDataset(_ConcatDataset):
+    """A wrapper of concatenated dataset.
+
+    Same as :obj:`ConcatDataset`, but
+    concat the group flag for image aspect ratio.
+
+    Args:
+        datasets (list[:obj:`Dataset`]): A list of datasets.
+        separate_eval (bool): Whether to evaluate the results
+            separately if it is used as validation dataset.
+            Defaults to True.
+    """
+
+    def __init__(self, datasets, separate_eval=True):
+        super(ConcatDataset, self).__init__()
+
+        assert len(datasets) > 0, 'datasets should not be an empty iterable'  # type: ignore
+        self.datasets = list(datasets)
+        for d in self.datasets:
+            assert not isinstance(d, IterableDataset), "ConcatDataset does not support IterableDataset"
+        self.cumulative_sizes = self.cumsum(self.datasets)
+
+        self.CLASSES = datasets[0].CLASSES
+        self.PALETTE = getattr(datasets[0], 'PALETTE', None)
+        self.separate_eval = separate_eval
+        if not separate_eval:
+            if any([isinstance(ds, CocoDataset) for ds in datasets]):
+                raise NotImplementedError(
+                    'Evaluating concatenated CocoDataset as a whole is not'
+                    ' supported! Please set "separate_eval=True"')
+            elif len(set([type(ds) for ds in datasets])) != 1:
+                raise NotImplementedError(
+                    'All the datasets should have same types')
+
+        if hasattr(datasets[0], 'flag'):
+            flags = []
+            for i in range(0, len(datasets)):
+                flags.append(datasets[i].flag)
+            self.flag = np.concatenate(flags)
+    
+    def get_cat_ids(self, idx):
+        """Get category ids of concatenated dataset by index.
+
+        Args:
+            idx (int): Index of data.
+
+        Returns:
+            list[int]: All categories in the image of specified index.
+        """
+
+        if idx < 0:
+            if -idx > len(self):
+                raise ValueError(
+                    'absolute value of index should not exceed dataset length')
+            idx = len(self) + idx
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+        return self.datasets[dataset_idx].get_cat_ids(sample_idx)
+
+    def get_ann_info(self, idx):
+        """Get annotation of concatenated dataset by index.
+
+        Args:
+            idx (int): Index of data.
+
+        Returns:
+            dict: Annotation info of specified index.
+        """
+
+        if idx < 0:
+            if -idx > len(self):
+                raise ValueError(
+                    'absolute value of index should not exceed dataset length')
+            idx = len(self) + idx
+        dataset_idx = bisect.bisect_right(self.cumulative_sizes, idx)
+        if dataset_idx == 0:
+            sample_idx = idx
+        else:
+            sample_idx = idx - self.cumulative_sizes[dataset_idx - 1]
+        return self.datasets[dataset_idx].get_ann_info(sample_idx)
+
+    def evaluate(self, results, logger=None, **kwargs):
+        """Evaluate the results.
+
+        Args:
+            results (list[list | tuple]): Testing results of the dataset.
+            logger (logging.Logger | str | None): Logger used for printing
+                related information during evaluation. Default: None.
+
+        Returns:
+            dict[str: float]: AP results of the total dataset or each separate
+            dataset if `self.separate_eval=True`.
+        """
+        assert len(results) == self.cumulative_sizes[-1], \
+            ('Dataset and results have different sizes: '
+             f'{self.cumulative_sizes[-1]} v.s. {len(results)}')
+
+        # Check whether all the datasets support evaluation
+        for dataset in self.datasets:
+            assert hasattr(dataset, 'evaluate'), \
+                f'{type(dataset)} does not implement evaluate function'
+
+        if self.separate_eval:
+            dataset_idx = -1
+            total_eval_results = dict()
+            for size, dataset in zip(self.cumulative_sizes, self.datasets):
+                start_idx = 0 if dataset_idx == -1 else \
+                    self.cumulative_sizes[dataset_idx]
+                end_idx = self.cumulative_sizes[dataset_idx + 1]
+
+                results_per_dataset = results[start_idx:end_idx]
+                print_log(
+                    f'\nEvaluateing {dataset.ann_file} with '
+                    f'{len(results_per_dataset)} images now',
+                    logger=logger)
+
+                eval_results_per_dataset = dataset.evaluate(
+                    results_per_dataset, logger=logger, **kwargs)
+                dataset_idx += 1
+                for k, v in eval_results_per_dataset.items():
+                    total_eval_results.update({f'{dataset_idx}_{k}': v})
+
+            return total_eval_results
+        elif any([isinstance(ds, CocoDataset) for ds in self.datasets]):
+            raise NotImplementedError(
+                'Evaluating concatenated CocoDataset as a whole is not'
+                ' supported! Please set "separate_eval=True"')
+        elif len(set([type(ds) for ds in self.datasets])) != 1:
+            raise NotImplementedError(
+                'All the datasets should have same types')
+        else:
+            original_data_infos = self.datasets[0].data_infos
+            self.datasets[0].data_infos = sum(
+                [dataset.data_infos for dataset in self.datasets], [])
+            eval_results = self.datasets[0].evaluate(
+                results, logger=logger, **kwargs)
+            self.datasets[0].data_infos = original_data_infos
+            return eval_results

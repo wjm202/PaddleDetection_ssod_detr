@@ -6,3 +6,63 @@ _BASE_: [
   '_base_/faster_fpn_reader.yml',
 ]
 weights: output/faster_rcnn_r50_fpn_1x_coco/model_final
+
+num_classes: 24
+
+TrainDataset:
+  !COCODataSet
+    image_dir: images
+    anno_path: annotations/coco_24_each_class10_total240.json
+    dataset_dir: /root/mnt_z/ztt/dataset/coco_data/labeled_data
+    data_fields: ['image', 'gt_bbox', 'gt_class']
+
+TrainDataset_sup:
+  !Semi_COCODataSet
+    image_dir: images
+    anno_path: /root/mnt_z/ztt/dataset/coco_data/labeled_data/annotations/coco_24_each_class10_total240.json
+    dataset_dir: /root/mnt_z/ztt/dataset/biaojian/object_detection_data/1103_hunhe_class_24/train
+    data_fields: ['image', 'gt_bbox', 'gt_class']
+    # allow_empty: True
+
+TrainDataset_unsup:
+  !Semi_COCODataSet
+    image_dir: images
+    anno_path: /root/mnt_z/ztt/dataset/coco_data/unlabeled_data/annotations/unlabeled_train_sub.json
+    # anno_path: /root/mnt_z/ztt/dataset/coco_data/unlabeled_data/annotations/test_unsup.json
+    dataset_dir: /root/mnt_z/ztt/dataset/biaojian/object_detection_data/1103_hunhe_class_24/train
+    data_fields: ['image', 'gt_bbox', 'gt_class']
+    allow_empty: True
+
+EvalDataset:
+  !COCODataSet
+    image_dir: images
+    # anno_path: annotations/coco_24_each_class10_total240.json
+    # dataset_dir: /root/mnt_z/ztt/dataset/coco_data/labeled_data
+    anno_path: coco_24.json
+    dataset_dir: /root/mnt_z/ztt/dataset/biaojian/object_detection_data/1103_hunhe_class_24/val
+
+TestDataset:
+  !ImageFolder
+    anno_path: coco_24.json # also support txt (like VOC's label_list.txt)
+    dataset_dir: /root/mnt_z/ztt/dataset/biaojian/object_detection_data/1103_hunhe_class_24/val # if set, anno_path will be 'dataset_dir/anno_path'
+
+epoch: 8
+eval_interval: 1250
+LearningRate:
+  base_lr: 0.02
+  schedulers:
+  - !PiecewiseDecay
+    gamma: 0.1
+    milestones: [5, 7]
+  - !LinearWarmup
+    start_factor: 0.1
+    steps: 500
+
+# export CUDA_VISIBLE_DEVICES=0,1,2,3 && python -m paddle.distributed.launch \
+# --log_dir work_dir/biaojian/240_faster_rcnn_resnet50_soft/log \
+# --gpus 0,1,2,3 tools/train.py \
+# -c configs/faster_rcnn/faster_rcnn_r50_fpn_1x_coco.yml \
+# --use_vdl=true \
+# --vdl_log_dir=work_dir/biaojian/240_faster_rcnn_resnet50_soft/vdl \
+# --eval -o weights=work_dir/biaojian/240_faster_rcnn_resnet50_soft/model_final \
+# save_dir=work_dir/biaojian/240_faster_rcnn_resnet50_soft/weights

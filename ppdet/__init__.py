@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from . import (core, data, engine, modeling, model_zoo, optimizer, metrics,
+from . import (core, data, engine, modeling, model_zoo, optimizer, metrics, ssod,
                utils, slim)
 
 

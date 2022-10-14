@@ -22,6 +22,7 @@ import sys
 
 import yaml
 import collections
+import shutil
 
 try:
     collectionsAbc = collections.abc
@@ -281,3 +282,31 @@ def create(cls_or_name, **kwargs):
     # (e.g., list, dict) from within the created module instances
     #kwargs = copy.deepcopy(kwargs)
     return cls(**cls_kwargs)
+
+def save_config(file_path, save_dir):
+    if save_dir.split('/')[-1] == 'weight' or save_dir.split('/')[-1] == 'weights':
+        save_dir = '/'.join(save_dir.split('/')[:-1])
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    shutil.copy(file_path, os.path.join(save_dir, file_path.split('/')[-1]))
+    _save_config_with_base(file_path, save_dir)
+
+
+def _save_config_with_base(file_path, save_dir):
+    with open(file_path) as f:
+        file_cfg = yaml.load(f, Loader=yaml.Loader)
+
+    # NOTE: cfgs outside have higher priority than cfgs in _BASE_
+    if BASE_KEY in file_cfg:
+        base_ymls = list(file_cfg[BASE_KEY])
+        for base_yml in base_ymls:
+            if base_yml.startswith("~"):
+                base_yml = os.path.expanduser(base_yml)
+            if not base_yml.startswith('/'):
+                base_yml = os.path.join(os.path.dirname(file_path), base_yml)
+            shutil.copy(base_yml, os.path.join(save_dir, base_yml.split('/')[-1]))
+            _save_config_with_base(base_yml, save_dir)
+
+        return 
+
+    return 

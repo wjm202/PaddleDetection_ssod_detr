@@ -29,22 +29,22 @@ warnings.filterwarnings('ignore')
 
 import paddle
 
-from ppdet.core.workspace import load_config, merge_config
-from ppdet.engine import Trainer, init_parallel_env, set_random_seed, init_fleet_env
+from ppdet.core.workspace import load_config, merge_config, save_config
+from ppdet.engine import Trainer, Semi_Trainer, init_parallel_env, set_random_seed, init_fleet_env
 from ppdet.slim import build_slim_model
 
-from ppdet.utils.cli import ArgsParser, merge_args
+import ppdet.utils.cli as cli
 import ppdet.utils.check as check
 from ppdet.utils.logger import setup_logger
 logger = setup_logger('train')
 
 
 def parse_args():
-    parser = ArgsParser()
+    parser = cli.ArgsParser()
     parser.add_argument(
         "--eval",
         action='store_true',
-        default=False,
+        default=True,
         help="Whether to perform evaluation in train")
     parser.add_argument(
         "-r", "--resume", default=None, help="weights path for resume")
@@ -104,6 +104,12 @@ def parse_args():
         default="sniper/proposals.json",
         help='Train proposals directory')
 
+    parser.add_argument(
+        '--semi_train',
+        action='store_true',
+        default=False,
+        help='whether start semi training or not')
+
     args = parser.parse_args()
     return args
 
@@ -120,14 +126,23 @@ def run(FLAGS, cfg):
         set_random_seed(0)
 
     # build trainer
-    trainer = Trainer(cfg, mode='train')
+    if cfg.semi_train:
+        trainer = Semi_Trainer(cfg, mode='train')
+    else:
+        trainer = Trainer(cfg, mode='train')
 
     # load weights
-    if FLAGS.resume is not None:
-        trainer.resume_weights(FLAGS.resume)
-    elif 'pretrain_weights' in cfg and cfg.pretrain_weights:
-        trainer.load_weights(cfg.pretrain_weights)
-
+    if not cfg.semi_train:
+        if FLAGS.resume is not None:
+            trainer.resume_weights(FLAGS.resume)
+        elif 'pretrain_weights' in cfg and cfg.pretrain_weights:
+            trainer.load_weights(cfg.pretrain_weights)
+    else:
+        if FLAGS.resume is not None:
+            trainer.resume_weights(FLAGS.resume)
+        elif 'pretrain_student_weights' in cfg and 'pretrain_teacher_weights' in cfg \
+            and cfg.pretrain_teacher_weights and cfg.pretrain_student_weights:
+                trainer.load_semi_weights(cfg.pretrain_teacher_weights, cfg.pretrain_student_weights)
     # training
     trainer.train(FLAGS.eval)
 
@@ -135,9 +150,17 @@ def run(FLAGS, cfg):
 def main():
     FLAGS = parse_args()
     cfg = load_config(FLAGS.config)
-    merge_args(cfg, FLAGS)
+    cfg['amp'] = FLAGS.amp
+    cfg['fleet'] = FLAGS.fleet
+    cfg['use_vdl'] = FLAGS.use_vdl
+    cfg['vdl_log_dir'] = FLAGS.vdl_log_dir
+    cfg['save_prediction_only'] = FLAGS.save_prediction_only
+    cfg['profiler_options'] = FLAGS.profiler_options
+    cfg['save_proposals'] = FLAGS.save_proposals
+    cfg['proposals_path'] = FLAGS.proposals_path
+    cfg['semi_train'] = FLAGS.semi_train
     merge_config(FLAGS.opt)
-
+    save_config(FLAGS.config, cfg.save_dir)
     # disable npu in config by default
     if 'use_npu' not in cfg:
         cfg.use_npu = False

@@ -1,5 +1,37 @@
+# soft_teacher: SoftTeacher
+ssod: LabelMatch
+label_match: True
+update_interval: 100
+# norm_type: sync_bn
+LabelMatch:
+  debug: False
+  use_mining: True
+  momentum: 0.996
+  teacher: FasterRCNN
+  student: FasterRCNNLM
+  train_cfg: 
+    use_teacher_proposal: False
+    pseudo_label_initial_score_thr: 0.5
+    rpn_pseudo_threshold: 0.85
+    cls_pseudo_threshold: 0.85
+    reg_pseudo_threshold: 0.02
+    jitter_times: 10
+    jitter_scale: 0.06
+    min_pseduo_box_size: 0
+    unsup_weight: 2.5
+  test_cfg:
+    inference_on: student
+
 architecture: FasterRCNN
-pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+pretrain_teacher_weights: /root/mnt_z/ztt/paddle-detection/work_dir/faster_rcnn_40epoch/weights/faster_rcnn_r50_fpn_1x_coco/38.pdparams
+use_ema: true
+ema_decay: 0.999
+# /root/mnt_z/ztt/pretrain/faster_rcnn_r50_fpn_2x_coco.pdparams
+
+architecture: FasterRCNNLM
+pretrain_student_weights: /root/mnt_z/ztt/paddle-detection/work_dir/faster_rcnn_40epoch/weights/faster_rcnn_r50_fpn_1x_coco/38.pdparams
+use_ema: true
+ema_decay: 0.999
 
 FasterRCNN:
   backbone: ResNet
@@ -9,6 +41,13 @@ FasterRCNN:
   # post process
   bbox_post_process: BBoxPostProcess
 
+FasterRCNNLM:
+  backbone: ResNet
+  neck: FPN
+  rpn_head: RPNHead
+  bbox_head: BBoxHeadLM
+  # post process
+  bbox_post_process: BBoxPostProcess
 
 ResNet:
   # index 0 stands for res2
@@ -60,9 +99,26 @@ BBoxAssigner:
   fg_fraction: 0.25
   use_random: True
 
+BBoxHeadLM:
+  head: TwoFCHeadLM
+  roi_extractor:
+    resolution: 7
+    sampling_ratio: 0
+    aligned: True
+  bbox_assigner: BBoxAssignerLM
+
+BBoxAssignerLM:
+  batch_size_per_im: 512
+  bg_thresh: 0.5
+  fg_thresh: 0.5
+  fg_fraction: 0.25
+  use_random: True
+
 TwoFCHead:
   out_channel: 1024
 
+TwoFCHeadLM:
+  out_channel: 1024
 
 BBoxPostProcess:
   decode: RCNNBox

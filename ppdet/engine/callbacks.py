@@ -26,7 +26,7 @@ import json
 import paddle
 import paddle.distributed as dist
 
-from ppdet.utils.checkpoint import save_model
+from ppdet.utils.checkpoint import save_model, save_semi_model
 from ppdet.metrics import get_infer_results
 
 from ppdet.utils.logger import setup_logger
@@ -183,6 +183,8 @@ class Checkpointer(Callback):
                     save_name = str(
                         epoch_id) if epoch_id != end_epoch - 1 else "model_final"
                     weight = self.weight.state_dict()
+                weight = self.weight.state_dict()
+
             elif mode == 'eval':
                 if 'save_best_model' in status and status['save_best_model']:
                     for metric in self.model._metrics:
@@ -198,7 +200,7 @@ class Checkpointer(Callback):
                                         "training iterations being too few or not " \
                                         "loading the correct weights.")
                             return
-                        if map_res[key][0] >= self.best_ap:
+                        if map_res[key][0] > self.best_ap:
                             self.best_ap = map_res[key][0]
                             save_name = 'best_model'
                             weight = self.weight.state_dict()
@@ -288,151 +290,6 @@ class VisualDLWriter(Callback):
                                                    self.vdl_mAP_step)
                 self.vdl_mAP_step += 1
 
-class WandbCallback(Callback):
-    def __init__(self, model):
-        super(WandbCallback, self).__init__(model)
-
-        try:
-            import wandb
-            self.wandb = wandb
-        except Exception as e:
-            logger.error('wandb not found, please install wandb. '
-                         'Use: `pip install wandb`.')
-            raise e
-
-        self.wandb_params = model.cfg.get('wandb', None)
-        self.save_dir = os.path.join(self.model.cfg.save_dir,
-                                     self.model.cfg.filename)
-        if self.wandb_params is None:
-            self.wandb_params = {}
-        for k, v in model.cfg.items():
-            if k.startswith("wandb_"):
-                self.wandb_params.update({
-                    k.lstrip("wandb_"): v
-                })
-        
-        self._run = None
-        if dist.get_world_size() < 2 or dist.get_rank() == 0:
-            _ = self.run
-            self.run.config.update(self.model.cfg)
-            self.run.define_metric("epoch")
-            self.run.define_metric("eval/*", step_metric="epoch")
-
-        self.best_ap = 0
-    
-    @property
-    def run(self):
-        if self._run is None:
-            if self.wandb.run is not None:
-                logger.info("There is an ongoing wandb run which will be used"
-                        "for logging. Please use `wandb.finish()` to end that"
-                        "if the behaviour is not intended")
-                self._run = self.wandb.run
-            else:
-                self._run = self.wandb.init(**self.wandb_params)
-        return self._run
-    
-    def save_model(self,
-                optimizer,
-                save_dir,
-                save_name,
-                last_epoch,
-                ema_model=None,
-                ap=None, 
-                tags=None):
-        if dist.get_world_size() < 2 or dist.get_rank() == 0:
-            model_path = os.path.join(save_dir, save_name)
-            metadata = {}
-            metadata["last_epoch"] = last_epoch
-            if ap:
-                metadata["ap"] = ap
-            if ema_model is None:
-                ema_artifact = self.wandb.Artifact(name="ema_model-{}".format(self.run.id), type="model", metadata=metadata)
-                model_artifact = self.wandb.Artifact(name="model-{}".format(self.run.id), type="model", metadata=metadata)
-
-                ema_artifact.add_file(model_path + ".pdema", name="model_ema")
-                model_artifact.add_file(model_path + ".pdparams", name="model")
-
-                self.run.log_artifact(ema_artifact, aliases=tags)
-                self.run.log_artfact(model_artifact, aliases=tags)
-            else:
-                model_artifact = self.wandb.Artifact(name="model-{}".format(self.run.id), type="model", metadata=metadata)
-                model_artifact.add_file(model_path + ".pdparams", name="model")
-                self.run.log_artifact(model_artifact, aliases=tags)
-    
-    def on_step_end(self, status):
-
-        mode = status['mode']
-        if dist.get_world_size() < 2 or dist.get_rank() == 0:
-            if mode == 'train':
-                training_status = status['training_staus'].get()
-                for k, v in training_status.items():
-                    training_status[k] = float(v)
-                metrics = {
-                    "train/" + k: v for k,v in training_status.items()
-                }
-                self.run.log(metrics)
-    
-    def on_epoch_end(self, status):
-        mode = status['mode']
-        epoch_id = status['epoch_id']
-        save_name = None
-        if dist.get_world_size() < 2 or dist.get_rank() == 0:
-            if mode == 'train':
-                end_epoch = self.model.cfg.epoch
-                if (
-                        epoch_id + 1
-                ) % self.model.cfg.snapshot_epoch == 0 or epoch_id == end_epoch - 1:
-                    save_name = str(epoch_id) if epoch_id != end_epoch - 1 else "model_final"
-                    tags = ["latest", "epoch_{}".format(epoch_id)]
-                    self.save_model(
-                        self.model.optimizer,
-                        self.save_dir,
-                        save_name,
-                        epoch_id + 1,
-                        self.model.use_ema,
-                        tags=tags
-                    )
-            if mode == 'eval':
-                merged_dict = {}
-                for metric in self.model._metrics:
-                    for key, map_value in metric.get_results().items():
-                        merged_dict["eval/{}-mAP".format(key)] = map_value[0]
-                merged_dict["epoch"] = status["epoch_id"]
-                self.run.log(merged_dict)
-
-                if 'save_best_model' in status and status['save_best_model']:
-                    for metric in self.model._metrics:
-                        map_res = metric.get_results()
-                        if 'bbox' in map_res:
-                            key = 'bbox'
-                        elif 'keypoint' in map_res:
-                            key = 'keypoint'
-                        else:
-                            key = 'mask'
-                        if key not in map_res:
-                            logger.warning("Evaluation results empty, this may be due to " \
-                                        "training iterations being too few or not " \
-                                        "loading the correct weights.")
-                            return
-                        if map_res[key][0] >= self.best_ap:
-                            self.best_ap = map_res[key][0]
-                            save_name = 'best_model'
-                            tags = ["best", "epoch_{}".format(epoch_id)]
-
-                            self.save_model(
-                                self.model.optimizer,
-                                self.save_dir,
-                                save_name,
-                                last_epoch=epoch_id + 1,
-                                ema_model=self.model.use_ema,
-                                ap=self.best_ap,
-                                tags=tags
-                            )
-    
-    def on_train_end(self, status):
-        self.run.finish()
-
 
 class SniperProposalsGenerator(Callback):
     def __init__(self, model):
@@ -491,3 +348,148 @@ class SniperProposalsGenerator(Callback):
         logger.info("save proposals in {}".format(self.cfg.proposals_path))
         with open(self.cfg.proposals_path, 'w') as f:
             json.dump(proposals, f)
+
+
+class SemiLogPrinter(LogPrinter):
+    def __init__(self, model):
+        super(SemiLogPrinter, self).__init__(model)
+
+    def on_step_end(self, status):
+        if dist.get_world_size() < 2 or dist.get_rank() == 0:
+            mode = status['mode']
+            if mode == 'train':
+                epoch_id = status['epoch_id']
+                step_id = status['step_id']
+                iter_id = status['iter_id']
+                steps_per_epoch = status['steps_per_epoch']
+                training_staus = status['training_staus']
+                batch_time = status['batch_time']
+                data_time = status['data_time']
+
+                epoches = self.model.cfg.epoch
+                batch_size = self.model.cfg['{}Reader'.format(mode.capitalize(
+                ))]['batch_size']
+                iters = epoches * steps_per_epoch
+                logs = training_staus.log()
+                iter_space_fmt = ':' + str(len(str(iters))) + 'd'
+                space_fmt = ':' + str(len(str(iters))) + 'd'
+                if step_id % self.model.cfg.log_iter == 0:
+                    eta_steps = (epoches - epoch_id) * steps_per_epoch - step_id
+                    eta_sec = eta_steps * batch_time.global_avg
+                    eta_str = str(datetime.timedelta(seconds=int(eta_sec)))
+                    ips = float(batch_size) / batch_time.avg
+                    fmt = ' '.join([
+                        '{'+ iter_space_fmt + '}/{} iters',
+                        'Epoch: [{}]',
+                        '[{' + space_fmt + '}/{}]',
+                        'learning_rate: {lr:.6f}',
+                        '{meters}',
+                        'eta: {eta}',
+                        'batch_cost: {btime}',
+                        'data_cost: {dtime}',
+                        'ips: {ips:.4f} images/s',
+                    ])
+                    fmt = fmt.format(
+                        iter_id,
+                        iters,
+                        epoch_id,
+                        step_id,
+                        steps_per_epoch,
+                        lr=status['learning_rate'],
+                        meters=logs,
+                        eta=eta_str,
+                        btime=str(batch_time),
+                        dtime=str(data_time),
+                        ips=ips)
+                    logger.info(fmt)
+            if mode == 'eval':
+                step_id = status['step_id']
+                if step_id % 100 == 0:
+                    logger.info("Eval iter: {}".format(step_id))
+
+
+class SemiCheckpointer(Checkpointer):
+    def __init__(self, model):
+        super(SemiCheckpointer, self).__init__(model)
+        cfg = self.model.cfg
+        self.best_ap = 0.
+        self.save_dir = os.path.join(self.model.cfg.save_dir,
+                                     self.model.cfg.filename)
+        if hasattr(self.model.model, 'student') and hasattr(self.model.model, 'teacher'):
+            self.weight = (self.model.model.teacher, self.model.model.student)
+        elif hasattr(self.model.model, 'student') or hasattr(self.model.model, 'teacher'):
+            raise AttributeError("model has no attribute 'student' or 'teacher'")
+        else:
+            raise AttributeError("model has no attribute 'student' and 'teacher'")
+
+    def every_n_iters(self, iter_id, n):
+        return (iter_id + 1) % n == 0 if n > 0 else False
+
+    def on_step_end(self, status):
+        # Checkpointer only performed during training
+        mode = status['mode']
+        eval_interval = status['eval_interval']
+        save_interval = status['save_interval']
+        iter_id = status['iter_id']
+        epoch_id = status['epoch_id']
+        t_weight = None
+        s_weight = None
+        save_name = None
+        if dist.get_world_size() < 2 or dist.get_rank() == 0:
+            if self.every_n_iters(iter_id, save_interval) and mode == 'train':
+                save_name = "last_epoch"
+                # save_name = str(iter_id + 1)
+                t_weight = self.weight[0].state_dict()
+                s_weight = self.weight[1].state_dict()
+                save_semi_model(
+                    t_weight,
+                    s_weight,
+                    self.model.optimizer,
+                    self.save_dir,
+                    save_name,
+                    epoch_id + 1,
+                    iter_id + 1
+                )
+    def on_epoch_end(self, status):
+        # Checkpointer only performed during training
+        mode = status['mode']
+        eval_interval = status['eval_interval']
+        save_interval = status['save_interval']
+        iter_id = status['iter_id']
+        epoch_id = status['epoch_id']
+        t_weight = None
+        s_weight = None
+        save_name = None
+        if dist.get_world_size() < 2 or dist.get_rank() == 0:
+            if self.every_n_iters(iter_id, eval_interval) and mode == 'eval':
+                if 'save_best_model' in status and status['save_best_model']:
+                    for metric in self.model._metrics:
+                        map_res = metric.get_results()
+                        if 'bbox' in map_res:
+                            key = 'bbox'
+                        elif 'keypoint' in map_res:
+                            key = 'keypoint'
+                        else:
+                            key = 'mask'
+                        if key not in map_res:
+                            logger.warning("Evaluation results empty, this may be due to " \
+                                        "training iterations being too few or not " \
+                                        "loading the correct weights.")
+                            return
+                        if map_res[key][0] > self.best_ap:
+                            self.best_ap = map_res[key][0]
+                            save_name = 'best_model'
+                            t_weight = self.weight[0].state_dict()
+                            s_weight = self.weight[1].state_dict()
+                        logger.info("Best teacher test {} ap is {:0.3f}.".format(
+                            key, self.best_ap))
+                    if t_weight and s_weight:
+                        save_semi_model(
+                            t_weight,
+                            s_weight,
+                            self.model.optimizer,
+                            self.save_dir,
+                            save_name,
+                            epoch_id + 1,
+                            iter_id + 1
+                        )

@@ -35,12 +35,14 @@ import os
 import copy
 import logging
 import cv2
-from PIL import Image, ImageDraw
+from PIL import Image, ImageEnhance, ImageOps, ImageFilter 
+import albumentations as A
 import pickle
 import threading
 MUTEX = threading.Lock()
 
 from ppdet.core.workspace import serializable
+from ppdet.modeling import bbox_utils
 from ..reader import Compose
 
 from .op_helper import (satisfy_sample_constraint, filter_and_process,
@@ -51,6 +53,7 @@ from .op_helper import (satisfy_sample_constraint, filter_and_process,
 
 from ppdet.utils.logger import setup_logger
 from ppdet.modeling.keypoint_utils import get_affine_transform, affine_transform
+from ppdet.data.transform.geo_utils import GeometricTransformationBase as GTrans
 logger = setup_logger(__name__)
 
 registered_ops = []
@@ -151,6 +154,7 @@ class Decode(BaseOperator):
             sample['w'] = im.shape[1]
 
         sample['im_shape'] = np.array(im.shape[:2], dtype=np.float32)
+        # sample['ori_shape'] = np.array(im.shape, dtype=np.float32)
         sample['scale_factor'] = np.array([1., 1.], dtype=np.float32)
         return sample
 
@@ -308,8 +312,70 @@ class Lighting(BaseOperator):
 
 
 @register_op
+class ResizeStepScaling(BaseOperator):
+    def __init__(self, 
+                 img_scale=[1024, 1024],
+                 ratio_range=[0.5, 1.5],
+                 keep_ratio=True,
+                 interp=cv2.INTER_LINEAR,
+                 random_interp=False):
+        """
+        Resize image to target size randomly. random target_size and interpolation method
+        Args:
+            target_size (int, list, tuple): image target size, if random size is True, must be list or tuple
+            keep_ratio (bool): whether keep_raio or not, default true
+            interp (int): the interpolation method
+            random_size (bool): whether random select target size of image
+            random_interp (bool): whether random select interpolation method
+        """
+        super(ResizeStepScaling, self).__init__()
+        assert isinstance(img_scale, (
+            Integral, Sequence)), "img_scale must be Integer, List or Tuple"
+        assert isinstance(ratio_range, (
+            Integral, Sequence)), "ratio_range must be Integer, List or Tuple"
+        if isinstance(img_scale, Integral):
+            img_scale = [img_scale, img_scale]
+
+        self.img_scale = img_scale
+        if isinstance(ratio_range, Integral):
+            ratio_range = [ratio_range, ratio_range]
+        self.ratio_range = ratio_range
+        self.keep_ratio = keep_ratio
+        self.interp = interp
+        self.interps = [
+            cv2.INTER_NEAREST,
+            cv2.INTER_LINEAR,
+            cv2.INTER_AREA,
+            cv2.INTER_CUBIC,
+            cv2.INTER_LANCZOS4,
+        ]
+        self.random_interp = random_interp
+
+    def random_sample_ratio(self):
+        min_ratio, max_ratio = self.ratio_range
+        assert min_ratio <= max_ratio
+        ratio = np.random.random_sample() * (max_ratio - min_ratio) + min_ratio
+        scale = int(self.img_scale[0] * ratio), int(self.img_scale[1] * ratio)
+        return scale
+
+
+    def apply(self, sample, context=None):
+        """ Resize the image numpy.
+        """
+        target_size = self.random_sample_ratio()
+
+        if self.random_interp:
+            interp = random.choice(self.interps)
+        else:
+            interp = self.interp
+
+        resizer = Resize(target_size, self.keep_ratio, interp)
+        return resizer(sample, context=context)
+
+
+@register_op
 class RandomErasingImage(BaseOperator):
-    def __init__(self, prob=0.5, lower=0.02, higher=0.4, aspect_ratio=0.3):
+    def __init__(self, prob=0.5, scale=[0.05, 0.2], aspect_ratio=[0.3, 3.3], value=0):
         """
         Random Erasing Data Augmentation, see https://arxiv.org/abs/1708.04896
         Args:
@@ -319,66 +385,81 @@ class RandomErasingImage(BaseOperator):
             aspect_ratio (float): aspect ratio of the erasing region
         """
         super(RandomErasingImage, self).__init__()
+
+        assert isinstance(value, (Number, str, tuple, list))
+        if (scale[0] > scale[1]) or (aspect_ratio[0] > aspect_ratio[1]):
+            warnings.warn("range should be of kind (min, max)")
+        if scale[0] < 0 or scale[1] > 1:
+            raise ValueError("range of scale should be between 0 and 1")
+        if prob < 0 or prob > 1:
+            raise ValueError("range of random erasing probability should be between 0 and 1")
+
         self.prob = prob
-        self.lower = lower
-        self.higher = higher
+        self.scale = scale
         self.aspect_ratio = aspect_ratio
+        self.value = value
 
-    def apply(self, sample):
-        gt_bbox = sample['gt_bbox']
+    @staticmethod
+    def get_params(img, scale, ratio, value=0):
+        """Get parameters for ``erase`` for a random erasing.
+
+        Args:
+            img (np.array): ndarray image of size (H, W, C) to be erased.
+            scale: range of proportion of erased area against input image.
+            ratio: range of aspect ratio of erased area.
+
+        Returns:
+            tuple: params (i, j, h, w, v) to be passed to ``erase`` for random erasing.
+        """
+        img_h, img_w, img_c = img.shape
+        area = img_h * img_w
+
+        for _ in range(10):
+            erase_area = random.uniform(scale[0], scale[1]) * area
+            aspect_ratio = random.uniform(ratio[0], ratio[1])
+
+            h = int(round(math.sqrt(erase_area * aspect_ratio)))
+            w = int(round(math.sqrt(erase_area / aspect_ratio)))
+
+            if h < img_h and w < img_w:
+                i = random.randint(0, img_h - h)
+                j = random.randint(0, img_w - w)
+                if isinstance(value, Number):
+                    v = value
+                elif value == 'random':
+                    v = np.random.randint(0, 256, size=(h, w, img_c))
+                else:
+                    raise NotImplementedError('Not implement')
+                return i, j, h, w, v
+
+        # Return original image
+        return 0, 0, img_h, img_w, img
+
+    def apply(self, sample, context=None):
+        if random.uniform(0, 1) >= self.prob:
+            return sample
         im = sample['image']
-        if not isinstance(im, np.ndarray):
-            raise TypeError("{}: image is not a numpy array.".format(self))
-        if len(im.shape) != 3:
-            raise ImageError("{}: image is not 3-dimensional.".format(self))
-
-        for idx in range(gt_bbox.shape[0]):
-            if self.prob <= np.random.rand():
-                continue
-
-            x1, y1, x2, y2 = gt_bbox[idx, :]
-            w_bbox = x2 - x1
-            h_bbox = y2 - y1
-            area = w_bbox * h_bbox
-
-            target_area = random.uniform(self.lower, self.higher) * area
-            aspect_ratio = random.uniform(self.aspect_ratio,
-                                          1 / self.aspect_ratio)
-
-            h = int(round(math.sqrt(target_area * aspect_ratio)))
-            w = int(round(math.sqrt(target_area / aspect_ratio)))
-
-            if w < w_bbox and h < h_bbox:
-                off_y1 = random.randint(0, int(h_bbox - h))
-                off_x1 = random.randint(0, int(w_bbox - w))
-                im[int(y1 + off_y1):int(y1 + off_y1 + h), int(x1 + off_x1):int(
-                    x1 + off_x1 + w), :] = 0
+        y, x, h, w, v = self.get_params(im, scale=self.scale, ratio=self.aspect_ratio, value=self.value)
+        im[y:y + h, x:x + w] = v
         sample['image'] = im
         return sample
 
 
 @register_op
 class NormalizeImage(BaseOperator):
-    def __init__(self,
-                 mean=[0.485, 0.456, 0.406],
-                 std=[0.229, 0.224, 0.225],
-                 is_scale=True,
-                 norm_type='mean_std'):
+    def __init__(self, mean=[0.485, 0.456, 0.406], std=[1, 1, 1],
+                 is_scale=True):
         """
         Args:
             mean (list): the pixel mean
             std (list): the pixel variance
-            is_scale (bool): scale the pixel to [0,1]
-            norm_type (str): type in ['mean_std', 'none']
         """
         super(NormalizeImage, self).__init__()
         self.mean = mean
         self.std = std
         self.is_scale = is_scale
-        self.norm_type = norm_type
         if not (isinstance(self.mean, list) and isinstance(self.std, list) and
-                isinstance(self.is_scale, bool) and
-                self.norm_type in ['mean_std', 'none']):
+                isinstance(self.is_scale, bool)):
             raise TypeError("{}: input type is invalid.".format(self))
         from functools import reduce
         if reduce(lambda x, y: x * y, self.std) == 0:
@@ -387,20 +468,20 @@ class NormalizeImage(BaseOperator):
     def apply(self, sample, context=None):
         """Normalize the image.
         Operators:
-            1.(optional) Scale the pixel to [0,1]
-            2.(optional) Each pixel minus mean and is divided by std
+            1.(optional) Scale the image to [0,1]
+            2. Each pixel minus mean and is divided by std
         """
         im = sample['image']
         im = im.astype(np.float32, copy=False)
-        if self.is_scale:
-            scale = 1.0 / 255.0
-            im *= scale
+        mean = np.array(self.mean)[np.newaxis, np.newaxis, :]
+        std = np.array(self.std)[np.newaxis, np.newaxis, :]
 
-        if self.norm_type == 'mean_std':
-            mean = np.array(self.mean)[np.newaxis, np.newaxis, :]
-            std = np.array(self.std)[np.newaxis, np.newaxis, :]
-            im -= mean
-            im /= std
+        if self.is_scale:
+            im = im / 255.0
+
+        im -= mean
+        im /= std
+
         sample['image'] = im
         return sample
 
@@ -592,8 +673,8 @@ class AutoAugment(BaseOperator):
             raise TypeError("{}: image is not a numpy array.".format(self))
         if len(im.shape) != 3:
             raise ImageError("{}: image is not 3-dimensional.".format(self))
-        if len(gt_bbox) == 0:
-            return sample
+        # if len(gt_bbox) == 0:
+        #     return sample
 
         height, width, _ = im.shape
         norm_gt_bbox = np.ones_like(gt_bbox, dtype=np.float32)
@@ -603,8 +684,7 @@ class AutoAugment(BaseOperator):
         norm_gt_bbox[:, 3] = gt_bbox[:, 2] / float(width)
 
         from .autoaugment_utils import distort_image_with_autoaugment
-        im, norm_gt_bbox = distort_image_with_autoaugment(im, norm_gt_bbox,
-                                                          self.autoaug_type)
+        im, norm_gt_bbox = distort_image_with_autoaugment(im, norm_gt_bbox, sample, self.autoaug_type)
 
         gt_bbox[:, 0] = norm_gt_bbox[:, 1] * float(width)
         gt_bbox[:, 1] = norm_gt_bbox[:, 0] * float(height)
@@ -831,7 +911,7 @@ class Resize(BaseOperator):
         else:
             sample['scale_factor'] = np.asarray(
                 [im_scale_y, im_scale_x], dtype=np.float32)
-
+        GTrans.apply(sample, "scale", sx=sample['scale_factor'][0], sy=sample['scale_factor'][1])
         # apply bbox
         if 'gt_bbox' in sample and len(sample['gt_bbox']) > 0:
             sample['gt_bbox'] = self.apply_bbox(sample['gt_bbox'],
@@ -3399,4 +3479,46 @@ class PadResize(BaseOperator):
         sample['image'] = self._pad(image).astype(np.float32)
         sample['gt_bbox'] = bboxes
         sample['gt_class'] = labels
+        return sample
+
+
+@register_op
+class Identity(BaseOperator):
+    def __init__(self):
+        super(Identity, self).__init__()
+
+    def apply(self, sample, context=None):
+        return sample
+
+
+@register_op
+class MultiBranch(object):
+    def __init__(self, **transform_group):
+        self.transform_group = {k: Compose(v) for k, v in transform_group.items()}
+
+    def __call__(self, results):
+        multi_results = []
+        for k, v in self.transform_group.items():
+            res = v(copy.deepcopy(results))
+            if res is None:
+                return None
+            # res["img_metas"]["tag"] = k
+            multi_results.append(res)
+        return multi_results
+
+
+@register_op
+class AugmentationUTStrong(BaseOperator):
+    def __init__(self):
+        super(AugmentationUTStrong, self).__init__()
+        self.transforms = A.Compose([
+            A.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1, p=0.8),
+            A.ToGray(p=0.2),
+            A.GaussianBlur(sigma_limit=(0.1, 2.0), p=0.5),
+        ])
+
+    def apply(self, sample, context=None):
+        im = sample['image']
+        results = self.transforms(image=im)
+        sample['image'] = im
         return sample
