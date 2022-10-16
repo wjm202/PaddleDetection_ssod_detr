@@ -247,7 +247,8 @@ class FCOSHead(nn.Layer):
             if self.norm_reg_targets:
                 bbox_reg = F.relu(bbox_reg)  #wjm add
                 if not self.training or targets.get(
-                        'get_data', False) or targets.get('is_teacher', False):
+                        'get_data', False) or targets.get('is_teacher',
+                                                          False):  #true
                     bbox_reg = bbox_reg * fpn_stride  ####必须改成这种形式才能保证eval和train对齐！！！！！！！！
             else:
                 bbox_reg = paddle.exp(bbox_reg)

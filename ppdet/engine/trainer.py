@@ -99,8 +99,8 @@ class Trainer(object):
                 ], 'SSOD only support DenseTeacher, {} is not supported now.'.format(
                     cfg.architecture)
                 # self.dataset =  # defalut sup dataset
-                self.loader = create('SupTrainReader')(
-                    self.dataset, cfg.worker_num, strong_aug=False)  # sup_werk
+                self.loader = create('TrainReader')(self.dataset,
+                                                    cfg.worker_num)  # sup_werk
                 self.loader_sup_strong = create('SupTrainReader')(
                     self.dataset, cfg.worker_num, strong_aug=True)
 
@@ -182,6 +182,7 @@ class Trainer(object):
                 )
             steps_per_epoch = int(steps_per_epoch / self.loader.batch_size)
             self.lr = create('LearningRate')(steps_per_epoch)
+            # self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
             self.optimizer = create('OptimizerBuilder')(self.lr, self.model)
 
             # Unstructured pruner is only enabled in the train mode.
@@ -804,13 +805,15 @@ class Trainer(object):
             self.loader.dataset.set_epoch(epoch_id)  # _sup_weak
             self.loader_sup_strong.dataset.set_epoch(epoch_id)
             self.loader_unsup.dataset.set_epoch(epoch_id)
-            # self.loader_unsup_strong.dataset.set_epoch(epoch_id)
+            # self.loader_unsup.dataset.set_epoch(epoch_id)
             if self._nranks > 1:
                 model.student = model._layers.student
                 model.teacher = model._layers.teacher
 
             model.student.train()
             model.teacher.eval()
+            for param in model.teacher.parameters():
+                param.trainable = False
             iter_tic = time.time()
             loss_dict = {
                 'loss': paddle.to_tensor([0]),
@@ -824,17 +827,37 @@ class Trainer(object):
                 'loss_unsup_sum': paddle.to_tensor([0]),
                 "fore_ground_sum": paddle.to_tensor([0])
             }
+
+            dataloader = iter(self.loader)
+            dataloader_sup_strong = iter(self.loader_sup_strong)
+            unsupervised_dataloader_1 = iter(self.loader_unsup)
+            pbar = tqdm(range(len(self.loader)))
             # fg_dict={"fore_ground_sum" : 0}
             #     for step_id, (data_unsup_w, data_unsup_s) in enumerate(
             # self.loader_unsup):
-            for step_id, (data_sup_w, data_sup_s, data_unsup) in enumerate(
-                    zip(self.loader, self.loader_sup_strong,
-                        self.loader_unsup)):
+            for step_id in pbar:
                 # print(step_id, data_sup_w['im_id'], data_sup_s['im_id'], data_unsup_w['im_id'], data_unsup_s['im_id'])
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
+                try:
+                    data_sup_w = dataloader.next()
+                except StopIteration:
+                    dataloader = iter(self.loader)
+                    data_sup_w = dataloader.next()
+
+                try:
+                    data_sup_s = dataloader_sup_strong.next()
+                except StopIteration:
+                    dataloader_sup_strong = iter(self.loader_sup_strong)
+                    data_sup_s = dataloader_sup_strong.next()
+
+                try:
+                    data_unsup = unsupervised_dataloader_1.next()
+                except StopIteration:
+                    unsupervised_dataloader_1 = iter(self.loader_unsup)
+                    data_unsup = unsupervised_dataloader_1.next()
 
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
@@ -843,14 +866,7 @@ class Trainer(object):
                 data_unsup_w = data_unsup['batch_data_weak']
                 data_unsup_s = data_unsup['batch_data_strong']
                 train_cfg = self.cfg.DenseTeacher['train_cfg']
-
-                # model forward
-                # data_sup_w.extend(data_sup_s) ### TODO
-                # loss_dict_sup = model.teacher(data_sup_w)  #old
-                '''
-                sup_weak.extend(sup_strong)
-                loss_dict_sup = self.model(sup_weak)
-                '''
+                print(data_unsup_w['im_id'])
                 # for  k,v    in data_sup_s.items():
                 #     v =paddle.concat([v,data_sup_w[k]])
                 # data_sup_w=dict(data_sup_w,**data_sup_s)
@@ -862,7 +878,6 @@ class Trainer(object):
                 loss_dict_sup['loss_ctn'] += loss_dict_sup_w['loss_ctn']
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
-
                 losses = losses_sup.detach()
                 # loss_dict = loss_dict_sup
                 loss_dict.update(loss_dict_sup)
@@ -873,6 +888,7 @@ class Trainer(object):
                 curr_iter = len(self.loader) * epoch_id + step_id
                 st_iter = self.semi_start_steps
                 if curr_iter > st_iter:
+
                     unsup_weight = train_cfg['unsup_weight']
                     if train_cfg['suppress'] == 'exp':
                         tar_iter = st_iter + 2000
@@ -924,6 +940,12 @@ class Trainer(object):
                     # total = 'l oss_sup_sum' + 'loss_unsup_sum'
 
                 self.optimizer.step()
+                # for name, parms in model.student.named_parameters():	
+                #     print('-->name:', name)
+                #     print('-->para:', parms)
+                #     print('-->grad_requirs:',parms.requires_grad)
+                #     print('-->grad_value:',parms.grad)
+                #     print("===")
 
                 curr_lr = self.optimizer.get_lr()
                 self.lr.step()

@@ -47,11 +47,11 @@ def setup_logger(name="ppdet", output=None):
         datefmt="%m/%d %H:%M:%S")
     # stdout logging: master only
     local_rank = dist.get_rank()
-    if local_rank == 0:
-        ch = logging.StreamHandler(stream=sys.stdout)
-        ch.setLevel(logging.DEBUG)
-        ch.setFormatter(formatter)
-        logger.addHandler(ch)
+
+    ch = logging.StreamHandler(stream=sys.stdout)
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
 
     # file logging: all workers
     if output is not None:
