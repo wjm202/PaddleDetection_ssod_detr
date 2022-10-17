@@ -388,23 +388,24 @@ class SemiCOCODataSet(COCODataSet):
             dataset_dir, image_dir, anno_path, data_fields, sample_num,
             load_crowd, allow_empty, empty_ratio, repeat)
         self.supervised = supervised
-        self.sup_file = sup_file
-        self.sup_percentage = sup_percentage
-        self.sup_seed = sup_seed
+        # self.sup_file = sup_file
+        # self.sup_percentage = sup_percentage
+        # self.sup_seed = sup_seed
+        self.length = -1 # defalut -1 means all, unsup length is set by sup length
 
-    def parse_dataset(self):  #重写函数
+    def parse_dataset(self):
         anno_path = os.path.join(
             self.dataset_dir,
-            self.anno_path)  #'annotations/instances_val2017.json'
-        image_dir = os.path.join(self.dataset_dir, self.image_dir)  #'val2017'
+            self.anno_path)
+        image_dir = os.path.join(self.dataset_dir, self.image_dir)
 
         assert anno_path.endswith('.json'), \
             'invalid coco annotation file: ' + anno_path
         from pycocotools.coco import COCO
         coco = COCO(anno_path)
-        img_ids = coco.getImgIds()  #图片id
+        img_ids = coco.getImgIds()
         img_ids.sort()
-        cat_ids = coco.getCatIds()  #class类别
+        cat_ids = coco.getCatIds()
         records = []
         empty_records = []
         ct = 0
@@ -552,6 +553,10 @@ class SemiCOCODataSet(COCODataSet):
         if self.supervised:
             logger.info(f'Use {len(self.roidbs)} sup_samples data as LABELED')
         else:
+            if self.length > 0:
+                all_roidbs = self.roidbs.copy()
+                selected_idxs = [np.random.choice(self.length) for _ in range(self.length)]
+                self.roidbs = [all_roidbs[i] for i in selected_idxs]
             logger.info(
                 f'Use {len(self.roidbs)} unsup_samples data as UNLABELED')
 

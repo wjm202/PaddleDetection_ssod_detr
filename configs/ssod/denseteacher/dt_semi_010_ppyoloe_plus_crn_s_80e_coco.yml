@@ -1,9 +1,9 @@
 _BASE_: [
-  '../../fcos/fcos_r50_fpn_1x_coco.yml',
+  '../../ppyoloe/ppyoloe_plus_crn_s_80e_coco.yml',
 ]
 log_iter: 20
 snapshot_epoch: 2
-weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
+weights: output/dt_semi_010_ppyoloe_plus_crn_s_80e_coco/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
 
@@ -21,17 +21,17 @@ eval_interval: &eval_interval 2000
 
 ### model config
 architecture: DenseTeacher
-pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
 #pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
 DenseTeacher:
-  teacher: FCOS
-  student: FCOS
+  teacher: YOLOv3
+  student: YOLOv3
   train_cfg:
     ratio: 0.01
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: 'linear'
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 1.0}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_iou: 1.0, distill_loss_dfl: 1.0}
     gamma: 2.0
   test_cfg:
     inference_on: teacher
@@ -74,57 +74,60 @@ TestDataset:
 
 
 ### data_aug config
-worker_num: 2 # set 0 for single gpu debug
+worker_num: 4 # set 0 for single gpu debug
 SupTrainReader:
   sample_transforms:
     - Decode: {}
-    - RandomResize: {target_size: [[640, 1333], [672, 1333], [704, 1333], [736, 1333], [768, 1333], [800, 1333]], keep_ratio: True, interp: 1}
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    - RandomDistort: {}
+    - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
+    - RandomCrop: {}
     - RandomFlip: {}
   batch_transforms:
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
-    - PadBatch: {pad_to_stride: 128}
-    - Gt2FCOSTarget:
-        object_sizes_boundary: [64, 128, 256, 512]
-        center_sampling_radius: 1.5
-        downsample_ratios: [8, 16, 32, 64, 128]
-        norm_reg_targets: True
-  batch_size: 2
-  shuffle: True
-  drop_last: False
+    - PadGT: {}
+  batch_size: 8
+  shuffle: true
+  drop_last: true
+  use_shared_memory: true
+  collate_batch: true
 
 
 UnsupTrainReader:
   sample_transforms:
     - Decode: {}
-    - RandomResize: {target_size: [[640, 1333], [672, 1333], [704, 1333], [736, 1333], [768, 1333], [800, 1333]], keep_ratio: True, interp: 1}
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    - RandomDistort: {}
+    - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
+    - RandomCrop: {}
     - RandomFlip: {}
   batch_transforms:
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
-    - PadBatch: {pad_to_stride: 128}
-  batch_size: 2
-  shuffle: True
-  drop_last: False
+    # - PadGT: {}
+  batch_size: 8
+  shuffle: true
+  drop_last: true
+  use_shared_memory: true
+  collate_batch: true
 
 
 ### other config
-epoch: 240
+epoch: 80
 LearningRate:
-  base_lr: 0.01
+  base_lr: 0.001
   schedulers:
-  - !PiecewiseDecay
-    gamma: 0.1
-    milestones: [240]
-  - !LinearWarmup
-    start_factor: 0.001
-    steps: 1000
+    - !CosineDecay
+      max_epochs: 96
+    - !LinearWarmup
+      start_factor: 0.
+      epochs: 5
 
 OptimizerBuilder:
   optimizer:
     momentum: 0.9
     type: Momentum
   regularizer:
-    factor: 0.0001
+    factor: 0.0005
     type: L2
-  clip_grad_by_norm: 1.0

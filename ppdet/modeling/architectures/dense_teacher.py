@@ -18,8 +18,28 @@ from __future__ import print_function
 
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
+from ppdet.data.reader import transform
+import paddle
 
 __all__ = ['DenseTeacher']
+
+
+class Compose(object):
+    def __init__(self, transforms, num_classes=80):
+        self.transforms = transforms
+        self.transforms_cls = []
+        for t in self.transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.transforms_cls.append(f)
+
+    def __call__(self, data):
+        for f in self.transforms_cls:
+            data = f(data)
+        return data
 
 
 @register
@@ -36,35 +56,39 @@ class DenseTeacher(BaseArch):
                  teacher='FCOS',
                  student='FCOS',
                  train_cfg=None,
-                 test_cfg=None):
+                 test_cfg=None,
+                 strongAug=[]):
         super(DenseTeacher, self).__init__()
         self.teacher = teacher
         self.student = student
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
-        if train_cfg is not None:  #wjm modify
-            self.freeze(self.teacher)
+        self.strongAug = Compose(strongAug)
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
-        teacher = create(cfg['teacher'])  #从yml文件中传入cfg，最后初始化一个字典传入_init_中。
+        teacher = create(cfg['teacher'])
         student = create(cfg['student'])
-        train_cfg = cfg['train_cfg']
-        test_cfg = cfg['test_cfg']
         return {
             'teacher': teacher,
             'student': student,
-            'train_cfg': train_cfg,
-            'test_cfg': test_cfg
         }
 
     def _forward(self):
         return True
 
-    def freeze(self, model):  #wjm modify
-        model.eval()
-        for param in model.parameters():
-            param.stop_gradient = True
+    def strong_augmentatin(self, data_weak):
+        data_strong = data_weak
+        sample_imgs = []
+        # only support image transforms now
+        for i in range(data_weak['image'].shape[0]):
+            sample = {}
+            sample['image'] = data_weak['image'][i].numpy().transpose((1, 2, 0)) # [c, h, w] -》 [h, w, c]
+            sample = self.strongAug(sample)
+            sample['image'] = paddle.to_tensor(sample['image'].transpose((2, 0, 1))).unsqueeze(0)
+            sample_imgs.append(sample['image'])
+        data_strong['image'] = paddle.concat(sample_imgs, 0)
+        return data_strong
 
     def get_loss(self):
         return self._forward()
