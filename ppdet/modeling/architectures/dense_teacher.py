@@ -53,26 +53,20 @@ class DenseTeacher(BaseArch):
     """
 
     def __init__(self,
-                 teacher='FCOS',
-                 student='FCOS',
+                 model='FCOS',
                  train_cfg=None,
                  test_cfg=None,
                  strongAug=[]):
         super(DenseTeacher, self).__init__()
-        self.teacher = teacher
-        self.student = student
+        self.model = model
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.strongAug = Compose(strongAug)
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
-        teacher = create(cfg['teacher'])
-        student = create(cfg['student'])
-        return {
-            'teacher': teacher,
-            'student': student,
-        }
+        model = create(cfg['model'])
+        return {'model': model, }
 
     def _forward(self):
         return True
@@ -83,9 +77,11 @@ class DenseTeacher(BaseArch):
         # only support image transforms now
         for i in range(data_weak['image'].shape[0]):
             sample = {}
-            sample['image'] = data_weak['image'][i].numpy().transpose((1, 2, 0)) # [c, h, w] -》 [h, w, c]
+            sample['image'] = data_weak['image'][i].numpy().transpose(
+                (1, 2, 0))  # [c, h, w] -》 [h, w, c]
             sample = self.strongAug(sample)
-            sample['image'] = paddle.to_tensor(sample['image'].transpose((2, 0, 1))).unsqueeze(0)
+            sample['image'] = paddle.to_tensor(sample['image'].transpose((
+                2, 0, 1))).unsqueeze(0)
             sample_imgs.append(sample['image'])
         data_strong['image'] = paddle.concat(sample_imgs, 0)
         return data_strong

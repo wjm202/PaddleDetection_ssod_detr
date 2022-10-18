@@ -18,14 +18,13 @@ ema_start_steps: 3000
 
 save_interval: &save_interval 5000
 eval_interval: &eval_interval 2000
-
+SSOD: DenseTeacher
 ### model config
-architecture: DenseTeacher
+architecture: FCOS
 pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
 #pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
+
 DenseTeacher:
-  teacher: FCOS
-  student: FCOS
   train_cfg:
     ratio: 0.01
     sup_weight: 1.0
@@ -33,8 +32,6 @@ DenseTeacher:
     suppress: 'linear'
     loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 1.0}
     gamma: 2.0
-  test_cfg:
-    inference_on: teacher
   strongAug:
     - RandomGaussianBlur: {}
 
@@ -45,27 +42,27 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: annotations/semi_supervised/instances_train2017.1@1.json
+    anno_path: annotations/instances_train2017_rand40.json
     #image_dir: val2017
     #anno_path: annotations/instances_val2017_8img.json
-    dataset_dir: /paddle/dataset/coco
+    dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: annotations/semi_supervised/instances_train2017.1@1-unlabeled.json
+    anno_path: annotations/instances_train2017_rand144.json
     #image_dir: val2017
     #anno_path: annotations/instances_val2017_8img.json
-    dataset_dir: /paddle/dataset/coco
+    dataset_dir: dataset/coco
     data_fields: ['image']
     supervised: False
 
 EvalDataset:
   !COCODataSet
     image_dir: val2017
-    anno_path: annotations/instances_val2017_8img.json
-    dataset_dir: /paddle/dataset/coco
+    anno_path: annotations/instances_val2017_rand24.json
+    dataset_dir: dataset/coco
 
 TestDataset:
   !ImageFolder
@@ -74,7 +71,7 @@ TestDataset:
 
 
 ### data_aug config
-worker_num: 2 # set 0 for single gpu debug
+worker_num: 8 # set 0 for single gpu debug
 SupTrainReader:
   sample_transforms:
     - Decode: {}
