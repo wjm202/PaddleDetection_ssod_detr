@@ -46,7 +46,7 @@ class BBoxPostProcess(object):
         self.export_onnx = export_onnx
         self.export_eb = export_eb
 
-    def __call__(self, head_out, rois, im_shape, scale_factor):
+    def __call__(self, head_out, rois, im_shape, scale_factor, use_nms=True):
         """
         Decode the bbox and do NMS if needed.
 
@@ -64,9 +64,15 @@ class BBoxPostProcess(object):
                 shape [1], and is N.
         """
         if self.nms is not None:
-            bboxes, score = self.decode(head_out, rois, im_shape, scale_factor)
-            bbox_pred, bbox_num, _ = self.nms(bboxes, score, self.num_classes)
-
+            if use_nms:
+                bboxes, score = self.decode(head_out, rois, im_shape, scale_factor)
+                bbox_pred, bbox_num, _ = self.nms(bboxes, score, self.num_classes)
+            else:
+                bboxes, score = self.decode(head_out, rois, im_shape,
+                                              scale_factor)
+                if bboxes[0].shape[0] == 0:
+                    return bboxes[0], bboxes[1]
+                return paddle.reshape(bboxes[0], (bboxes[0].shape[0], -1)), bboxes[1]
         else:
             bbox_pred, bbox_num = self.decode(head_out, rois, im_shape,
                                               scale_factor)

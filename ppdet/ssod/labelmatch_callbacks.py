@@ -117,7 +117,7 @@ class LabelMatchEvalCallback(Callback):
             return
         interval_temp = self.interval
         self.interval = 1
-        self.on_step_end(status)            
+        self.on_step_end(status)
         self.initial_epoch_flag = False
         self.interval = interval_temp
         self.model.boxes_per_image_gt = self.boxes_per_image_gt

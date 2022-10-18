@@ -835,6 +835,9 @@ def box_coder(prior_box,
         return output_box
 
 
+from paddle.fluid.framework import in_dygraph_mode
+from paddle.fluid import core
+# fit paddle 2.3.1 in cuda11.2. still bug in cuda10.2 multi-gpus
 @paddle.jit.not_to_static
 def generate_proposals(scores,
                        bbox_deltas,
@@ -918,12 +921,13 @@ def generate_proposals(scores,
             rois, roi_probs = ops.generate_proposals(scores, bbox_deltas,
                          im_shape, anchors, variances)
     """
-    if in_dynamic_mode():
+    # if in_dynamic_mode(): # bug todo
+    if in_dygraph_mode():
         assert return_rois_num, "return_rois_num should be True in dygraph mode."
         attrs = ('pre_nms_topN', pre_nms_top_n, 'post_nms_topN', post_nms_top_n,
                  'nms_thresh', nms_thresh, 'min_size', min_size, 'eta', eta,
                  'pixel_offset', pixel_offset)
-        rpn_rois, rpn_roi_probs, rpn_rois_num = C_ops.generate_proposals_v2(
+        rpn_rois, rpn_roi_probs, rpn_rois_num = core.ops.generate_proposals_v2(
             scores, bbox_deltas, im_shape, anchors, variances, *attrs)
         if not return_rois_num:
             rpn_rois_num = None

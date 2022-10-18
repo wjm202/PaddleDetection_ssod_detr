@@ -110,8 +110,8 @@ log_iter: 50
 use_ema: True
 ema_decay: 0.996
 ema_decay_type: constant
-pretrain_teacher_weights: /paddle/denseteacher/faster_rcnn_r50_fpn_2x_coco_010_26.0.pdparams
-pretrain_student_weights: /paddle/denseteacher/faster_rcnn_r50_fpn_2x_coco_010_26.0.pdparams
+pretrain_teacher_weights: ../faster_rcnn_r50_fpn_2x_coco_010_26.0.pdparams
+pretrain_student_weights: ../faster_rcnn_r50_fpn_2x_coco_010_26.0.pdparams
 
 
 find_unused_parameters: True
