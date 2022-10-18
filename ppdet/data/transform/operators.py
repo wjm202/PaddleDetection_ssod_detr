@@ -19,6 +19,7 @@
 from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
+import albumentations as A
 
 try:
     from collections.abc import Sequence
@@ -3466,5 +3467,24 @@ class RandomErasingCrop(BaseOperator):
         im = transform1(im)
         im = transform2(im)
         im = transform3(im)
+        sample['image'] = im
+        return sample
+
+
+@register_op
+class AugmentationUTStrong(BaseOperator):
+    def __init__(self):
+        super(AugmentationUTStrong, self).__init__()
+        self.transforms = A.Compose([
+            A.ColorJitter(
+                brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1, p=0.8),
+            A.ToGray(p=0.2),
+            A.GaussianBlur(
+                sigma_limit=(0.1, 2.0), p=0.5),
+        ])
+
+    def apply(self, sample, context=None):
+        im = sample['image']
+        results = self.transforms(image=im)
         sample['image'] = im
         return sample

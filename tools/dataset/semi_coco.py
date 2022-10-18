@@ -61,7 +61,7 @@ def prepare_coco_data(seed=1, percent=10.0, version=2017, seed_offset=0):
               format(name, len(images), len(annotations)))
         new_anno = {}
         new_anno["images"] = images
-        # new_anno["annotations"] = annotations
+        new_anno["annotations"] = []
         # new_anno["licenses"] = anno["licenses"]
         new_anno["categories"] = anno["categories"]
         # new_anno["info"] = anno["info"]
@@ -140,5 +140,5 @@ if __name__ == "__main__":
     parser.add_argument("--seed-offset", type=int, default=0)
     args = parser.parse_args()
     print(args)
-    DATA_DIR = "wgisd/coco"
+    DATA_DIR = "dataset/coco"
     prepare_coco_data(args.seed, args.percent, args.version, args.seed_offset)

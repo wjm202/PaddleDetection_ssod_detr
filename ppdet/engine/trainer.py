@@ -21,7 +21,7 @@ import sys
 import copy
 import time
 from tqdm import tqdm
-
+import albumentations as A
 import numpy as np
 import typing
 from PIL import Image, ImageOps, ImageFile
@@ -441,7 +441,6 @@ class Trainer(object):
             return
         self.start_epoch = 0
         load_pretrain_weight(self.model, weights)
-        load_pretrain_weight(self.ema.model, weights)
         logger.info("Load weights {} to start training for teacher and student".
                     format(weights))
 
@@ -707,43 +706,43 @@ class Trainer(object):
             self._flops(flops_loader)
         #test_cfg = self.cfg.DenseTeacher['test_cfg']
         #if test_cfg['inference_on'] == 'teacher':
-        print("*****teacher evaluate*****")
-        self.ema.model.eval()
-        for step_id, data in enumerate(loader):
-            self.status['step_id'] = step_id
-            self._compose_callback.on_step_begin(self.status)
-            # forward
-            if self.use_amp:
-                with paddle.amp.auto_cast(
-                        enable=self.cfg.use_gpu,
-                        custom_white_list=self.custom_white_list,
-                        custom_black_list=self.custom_black_list,
-                        level=self.amp_level):
-                    outs = self.ema.model(data)
-            else:
-                outs = self.ema.model(data)
+        # print("*****teacher evaluate*****")
+        # self.ema.model.eval()
+        # for step_id, data in enumerate(loader):
+        #     self.status['step_id'] = step_id
+        #     self._compose_callback.on_step_begin(self.status)
+        #     # forward
+        #     if self.use_amp:
+        #         with paddle.amp.auto_cast(
+        #                 enable=self.cfg.use_gpu,
+        #                 custom_white_list=self.custom_white_list,
+        #                 custom_black_list=self.custom_black_list,
+        #                 level=self.amp_level):
+        #             outs = self.ema.model(data)
+        #     else:
+        #         outs = self.ema.model(data)
 
-            # update metrics
-            for metric in self._metrics:
-                metric.update(data, outs)
+        #     # update metrics
+        #     for metric in self._metrics:
+        #         metric.update(data, outs)
 
-            # multi-scale inputs: all inputs have same im_id
-            if isinstance(data, typing.Sequence):
-                sample_num += data[0]['im_id'].numpy().shape[0]
-            else:
-                sample_num += data['im_id'].numpy().shape[0]
-            self._compose_callback.on_step_end(self.status)
+        #     # multi-scale inputs: all inputs have same im_id
+        #     if isinstance(data, typing.Sequence):
+        #         sample_num += data[0]['im_id'].numpy().shape[0]
+        #     else:
+        #         sample_num += data['im_id'].numpy().shape[0]
+        #     self._compose_callback.on_step_end(self.status)
 
-        self.status['sample_num'] = sample_num
-        self.status['cost_time'] = time.time() - tic
+        # self.status['sample_num'] = sample_num
+        # self.status['cost_time'] = time.time() - tic
 
-        # accumulate metric to log out
-        for metric in self._metrics:
-            metric.accumulate()
-            metric.log()
-        self._compose_callback.on_epoch_end(self.status)
-        # reset metric states for metric may performed multiple times
-        self._reset_metrics()
+        # # accumulate metric to log out
+        # for metric in self._metrics:
+        #     metric.accumulate()
+        #     metric.log()
+        # self._compose_callback.on_epoch_end(self.status)
+        # # reset metric states for metric may performed multiple times
+        # self._reset_metrics()
 
         print("*****student evaluate*****")
         self.model.eval()
@@ -959,8 +958,7 @@ class Trainer(object):
             #            and ((iter_id + 1) % self.cfg.eval_interval == 0 or epoch_id == self.end_epoch - 1)
             if is_snapshot and self.use_ema:
                 # apply ema weight on model
-                weight = copy.deepcopy(self.ema.model.state_dict())
-                self.model.set_dict(weight)
+                weight = copy.deepcopy(self.model.state_dict())
                 self.status['weight'] = weight
 
             self._compose_callback.on_epoch_end(self.status)
@@ -992,8 +990,6 @@ class Trainer(object):
                     self._eval_with_loader_semi(self._eval_loader)
 
             if is_snapshot and self.use_ema:
-                # reset original weight
-                self.model.set_dict(weight)
                 self.status.pop('weight')
 
         self._compose_callback.on_train_end(self.status)

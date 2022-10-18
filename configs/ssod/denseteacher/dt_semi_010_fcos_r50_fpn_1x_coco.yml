@@ -33,7 +33,7 @@ DenseTeacher:
     loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 1.0}
     gamma: 2.0
   strongAug:
-    - RandomGaussianBlur: {}
+    - AugmentationUTStrong: {}
 
 
 ### dataset config
