@@ -33,7 +33,7 @@ import paddle.nn as nn
 import paddle.distributed as dist
 from paddle.distributed import fleet
 from paddle.static import InputSpec
-from ppdet.optimizer import ModelEMA
+from ppdet.optimizer import meanteacher
 
 from ppdet.core.workspace import create
 from ppdet.utils.checkpoint import load_weight, load_pretrain_weight
@@ -225,7 +225,7 @@ class Trainer(object):
         self.use_ema = ('use_ema' in cfg and cfg['use_ema'])
         if self.use_ema:
             ema_decay = self.cfg.get('ema_decay', 0.9996)
-            self.ema = ModelEMA(self.model, ema_decay)  #
+            self.ema = meanteacher(self.model, ema_decay)  #
             self.ema_start_steps = self.cfg.get('ema_start_steps', 3000)
         else:
             if self.semi_supervised:
@@ -441,6 +441,7 @@ class Trainer(object):
             return
         self.start_epoch = 0
         load_pretrain_weight(self.model, weights)
+        load_pretrain_weight(self.ema.model, weights)
         logger.info("Load weights {} to start training for teacher and student".
                     format(weights))
 
@@ -457,10 +458,11 @@ class Trainer(object):
             self.start_epoch = load_weight(self.model.student_model, weights,
                                            self.optimizer)
         else:
-            self.start_epoch = load_weight(self.model, weights, self.optimizer)
+            # self.start_epoch = load_weight(self.model, weights, self.optimizer)
+            # self.start_epoch = load_weight(self.ema.model, weights, self.optimizer)
 
-            # self.start_epoch = load_weight(self.model, weights, self.optimizer,
-            #                    self.ema if self.use_ema else None)
+            self.start_epoch = load_weight(self.model, weights, self.optimizer,
+                                           self.ema if self.use_ema else None)
         logger.debug("Resume weights of epoch {}".format(self.start_epoch))
 
     def train(self, validate=False):
@@ -879,7 +881,7 @@ class Trainer(object):
                 loss_dict.update(loss_dict_sup)
                 loss_dict.update({'loss_sup_sum': loss_dict['loss']})
 
-                curr_iter = iter_id  #len(self.loader) * epoch_id + step_id
+                curr_iter = len(self.loader) * epoch_id + step_id
                 st_iter = self.semi_start_steps
                 if curr_iter > st_iter:
                     unsup_weight = train_cfg['unsup_weight']
@@ -958,7 +960,7 @@ class Trainer(object):
             #            and ((iter_id + 1) % self.cfg.eval_interval == 0 or epoch_id == self.end_epoch - 1)
             if is_snapshot and self.use_ema:
                 # apply ema weight on model
-                weight = copy.deepcopy(self.model.state_dict())
+                weight = copy.deepcopy(self.ema.model.state_dict())
                 self.status['weight'] = weight
 
             self._compose_callback.on_epoch_end(self.status)

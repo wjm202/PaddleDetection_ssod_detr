@@ -3,10 +3,10 @@ from types import TracebackType
 
 import paddle
 
-__all__ = ["ModelEMA"]
+__all__ = ["meanteacher"]
 
 
-class ModelEMA(object):
+class meanteacher(object):
     """
     Model Exponential Moving Average from https://github.com/rwightman/pytorch-image-models
     Keep a moving average of everything in the model state_dict (parameters and buffers).
@@ -38,5 +38,17 @@ class ModelEMA(object):
                 if paddle.is_floating_point(v):
                     v *= decay
                     v += (1.0 - decay) * msd[k].detach()
+
                 state[k] = v
             self.model.set_state_dict(state)
+
+    def resume(self, state_dict, step=0):
+        state = {}
+        msd = state_dict  # model state_dict
+        for k, v in self.model.state_dict().items():
+            if paddle.is_floating_point(v):
+                v = msd[k].detach()
+                v.stop_gradient = False
+            state[k] = v
+        self.model.set_state_dict(state)
+        self.step = step
