@@ -127,8 +127,8 @@ class Trainer(object):
             images = self.parse_mot_images(cfg)
             self.dataset.set_images(images)
 
+        self.semi_supervised = self.cfg.get('semi_supervised', False)
         if self.mode == 'train':
-            self.semi_supervised = self.cfg.get('semi_supervised', False)
             if self.semi_supervised:
                 assert cfg.SSOD in [
                     'DenseTeacher'
@@ -883,6 +883,10 @@ class Trainer(object):
 
                 curr_iter = len(self.loader) * epoch_id + step_id
                 st_iter = self.semi_start_steps
+                if curr_iter == st_iter:
+                    logger.info("***" * 30)
+                    logger.info('Semi starting ...')
+                    logger.info("***" * 30)
                 if curr_iter > st_iter:
                     unsup_weight = train_cfg['unsup_weight']
                     if train_cfg['suppress'] == 'linear':
@@ -948,7 +952,9 @@ class Trainer(object):
                 self._compose_callback.on_step_end(self.status)
                 # Note: ema_start_steps
                 if self.use_ema and curr_iter == self.ema_start_steps:  #wjm add
+                    logger.info("***" * 30)
                     logger.info('EMA starting ...')
+                    logger.info("***" * 30)
                     self.ema.update(model, decay=0)
                 elif self.use_ema and curr_iter > self.ema_start_steps:  #wjm add
                     self.ema.update(model)
@@ -1007,7 +1013,10 @@ class Trainer(object):
             self.model = paddle.DataParallel(
                 self.model, find_unused_parameters=find_unused_parameters)
         with paddle.no_grad():
-            self._eval_with_loader_semi(self.loader)
+            if self.cfg.get('semi_supervised', False):
+                self._eval_with_loader_semi(self.loader)
+            else:
+                self._eval_with_loader(self.loader)
 
     def _eval_with_loader_slice(self,
                                 loader,
