@@ -99,7 +99,7 @@ EvalDataset:
 
 architecture: FCOS
 pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-norm_type: sync_bn
+#norm_type: sync_bn
 
 FCOS:
   backbone: ResNet
@@ -109,7 +109,7 @@ FCOS:
 ResNet:
   depth: 50
   variant: 'a' #
-  xxxxnorm_type: bn
+  norm_type: bn
   freeze_at: 0 # res2
   return_idx: [1, 2, 3]
   num_stages: 4

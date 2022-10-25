@@ -21,9 +21,6 @@ eval_interval: &eval_interval 2000
 SSOD: DenseTeacher
 ### model config
 architecture: FCOS
-#pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-#pretrain_weights: /paddle/unicorn/PaddleDetection_semi/cvpods_fcos_5k.pdparams
-#pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
 
 DenseTeacher:
   train_cfg:
@@ -146,7 +143,7 @@ OptimizerBuilder:
 
 architecture: FCOS
 pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-norm_type: sync_bn
+#norm_type: sync_bn
 
 FCOS:
   backbone: ResNet

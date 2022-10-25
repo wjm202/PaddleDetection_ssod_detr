@@ -3481,10 +3481,17 @@ class AugmentationUTStrong(BaseOperator):
             A.ToGray(p=0.2),
             A.GaussianBlur(
                 sigma_limit=(0.1, 2.0), p=0.5),
+            A.Cutout(
+                num_holes=8,
+                max_h_size=70,
+                max_w_size=70,
+                fill_value=0,
+                always_apply=False,
+                p=1),
         ])
 
     def apply(self, sample, context=None):
         im = sample['image']
         results = self.transforms(image=im)
-        sample['image'] = im
+        sample['image'] = results['image']
         return sample
