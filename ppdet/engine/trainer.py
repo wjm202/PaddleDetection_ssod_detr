@@ -15,7 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from visualdl import LogWriter
 import os
 import sys
 import copy
@@ -894,8 +894,32 @@ class Trainer(object):
 
                     data_unsup_w = copy.deepcopy(data_unsup)
                     #data_unsup_s = copy.deepcopy(data_unsup)
+                    image1 = data_unsup_w['image'][0].transpose(
+                        [1, 2, 0]).numpy()
+                    image2 = data_unsup_w['image'][1].transpose(
+                        [1, 2, 0]).numpy()
+                    image1 = np.uint8(image1)
+                    image2 = np.uint8(image2)
+                    from PIL import Image
+                    img = Image.fromarray(image1)
+
+                    img.save('11.jpg')
+                    img = Image.fromarray(image2)
+                    img.save('22.jpg')
                     data_unsup_s = strong_augmentatin(
                         data_unsup, self.cfg.DenseTeacher['strongAug'])
+                    image3 = data_unsup_s['image'][0].transpose(
+                        [1, 2, 0]).numpy()
+                    image4 = data_unsup_s['image'][1].transpose(
+                        [1, 2, 0]).numpy()
+                    image3 = np.uint8(image3)
+                    image4 = np.uint8(image4)
+                    from PIL import Image
+                    img = Image.fromarray(image3)
+
+                    img.save('1.jpg')
+                    img = Image.fromarray(image4)
+                    img.save('2.jpg')
                     data_unsup_w['epoch_id'] = epoch_id
                     data_unsup_s['epoch_id'] = epoch_id
                     # print('check data info ', step_id, data_sup_w['image'].sum(), data_sup_s['image'].sum(), data_unsup_w['image'].sum(), data_unsup_s['image'].sum())

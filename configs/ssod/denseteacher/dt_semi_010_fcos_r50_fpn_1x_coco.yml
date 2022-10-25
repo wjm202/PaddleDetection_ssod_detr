@@ -2,7 +2,7 @@ _BASE_: [
   '../../fcos/fcos_r50_fpn_1x_coco.yml',
 ]
 log_iter: 20
-snapshot_epoch: 2
+snapshot_epoch: 1
 weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
@@ -10,18 +10,19 @@ weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
 
 ### global config
 semi_supervised: True
-semi_start_steps: 5000
+semi_start_steps: 0
 use_ema: True
 ema_decay: 0.9996
 ema_decay_type: None
-ema_start_steps: 3000
+ema_start_steps: 0
 
 save_interval: &save_interval 5000
 eval_interval: &eval_interval 2000
 SSOD: DenseTeacher
 ### model config
 architecture: FCOS
-pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+# pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+pretrain_weights: best_model.pdparams
 #pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
 
 DenseTeacher:
@@ -30,7 +31,7 @@ DenseTeacher:
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: 'linear'
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 1.0}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 0.8}
     gamma: 2.0
   strongAug:
     - AugmentationUTStrong: {}
@@ -42,7 +43,7 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: annotations/instances_train2017_rand40.json
+    anno_path: annotations/semi_supervised/instances_train2017.1@10.json
     #image_dir: val2017
     #anno_path: annotations/instances_val2017_8img.json
     dataset_dir: dataset/coco
@@ -51,7 +52,7 @@ TrainDataset:
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: annotations/instances_train2017_rand144.json
+    anno_path: annotations/semi_supervised/instances_train2017.1@10-unlabeled.json
     #image_dir: val2017
     #anno_path: annotations/instances_val2017_8img.json
     dataset_dir: dataset/coco
@@ -61,7 +62,7 @@ UnsupTrainDataset:
 EvalDataset:
   !COCODataSet
     image_dir: val2017
-    anno_path: annotations/instances_val2017_rand24.json
+    anno_path: annotations/instances_val2017.json
     dataset_dir: dataset/coco
 
 TestDataset:
@@ -114,8 +115,8 @@ LearningRate:
     gamma: 0.1
     milestones: [240]
   - !LinearWarmup
-    start_factor: 0.001
-    steps: 1000
+    start_factor: 0.1
+    steps: 10
 
 OptimizerBuilder:
   optimizer:
