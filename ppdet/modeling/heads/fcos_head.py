@@ -139,6 +139,7 @@ class FCOSHead(nn.Layer):
                  norm_reg_targets=True,
                  centerness_on_reg=True,
                  num_shift=0.5,
+                 sqrt_score=False,
                  fcos_loss='FCOSLoss',
                  nms='MultiClassNMS',
                  trt=False):
@@ -154,6 +155,7 @@ class FCOSHead(nn.Layer):
         self.nms = nms
         if isinstance(self.nms, MultiClassNMS) and trt:
             self.nms.trt = trt
+        self.sqrt_score = sqrt_score
 
         conv_cls_name = "fcos_head_cls"
         bias_init_value = -math.log((1 - self.prior_prob) / self.prior_prob)
@@ -244,8 +246,8 @@ class FCOSHead(nn.Layer):
                 centerness = self.fcos_head_centerness(fcos_cls_feat)
             if self.norm_reg_targets:
                 bbox_reg = F.relu(bbox_reg)
-                if not self.training:
-                    # eval or infer
+                if not self.training or targets.get(
+                        'get_data', False) or targets.get('is_teacher', False):
                     bbox_reg = bbox_reg * fpn_stride
             else:
                 bbox_reg = paddle.exp(bbox_reg)
@@ -253,15 +255,18 @@ class FCOSHead(nn.Layer):
             bboxes_reg_list.append(bbox_reg)
             centerness_list.append(centerness)
 
+        is_teacher = targets.get('is_teacher', False)
+        if is_teacher:
+            return [cls_logits_list, bboxes_reg_list, centerness_list]
+
         if self.training:
-            losses = {}
+            get_data = targets.get('get_data', False)
+            if get_data:
+                return [cls_logits_list, bboxes_reg_list, centerness_list]
+
             fcos_head_outs = [cls_logits_list, bboxes_reg_list, centerness_list]
             losses_fcos = self.get_loss(fcos_head_outs, targets)
-            losses.update(losses_fcos)
-
-            total_loss = paddle.add_n(list(losses.values()))
-            losses.update({'loss': total_loss})
-            return losses
+            return losses_fcos
         else:
             # eval or infer
             locations_list = []
@@ -296,10 +301,12 @@ class FCOSHead(nn.Layer):
                                      tag_labels, tag_bboxes, tag_centerness)
         return losses_fcos
 
-    def _post_process_by_level(self, locations, box_cls, box_reg, box_ctn):
+    def _post_process_by_level(self, locations, box_cls, box_reg, box_ctn, sqrt_score=False):
         box_scores = F.sigmoid(box_cls).flatten(2).transpose([0, 2, 1])
         box_centerness = F.sigmoid(box_ctn).flatten(2).transpose([0, 2, 1])
         pred_scores = box_scores * box_centerness
+        if sqrt_score:
+            pred_scores = paddle.sqrt(pred_scores)
 
         box_reg_ch_last = box_reg.flatten(2).transpose([0, 2, 1])
         box_reg_decoding = paddle.stack(
@@ -320,7 +327,7 @@ class FCOSHead(nn.Layer):
 
         for pts, cls, reg, ctn in zip(locations, cls_logits, bboxes_reg,
                                       centerness):
-            scores, boxes = self._post_process_by_level(pts, cls, reg, ctn)
+            scores, boxes = self._post_process_by_level(pts, cls, reg, ctn, self.sqrt_score)
             pred_scores.append(scores)
             pred_bboxes.append(boxes)
         pred_bboxes = paddle.concat(pred_bboxes, axis=1)
@@ -335,3 +342,137 @@ class FCOSHead(nn.Layer):
         pred_scores = pred_scores.transpose([0, 2, 1])
         bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
         return bbox_pred, bbox_num
+
+    def get_distill_loss(self, fcos_head_outs, teacher_fcos_head_outs, ratio=0.1):
+        student_logits, student_deltas, student_quality = fcos_head_outs
+        teacher_logits, teacher_deltas, teacher_quality = teacher_fcos_head_outs
+        nc = self.num_classes
+
+        student_logits = paddle.concat(
+            [permute_to_N_HWA_K(x, nc)
+             for x in student_logits], axis=1).reshape([-1, nc])
+        teacher_logits = paddle.concat(
+            [permute_to_N_HWA_K(x, nc)
+             for x in teacher_logits], axis=1).reshape([-1, nc])
+
+        student_deltas = paddle.concat(
+            [permute_to_N_HWA_K(x, 4)
+             for x in student_deltas], axis=1).reshape([-1, 4])
+        teacher_deltas = paddle.concat(
+            [permute_to_N_HWA_K(x, 4)
+             for x in teacher_deltas], 1).reshape([-1, 4])
+
+        student_quality = paddle.concat(
+            [permute_to_N_HWA_K(x, 1)
+             for x in student_quality], axis=1).reshape([-1, 1])
+        teacher_quality = paddle.concat(
+            [permute_to_N_HWA_K(x, 1)
+             for x in teacher_quality], axis=1).reshape([-1, 1])
+
+        with paddle.no_grad():
+            # Region Selection
+            count_num = int(teacher_logits.shape[0] * ratio)
+            teacher_probs = F.sigmoid(teacher_logits)
+            # [8184, 80]
+            #max_vals = torch.max(teacher_probs, 1)[0]
+            max_vals = paddle.max(teacher_probs, 1)
+            sorted_vals, sorted_inds = paddle.topk(max_vals,
+                                                   teacher_logits.shape[0])
+            mask = paddle.zeros_like(max_vals)
+            mask[sorted_inds[:count_num]] = 1.
+            fg_num = sorted_vals[:count_num].sum()
+            b_mask = mask > 0.
+
+        loss_logits = QFLv2(
+            F.sigmoid(student_logits),
+            teacher_probs,
+            weight=mask,
+            reduction="sum") / fg_num
+
+        inputs = paddle.concat(
+            (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
+            axis=-1)  #wjm add
+        targets = paddle.concat(
+            (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
+            axis=-1)  #wjm add
+        loss_deltas = iou_loss(inputs, targets).mean()
+
+        loss_quality = F.binary_cross_entropy(
+            F.sigmoid(student_quality[b_mask]),
+            F.sigmoid(teacher_quality[b_mask]),
+            reduction='mean')
+        return {
+            "distill_loss_cls": loss_logits,
+            "distill_loss_box": loss_deltas,
+            "distill_loss_quality": loss_quality,
+            "fg_sum": fg_num,
+        }
+
+
+def permute_to_N_HWA_K(tensor, K):
+    """
+    Transpose/reshape a tensor from (N, (A x K), H, W) to (N, (HxWxA), K)
+    """
+    assert tensor.dim() == 4, tensor.shape
+    N, _, H, W = tensor.shape
+    tensor = tensor.reshape([N, -1, K, H, W]).transpose([0, 3, 4, 1, 2])
+    tensor = tensor.reshape([N, -1, K])
+    return tensor
+
+
+def QFLv2(
+        pred_sigmoid,  # (n, 80)
+        teacher_sigmoid,  # (n) 0, 1-80: 0 is neg, 1-80 is positive
+        weight=None,
+        beta=2.0,
+        reduction='mean'):
+    # all goes to 0
+    pt = pred_sigmoid
+    zerolabel = paddle.zeros_like(pt)
+    loss = F.binary_cross_entropy(
+        pred_sigmoid, zerolabel, reduction='none') * pt.pow(beta)
+    pos = weight > 0
+
+    # positive goes to bbox quality
+    pt = teacher_sigmoid[pos] - pred_sigmoid[pos]
+    loss[pos] = F.binary_cross_entropy(
+        pred_sigmoid[pos], teacher_sigmoid[pos],
+        reduction='none') * pt.pow(beta)
+
+    valid = weight >= 0
+    if reduction == "mean":
+        loss = loss[valid].mean()
+    elif reduction == "sum":
+        loss = loss[valid].sum()
+    return loss
+
+
+def iou_loss(inputs, targets):
+
+    eps = 1.1920928955078125e-07
+
+    inputs_area = (inputs[..., 2] - inputs[..., 0]).clip_(min=0) \
+        * (inputs[..., 3] - inputs[..., 1]).clip_(min=0)
+    targets_area = (targets[..., 2] - targets[..., 0]).clip_(min=0) \
+        * (targets[..., 3] - targets[..., 1]).clip_(min=0)
+
+    w_intersect = (paddle.minimum(inputs[..., 2], targets[..., 2]) -
+                   paddle.maximum(inputs[..., 0], targets[..., 0])).clip_(min=0)
+    h_intersect = (paddle.minimum(inputs[..., 3], targets[..., 3]) -
+                   paddle.maximum(inputs[..., 1], targets[..., 1])).clip_(min=0)
+
+    area_intersect = w_intersect * h_intersect
+    area_union = targets_area + inputs_area - area_intersect
+
+    ious = area_intersect / area_union.clip(min=eps)
+
+
+    g_w_intersect = paddle.maximum(inputs[..., 2], targets[..., 2]) \
+        - paddle.minimum(inputs[..., 0], targets[..., 0])
+    g_h_intersect = paddle.maximum(inputs[..., 3], targets[..., 3]) \
+        - paddle.minimum(inputs[..., 1], targets[..., 1])
+    ac_uion = g_w_intersect * g_h_intersect
+    gious = ious - (ac_uion - area_union) / ac_uion.clip(min=eps)
+    loss = 1 - gious
+
+    return loss

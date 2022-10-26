@@ -13,4 +13,4 @@
 # limitations under the License.
 
 from .optimizer import *
-from .ema import ModelEMA
+from .ema import *

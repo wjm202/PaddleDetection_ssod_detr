@@ -33,7 +33,8 @@ import paddle.nn as nn
 import paddle.distributed as dist
 from paddle.distributed import fleet
 from paddle.static import InputSpec
-from ppdet.optimizer import ModelEMA
+from ppdet.optimizer import ModelEMA, MeanTeacher
+from IPython import embed
 
 from ppdet.core.workspace import create
 from ppdet.utils.checkpoint import load_weight, load_pretrain_weight
@@ -58,6 +59,41 @@ logger = setup_logger('ppdet.engine')
 __all__ = ['Trainer']
 
 MOT_ARCH = ['DeepSORT', 'JDE', 'FairMOT', 'ByteTrack']
+
+from ppdet.data.reader import transform
+class Compose(object):
+    def __init__(self, transforms, num_classes=80):
+        self.transforms = transforms
+        self.transforms_cls = []
+        for t in self.transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.transforms_cls.append(f)
+
+    def __call__(self, data):
+        for f in self.transforms_cls:
+            data = f(data)
+        return data
+
+
+def strong_augmentatin(data_weak, strongAug):
+    strongAug = Compose(strongAug)
+    data_strong = data_weak
+    sample_imgs = []
+    # only support image transforms now
+    for i in range(data_weak['image'].shape[0]):
+        sample = {}
+        sample['image'] = data_weak['image'][i].numpy().transpose(
+            (1, 2, 0))  # [c, h, w] -》 [h, w, c]
+        sample = strongAug(sample)
+        sample['image'] = paddle.to_tensor(sample['image'].transpose((
+            2, 0, 1))).unsqueeze(0)
+        sample_imgs.append(sample['image'])
+    data_strong['image'] = paddle.concat(sample_imgs, 0)
+    return data_strong
 
 
 class Trainer(object):
@@ -90,9 +126,24 @@ class Trainer(object):
             images = self.parse_mot_images(cfg)
             self.dataset.set_images(images)
 
+        self.semi_supervised = self.cfg.get('semi_supervised', False)
         if self.mode == 'train':
-            self.loader = create('{}Reader'.format(capital_mode))(
-                self.dataset, cfg.worker_num)
+            if self.semi_supervised:
+                assert cfg.SSOD in [
+                    'DenseTeacher'
+                ], 'SSOD only support DenseTeacher, {} is not supported now.'.format(
+                    cfg.SSOD)
+                self.loader = create('SupTrainReader')(self.dataset,
+                                                       cfg.worker_num)
+
+                self.dataset_unsup = self.cfg['UnsupTrainDataset'] = create(
+                    'UnsupTrainDataset')()
+                self.dataset_unsup.length = self.dataset.__len__()
+                self.loader_unsup = create('UnsupTrainReader')(
+                    self.dataset_unsup, cfg.worker_num)
+            else:
+                self.loader = create('TrainReader')(self.dataset,
+                                                    cfg.worker_num)
 
         if cfg.architecture == 'JDE' and self.mode == 'train':
             cfg['JDEEmbeddingHead'][
@@ -171,16 +222,14 @@ class Trainer(object):
                 level=self.amp_level)
         self.use_ema = ('use_ema' in cfg and cfg['use_ema'])
         if self.use_ema:
-            ema_decay = self.cfg.get('ema_decay', 0.9998)
-            ema_decay_type = self.cfg.get('ema_decay_type', 'threshold')
-            cycle_epoch = self.cfg.get('cycle_epoch', -1)
-            ema_black_list = self.cfg.get('ema_black_list', None)
-            self.ema = ModelEMA(
-                self.model,
-                decay=ema_decay,
-                ema_decay_type=ema_decay_type,
-                cycle_epoch=cycle_epoch,
-                ema_black_list=ema_black_list)
+            ema_decay = self.cfg.get('ema_decay', 0.9996)
+            self.ema = MeanTeacher(self.model, ema_decay) ### replace ema
+            self.ema_start_steps = self.cfg.get('ema_start_steps', 3000)
+        else:
+            if self.semi_supervised:
+                logger.warning(
+                    "Semi-Supervised Learning not work, please set 'use_meanteacher: True' in config."
+                )
 
         self._nranks = dist.get_world_size()
         self._local_rank = dist.get_rank()
@@ -384,6 +433,15 @@ class Trainer(object):
         self.start_epoch = 0
         load_pretrain_weight(self.model, weights)
         logger.debug("Load weights {} to start training".format(weights))
+
+    def load_weights_ssod(self, weights):
+        if self.is_loaded_weights:
+            return
+        self.start_epoch = 0
+        load_pretrain_weight(self.model, weights)
+        load_pretrain_weight(self.ema.model, weights)
+        logger.info("Load weights {} to start training for teacher and student".
+                    format(weights))
 
     def load_weights_sde(self, det_weights, reid_weights):
         if self.model.detector:
@@ -631,6 +689,285 @@ class Trainer(object):
         # reset metric states for metric may performed multiple times
         self._reset_metrics()
 
+    def _eval_with_loader_semi(self, loader):
+        sample_num = 0
+        tic = time.time()
+        self._compose_callback.on_epoch_begin(self.status)
+        self.status['mode'] = 'eval'
+
+        test_cfg = self.cfg.DenseTeacher['test_cfg']
+        if test_cfg['inference_on'] == 'teacher':
+            print("***** teacher evaluate *****")
+            eval_model = self.ema.model
+        else:
+            print("***** student evaluate *****")
+            eval_model = self.model
+
+        eval_model.eval()
+        if self.cfg.get('print_flops', False):
+            flops_loader = create('{}Reader'.format(self.mode.capitalize()))(
+                self.dataset, self.cfg.worker_num, self._eval_batch_sampler)
+            self._flops(flops_loader)
+        for step_id, data in enumerate(loader):
+            self.status['step_id'] = step_id
+            self._compose_callback.on_step_begin(self.status)
+            # forward
+            if self.use_amp:
+                with paddle.amp.auto_cast(
+                        enable=self.cfg.use_gpu or self.cfg.use_mlu,
+                        custom_white_list=self.custom_white_list,
+                        custom_black_list=self.custom_black_list,
+                        level=self.amp_level):
+                    outs = eval_model(data)
+            else:
+                outs = eval_model(data)
+
+            # update metrics
+            for metric in self._metrics:
+                metric.update(data, outs)
+
+            # multi-scale inputs: all inputs have same im_id
+            if isinstance(data, typing.Sequence):
+                sample_num += data[0]['im_id'].numpy().shape[0]
+            else:
+                sample_num += data['im_id'].numpy().shape[0]
+            self._compose_callback.on_step_end(self.status)
+
+        self.status['sample_num'] = sample_num
+        self.status['cost_time'] = time.time() - tic
+
+        # accumulate metric to log out
+        for metric in self._metrics:
+            metric.accumulate()
+            metric.log()
+        self._compose_callback.on_epoch_end(self.status)
+        # reset metric states for metric may performed multiple times
+        self._reset_metrics()
+
+    def semi_train(self, validate=False):
+        # no amp, no use_fused_allreduce_gradients, no pruner
+        # assert self.use_ema == True, "semi_train not work, please set 'use_ema: True' in config."
+        self.semi_start_steps = self.cfg.get('semi_start_steps', 5000)
+        Init_mark = False
+        if validate:
+            self.cfg['EvalDataset'] = self.cfg.EvalDataset = create(
+                "EvalDataset")()
+
+        model = self.model
+        sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
+                   self.cfg.use_gpu and self._nranks > 1)
+        if sync_bn:
+            model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+
+        if self.cfg.get('fleet', False):
+            model = fleet.distributed_model(model)
+            self.optimizer = fleet.distributed_optimizer(self.optimizer)
+        elif self._nranks > 1:
+            find_unused_parameters = self.cfg[
+                'find_unused_parameters'] if 'find_unused_parameters' in self.cfg else False
+            model = paddle.DataParallel(
+                model, find_unused_parameters=find_unused_parameters)
+            self.ema.model = paddle.DataParallel(
+                self.ema.model, find_unused_parameters=find_unused_parameters)
+
+        self.status.update({
+            'epoch_id': self.start_epoch,
+            'step_id': 0,
+            'steps_per_epoch': len(self.loader)
+        })
+
+        self.status['batch_time'] = stats.SmoothedValue(
+            self.cfg.log_iter, fmt='{avg:.4f}')
+        self.status['data_time'] = stats.SmoothedValue(
+            self.cfg.log_iter, fmt='{avg:.4f}')
+        self.status['training_staus'] = stats.TrainingStats(self.cfg.log_iter)
+
+        if self.cfg.get('print_flops', False):
+            flops_loader = create('{}Reader'.format(self.mode.capitalize()))(
+                self.dataset, self.cfg.worker_num)
+            self._flops(flops_loader)
+        profiler_options = self.cfg.get('profiler_options', None)
+
+        self._compose_callback.on_train_begin(self.status)
+        iter_id = -1
+        self.status['iter_id'] = 0
+        self.status['eval_interval'] = self.cfg.get('eval_interval', 2000)
+        self.status['save_interval'] = self.cfg.get('save_interval', 5000)
+        for epoch_id in range(self.start_epoch, self.cfg.epoch):
+            self.status['mode'] = 'train'
+            self.status['epoch_id'] = epoch_id
+            self._compose_callback.on_epoch_begin(self.status)
+            self.loader.dataset.set_epoch(epoch_id)
+            self.loader_unsup.dataset.set_epoch(epoch_id)
+            model.train()
+            self.ema.model.eval() # teacher
+            for param in self.ema.model.parameters():
+                param.trainable = False
+
+            iter_tic = time.time()
+            loss_dict = {
+                'loss': paddle.to_tensor([0]),
+                'loss_cls': paddle.to_tensor([0]),
+                'loss_box': paddle.to_tensor([0]),
+                'loss_quality': paddle.to_tensor([0]),
+                'loss_sup_sum': paddle.to_tensor([0]),
+                'distill_loss_cls': paddle.to_tensor([0]),
+                'distill_loss_box': paddle.to_tensor([0]),
+                'distill_loss_quality': paddle.to_tensor([0]),
+                'loss_unsup_sum': paddle.to_tensor([0]),
+                "fg_sum": paddle.to_tensor([0]),
+            }
+            for step_id, data_sup in enumerate(self.loader):
+                try:
+                    data_unsup = self.loader_unsup.next()
+                except StopIteration:
+                    self.loader_unsup = iter(self.loader_unsup)
+                    data_unsup = self.loader_unsup.next()
+
+                iter_id += 1
+                self.status['data_time'].update(time.time() - iter_tic)
+                self.status['step_id'] = step_id
+                self.status['iter_id'] = iter_id
+                profiler.add_profiler_step(profiler_options)
+                self._compose_callback.on_step_begin(self.status)
+    
+                data_sup_w = copy.deepcopy(data_sup)
+                data_sup_s = strong_augmentatin(
+                    data_sup, self.cfg.DenseTeacher['strongAug'])
+                for k, v in data_sup_s.items():
+                    data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
+                data_sup_w['epoch_id'] = epoch_id
+                data_sup_s['epoch_id'] = epoch_id
+                train_cfg = self.cfg.DenseTeacher['train_cfg']
+                loss_dict_sup = model(data_sup_s)
+                losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
+                losses_sup.backward()
+
+                losses = losses_sup.detach()
+                loss_dict.update(loss_dict_sup)
+                loss_dict.update({'loss_sup_sum': loss_dict['loss']})
+
+                curr_iter = len(self.loader) * epoch_id + step_id
+                st_iter = self.semi_start_steps
+                if curr_iter == st_iter:
+                    logger.info("***" * 30)
+                    logger.info('Semi starting ...')
+                    logger.info("***" * 30)
+                if curr_iter > st_iter:
+                    unsup_weight = train_cfg['unsup_weight']
+                    if train_cfg['suppress'] == 'linear':
+                        tar_iter = st_iter * 2
+                        if curr_iter <= tar_iter:
+                            unsup_weight *= (curr_iter - st_iter) / st_iter
+                    else:
+                        raise ValueError
+
+                    data_unsup_w = copy.deepcopy(data_unsup)
+                    data_unsup_s = strong_augmentatin(
+                        data_unsup, self.cfg.DenseTeacher['strongAug'])
+                    data_unsup_w['epoch_id'] = epoch_id
+                    data_unsup_s['epoch_id'] = epoch_id
+                    # print('check data info ', step_id, data_sup_w['image'].sum(), data_sup_s['image'].sum(), data_unsup_w['image'].sum(), data_unsup_s['image'].sum())
+
+                    data_unsup_s['get_data'] = True
+                    student_logits, student_deltas, student_quality = model(
+                        data_unsup_s)  # see fcos_head.py forward
+
+                    with paddle.no_grad():
+                        data_unsup_w['is_teacher'] = True
+                        teacher_logits, teacher_deltas, teacher_quality = self.ema.model(
+                            data_unsup_w)  # see fcos_head.py forward
+                    if self._nranks > 1:
+                        loss_dict_unsup = model._layers.fcos_head.get_distill_loss(
+                            [student_logits, student_deltas, student_quality],
+                            [teacher_logits, teacher_deltas, teacher_quality], ratio=train_cfg['ratio'])
+                    else:
+                        loss_dict_unsup = model.fcos_head.get_distill_loss(
+                            [student_logits, student_deltas, student_quality],
+                            [teacher_logits, teacher_deltas, teacher_quality], ratio=train_cfg['ratio'])
+
+                    fg_num = loss_dict_unsup["fg_sum"]
+                    del loss_dict_unsup["fg_sum"]
+                    distill_weights = train_cfg['loss_weight']
+                    loss_dict_unsup = {
+                        k: v * distill_weights[k]
+                        for k, v in loss_dict_unsup.items()
+                    }
+
+                    losses_unsup = sum([
+                        metrics_value
+                        for metrics_value in loss_dict_unsup.values()
+                    ]) * unsup_weight
+                    losses_unsup.backward()
+
+                    loss_dict.update(loss_dict_unsup)
+                    loss_dict.update({'loss_unsup_sum': losses_unsup})
+                    losses += losses_unsup.detach()
+                    loss_dict.update({"fg_sum": fg_num})
+                    loss_dict['loss'] = losses
+
+                self.optimizer.step()  # amp not used
+                curr_lr = self.optimizer.get_lr()
+                self.lr.step()
+                self.optimizer.clear_grad()
+                self.status['learning_rate'] = curr_lr
+                if self._nranks < 2 or self._local_rank == 0:
+                    self.status['training_staus'].update(loss_dict)  # outputs
+
+                self.status['batch_time'].update(time.time() - iter_tic)
+                self._compose_callback.on_step_end(self.status)
+                # Note: ema_start_steps
+                if self.use_ema and curr_iter == self.ema_start_steps:  #wjm add
+                    logger.info("***" * 30)
+                    logger.info('EMA starting ...')
+                    logger.info("***" * 30)
+                    self.ema.update(model, decay=0)
+                elif self.use_ema and curr_iter > self.ema_start_steps:  #wjm add
+                    self.ema.update(model)
+                iter_tic = time.time()
+
+            is_snapshot = (self._nranks < 2 or self._local_rank == 0) \
+                       and ((epoch_id + 1) % self.cfg.snapshot_epoch == 0 or epoch_id == self.end_epoch - 1)
+            # is_snapshot = (self._nranks < 2 or self._local_rank == 0) \
+            #            and ((iter_id + 1) % self.cfg.eval_interval == 0 or epoch_id == self.end_epoch - 1)
+            if is_snapshot and self.use_ema:
+                # apply ema weight on model
+                weight = copy.deepcopy(self.ema.model.state_dict())
+                self.status['weight'] = weight
+
+            self._compose_callback.on_epoch_end(self.status)
+
+            if validate and is_snapshot:
+                if not hasattr(self, '_eval_loader'):
+                    # build evaluation dataset and loader
+                    self._eval_dataset = self.cfg.EvalDataset
+                    self._eval_batch_sampler = \
+                        paddle.io.BatchSampler(
+                            self._eval_dataset,
+                            batch_size=self.cfg.EvalReader['batch_size'])
+                    # If metric is VOC, need to be set collate_batch=False.
+                    if self.cfg.metric == 'VOC':
+                        self.cfg['EvalReader']['collate_batch'] = False
+                    self._eval_loader = create('EvalReader')(
+                        self._eval_dataset,
+                        self.cfg.worker_num,
+                        batch_sampler=self._eval_batch_sampler)
+                # if validation in training is enabled, metrics should be re-init
+                # Init_mark makes sure this code will only execute once
+                if validate and Init_mark == False:
+                    Init_mark = True
+                    self._init_metrics(validate=validate)
+                    self._reset_metrics()
+
+                with paddle.no_grad():
+                    self.status['save_best_model'] = True
+                    self._eval_with_loader_semi(self._eval_loader)
+
+            if is_snapshot and self.use_ema:
+                self.status.pop('weight')
+
+        self._compose_callback.on_train_end(self.status)
+
     def evaluate(self):
         # get distributed model
         if self.cfg.get('fleet', False):
@@ -642,7 +979,10 @@ class Trainer(object):
             self.model = paddle.DataParallel(
                 self.model, find_unused_parameters=find_unused_parameters)
         with paddle.no_grad():
-            self._eval_with_loader(self.loader)
+            if self.cfg.get('semi_supervised', False):
+                self._eval_with_loader_semi(self.loader)
+            else:
+                self._eval_with_loader(self.loader)
 
     def _eval_with_loader_slice(self,
                                 loader,

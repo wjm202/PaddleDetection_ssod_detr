@@ -235,6 +235,42 @@ class TrainReader(BaseDataLoader):
 
 
 @register
+class SupTrainReader(BaseDataLoader):
+    __shared__ = ['num_classes']
+
+    def __init__(self,
+                 sample_transforms=[],
+                 batch_transforms=[],
+                 batch_size=1,
+                 shuffle=True,
+                 drop_last=True,
+                 num_classes=80,
+                 collate_batch=True,
+                 **kwargs):
+        super(SupTrainReader, self).__init__(sample_transforms, batch_transforms,
+                                          batch_size, shuffle, drop_last,
+                                          num_classes, collate_batch, **kwargs)
+
+
+@register
+class UnsupTrainReader(BaseDataLoader):
+    __shared__ = ['num_classes']
+
+    def __init__(self,
+                 sample_transforms=[],
+                 batch_transforms=[],
+                 batch_size=1,
+                 shuffle=True,
+                 drop_last=True,
+                 num_classes=80,
+                 collate_batch=True,
+                 **kwargs):
+        super(UnsupTrainReader, self).__init__(sample_transforms, batch_transforms,
+                                          batch_size, shuffle, drop_last,
+                                          num_classes, collate_batch, **kwargs)
+
+
+@register
 class EvalReader(BaseDataLoader):
     __shared__ = ['num_classes']
 
