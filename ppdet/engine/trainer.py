@@ -161,6 +161,8 @@ class Trainer(object):
         else:
             self.model = self.cfg.model
             self.is_loaded_weights = True
+        if self.mode == 'train':
+            self.model.fuse_norm = self.cfg.get('fuse_normalize', False)
 
         if cfg.architecture == 'YOLOX':
             for k, m in self.model.named_sublayers():

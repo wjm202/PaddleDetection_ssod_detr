@@ -236,7 +236,7 @@ class TrainReader(BaseDataLoader):
 
 @register
 class SupTrainReader(BaseDataLoader):
-    __shared__ = ['num_classes']
+    __shared__ = ['num_classes', 'fuse_normalize']
 
     def __init__(self,
                  sample_transforms=[],
@@ -246,15 +246,38 @@ class SupTrainReader(BaseDataLoader):
                  drop_last=True,
                  num_classes=80,
                  collate_batch=True,
+                 fuse_normalize=False,
                  **kwargs):
         super(SupTrainReader, self).__init__(sample_transforms, batch_transforms,
                                           batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, **kwargs)
+                                          num_classes, collate_batch, fuse_normalize, **kwargs)
+        if fuse_normalize:
+            sample_transforms_ = []
+            batch_transforms_ = []
+            for t in sample_transforms:
+                for k, v in t.items():
+                    if k == 'NormalizeImage':
+                        continue
+                    sample_transforms_.append(t)
+            for t in batch_transforms:
+                for k, v in t.items():
+                    if k == 'NormalizeImage':
+                        continue
+                    batch_transforms_.append(t)
+        else:
+            sample_transforms_ = sample_transforms
+            batch_transforms_ = batch_transforms
 
+        # sample transform
+        self._sample_transforms = Compose(
+            sample_transforms_, num_classes=num_classes)
+        # batch transfrom 
+        self._batch_transforms = BatchCompose(batch_transforms_, num_classes,
+                                              collate_batch)
 
 @register
 class UnsupTrainReader(BaseDataLoader):
-    __shared__ = ['num_classes']
+    __shared__ = ['num_classes', 'fuse_normalize']
 
     def __init__(self,
                  sample_transforms=[],
@@ -264,11 +287,34 @@ class UnsupTrainReader(BaseDataLoader):
                  drop_last=True,
                  num_classes=80,
                  collate_batch=True,
+                 fuse_normalize=False,
                  **kwargs):
         super(UnsupTrainReader, self).__init__(sample_transforms, batch_transforms,
                                           batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, **kwargs)
+                                          num_classes, collate_batch, fuse_normalize, **kwargs)
+        if fuse_normalize:
+            sample_transforms_ = []
+            batch_transforms_ = []
+            for t in sample_transforms:
+                for k, v in t.items():
+                    if k == 'NormalizeImage':
+                        continue
+                    sample_transforms_.append(t)
+            for t in batch_transforms:
+                for k, v in t.items():
+                    if k == 'NormalizeImage':
+                        continue
+                    batch_transforms_.append(t)
+        else:
+            sample_transforms_ = sample_transforms
+            batch_transforms_ = batch_transforms
 
+        # sample transform
+        self._sample_transforms = Compose(
+            sample_transforms_, num_classes=num_classes)
+        # batch transfrom 
+        self._batch_transforms = BatchCompose(batch_transforms_, num_classes,
+                                              collate_batch)
 
 @register
 class EvalReader(BaseDataLoader):
