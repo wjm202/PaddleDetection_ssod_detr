@@ -2,7 +2,7 @@ _BASE_: [
   '../../fcos/fcos_r50_fpn_1x_coco.yml',
 ]
 log_iter: 20
-snapshot_epoch: 1
+snapshot_epoch: 5
 weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
@@ -22,8 +22,8 @@ SSOD: DenseTeacher
 ### model config
 architecture: FCOS
 # pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-pretrain_weights: best_model.pdparams
-#pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
+# pretrain_weights: best_model.pdparams
+pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
 
 DenseTeacher:
   train_cfg:
@@ -31,7 +31,7 @@ DenseTeacher:
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: 'linear'
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 0.8}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_ctn: 1.0}
     gamma: 2.0
   strongAug:
     - AugmentationUTStrong: {}
@@ -77,7 +77,7 @@ SupTrainReader:
   sample_transforms:
     - Decode: {}
     - RandomResize: {target_size: [[640, 1333], [672, 1333], [704, 1333], [736, 1333], [768, 1333], [800, 1333]], keep_ratio: True, interp: 1}
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    # - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
   batch_transforms:
     - Permute: {}
@@ -96,7 +96,7 @@ UnsupTrainReader:
   sample_transforms:
     - Decode: {}
     - RandomResize: {target_size: [[640, 1333], [672, 1333], [704, 1333], [736, 1333], [768, 1333], [800, 1333]], keep_ratio: True, interp: 1}
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    # - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
   batch_transforms:
     - Permute: {}
@@ -115,8 +115,8 @@ LearningRate:
     gamma: 0.1
     milestones: [240]
   - !LinearWarmup
-    start_factor: 0.1
-    steps: 10
+    start_factor: 1
+    steps: 1
 
 OptimizerBuilder:
   optimizer:
