@@ -56,7 +56,7 @@ from ppdet.utils.logger import setup_logger
 from ppdet.data.reader import transform
 logger = setup_logger('ppdet.engine')
 from IPython import embed
-
+# from paddleaug import strongaugmentatin
 __all__ = ['Trainer']
 
 MOT_ARCH = ['DeepSORT', 'JDE', 'FairMOT', 'ByteTrack']
@@ -477,7 +477,7 @@ class Trainer(object):
                    self.cfg.use_gpu and self._nranks > 1)
         if sync_bn:
             model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-
+            # self.ema.model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(self.ema.model.model)
         # enabel auto mixed precision mode
         if self.use_amp:
             scaler = paddle.amp.GradScaler(
@@ -872,6 +872,18 @@ class Trainer(object):
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
                 train_cfg = self.cfg.DenseTeacher['train_cfg']
+                image1 = data_sup_s['image'][0].transpose(
+                    [1, 2, 0]).numpy()
+                image2 = data_sup_s['image'][1].transpose(
+                    [1, 2, 0]).numpy()
+                image1 = np.uint8(image1)
+                image2 = np.uint8(image2)
+                from PIL import Image
+                img = Image.fromarray(image1)
+
+                img.save('sup_s1.jpg')
+                img = Image.fromarray(image2)
+                img.save('sup_s2.jpg')
                 loss_dict_sup = model(data_sup_s)  # wjm add
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 # losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']

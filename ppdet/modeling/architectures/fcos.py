@@ -41,6 +41,7 @@ class FCOS(BaseArch):
         self.backbone = backbone
         self.neck = neck
         self.fcos_head = fcos_head
+        self.fuse_norm = True
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
@@ -51,7 +52,7 @@ class FCOS(BaseArch):
 
         kwargs = {'input_shape': neck.out_shape}
         fcos_head = create(cfg['fcos_head'], **kwargs)
-
+        # fuse_norm = cfg['NormalizeImage']
         return {
             'backbone': backbone,
             'neck': neck,

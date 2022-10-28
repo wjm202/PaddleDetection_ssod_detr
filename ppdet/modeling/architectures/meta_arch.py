@@ -19,7 +19,7 @@ class BaseArch(nn.Layer):
         super(BaseArch, self).__init__()
         self.data_format = data_format
         self.inputs = {}
-        self.fuse_norm = False
+        self.fuse_norm = True
 
     def load_meanstd(self, cfg_transform):
         scale = 1.
@@ -47,6 +47,7 @@ class BaseArch(nn.Layer):
 
         if self.fuse_norm:
             image = inputs['image']
+            self.inputs = inputs
             self.inputs['image'] = image * self.scale + self.bias
             self.inputs['im_shape'] = inputs['im_shape']
             self.inputs['scale_factor'] = inputs['scale_factor']
