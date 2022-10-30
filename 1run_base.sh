@@ -1,6 +1,6 @@
 export FLAGS_allocator_strategy=auto_growth
 model_type=ssod/baseline
-job_name=fcos_r50_fpn_multiscale_2x_coco
+job_name=ppyoloe_plus_crn_s_coco_sup005
 config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
 weights=output/fcos_r50_fpn_multiscale_2x_coco/model_final.pdparams  #/paddle/weights/{job_name}.pdparams
