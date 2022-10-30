@@ -39,14 +39,17 @@ class Compose(object):
     def __init__(self, transforms, num_classes=80):
         self.transforms = transforms
         self.transforms_cls = []
-        for t in self.transforms:
-            for k, v in t.items():
-                op_cls = getattr(transform, k)
-                f = op_cls(**v)
-                if hasattr(f, 'num_classes'):
-                    f.num_classes = num_classes
+        if self.transforms is None or self.transforms == []:
+            self.transforms_cls = []
+        else:
+            for t in self.transforms:
+                for k, v in t.items():
+                    op_cls = getattr(transform, k)
+                    f = op_cls(**v)
+                    if hasattr(f, 'num_classes'):
+                        f.num_classes = num_classes
 
-                self.transforms_cls.append(f)
+                    self.transforms_cls.append(f)
 
     def __call__(self, data):
         for f in self.transforms_cls:
@@ -79,7 +82,7 @@ class BatchCompose(Compose):
                 raise e
 
         # remove keys which is not needed by model
-        extra_key = ['h', 'w', 'flipped']
+        extra_key = ['flipped']
         for k in extra_key:
             for sample in data:
                 if k in sample:
@@ -100,6 +103,34 @@ class BatchCompose(Compose):
                 batch_data[k] = tmp_data
         return batch_data
 
+
+class BatchComposeUnSup(Compose):
+    def __init__(self, transforms, num_classes=80, collate_batch=True):
+        super(BatchComposeUnSup, self).__init__(transforms, num_classes)
+        self.collate_batch = collate_batch
+
+    def __call__(self, data):
+        for f in self.transforms_cls:
+            try:
+                data = f(data)
+            except Exception as e:
+                stack_info = traceback.format_exc()
+                logger.warning("fail to map batch transform [{}] "
+                               "with error: {} and stack:\n{}".format(
+                                   f, e, str(stack_info)))
+                raise e
+
+        # remove keys which is not needed by model
+        extra_key = ['flipped']
+        for k in extra_key:
+            for sample in data:
+                if k in sample:
+                    sample.pop(k)
+
+        # batch data, if user-define batch function needed
+        # use user-defined here
+
+        return data
 
 class BaseDataLoader(object):
     """
@@ -272,7 +303,7 @@ class SupTrainReader(BaseDataLoader):
         self._sample_transforms = Compose(
             sample_transforms_, num_classes=num_classes)
         # batch transfrom 
-        self._batch_transforms = BatchCompose(batch_transforms_, num_classes,
+        self._batch_transforms = BatchComposeUnSup(batch_transforms_, num_classes,
                                               collate_batch)
 
 @register
@@ -313,7 +344,7 @@ class UnsupTrainReader(BaseDataLoader):
         self._sample_transforms = Compose(
             sample_transforms_, num_classes=num_classes)
         # batch transfrom 
-        self._batch_transforms = BatchCompose(batch_transforms_, num_classes,
+        self._batch_transforms = BatchComposeUnSup(batch_transforms_, num_classes,
                                               collate_batch)
 
 @register

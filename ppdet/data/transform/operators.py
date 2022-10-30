@@ -39,6 +39,7 @@ import cv2
 from PIL import Image, ImageDraw
 import pickle
 import threading
+import paddle
 MUTEX = threading.Lock()
 
 from ppdet.core.workspace import serializable
@@ -107,6 +108,164 @@ class BaseOperator(object):
 
     def __str__(self):
         return str(self._id)
+
+
+class BaseTransform(object):
+    def __init__(self, keys=None):
+        if keys is None:
+            keys = ("image", )
+        elif not isinstance(keys, Sequence):
+            raise ValueError(
+                "keys should be a sequence, but got keys={}".format(keys))
+        for k in keys:
+            if self._get_apply(k) is None:
+                raise NotImplementedError(
+                    "{} is unsupported data structure".format(k))
+        self.keys = keys
+
+        # storage some params get from function get_params()
+        self.params = None
+
+    def _get_params(self, inputs):
+        pass
+
+    def __call__(self, inputs):
+        """Apply transform on single input data"""
+        if not isinstance(inputs, tuple):
+            inputs = (inputs, )
+
+        self.params = self._get_params(inputs)
+
+        outputs = []
+        for i in range(min(len(inputs), len(self.keys))):
+            apply_func = self._get_apply(self.keys[i])
+            if apply_func is None:
+                outputs.append(inputs[i])
+            else:
+                outputs.append(apply_func(inputs[i]))
+        if len(inputs) > len(self.keys):
+            outputs.extend(inputs[len(self.keys):])
+
+        if len(outputs) == 1:
+            outputs = outputs[0]
+        else:
+            outputs = tuple(outputs)
+        return outputs
+
+    def _get_apply(self, key):
+        return getattr(self, "_apply_{}".format(key), None)
+
+    def _apply_image(self, image):
+        raise NotImplementedError
+
+    def _apply_boxes(self, boxes):
+        raise NotImplementedError
+
+    def _apply_mask(self, mask):
+        raise NotImplementedError
+
+def F_cv2erase(img, i, j, h, w, v, inplace=False):
+    if not inplace:
+        img = img.copy()
+
+    img[i:i + h, j:j + w, ...] = v
+    return img
+
+def F_pilerase(img, i, j, h, w, v, inplace=False):
+    np_img = np.array(img, dtype=np.uint8)
+    np_img[i:i + h, j:j + w, ...] = v
+    img = Image.fromarray(np_img, 'RGB')
+    return img
+
+def _is_pil_image(img):
+    return isinstance(img, Image.Image)
+
+def _is_numpy_image(img):
+    return isinstance(img, np.ndarray) and (img.ndim in {2, 3})
+
+def erase(img, i, j, h, w, v, inplace=False):
+    if _is_pil_image(img):
+        return F_pilerase(img, i, j, h, w, v, inplace=inplace)
+    else:
+        return F_cv2erase(img, i, j, h, w, v, inplace=inplace)
+
+
+class RandomErasing(BaseTransform):
+    def __init__(
+            self,
+            prob=0.5,
+            scale=(0.02, 0.33),
+            ratio=(0.3, 3.3),
+            value=0,
+            inplace=False,
+            keys=None, ):
+        super(RandomErasing, self).__init__(keys)
+        assert isinstance(scale,
+                          (tuple, list)), "scale should be a tuple or list"
+        assert (scale[0] >= 0 and scale[1] <= 1 and scale[0] <= scale[1]
+                ), "scale should be of kind (min, max) and in range [0, 1]"
+        assert isinstance(ratio,
+                          (tuple, list)), "ratio should be a tuple or list"
+        assert (ratio[0] >= 0 and
+                ratio[0] <= ratio[1]), "ratio should be of kind (min, max)"
+        assert (prob >= 0 and
+                prob <= 1), "The probability should be in range [0, 1]"
+        assert isinstance(
+            value, (Number, str, tuple,
+                    list)), "value should be a number, tuple, list or str"
+        if isinstance(value, str) and value != "random":
+            raise ValueError("value must be 'random' when type is str")
+
+        self.prob = prob
+        self.scale = scale
+        self.ratio = ratio
+        self.value = value
+        self.inplace = inplace
+
+    def _get_param(self, img, scale, ratio, value):
+        if _is_pil_image(img):
+            shape = np.asarray(img).astype(np.uint8).shape
+            h, w, c = shape[-3], shape[-2], shape[-1]
+        elif _is_numpy_image(img):
+            h, w, c = img.shape[-3], img.shape[-2], img.shape[-1]
+
+        img_area = h * w
+        log_ratio = np.log(ratio)
+        for _ in range(10):
+            erase_area = np.random.uniform(*scale) * img_area
+            aspect_ratio = np.exp(np.random.uniform(*log_ratio))
+            erase_h = int(round(np.sqrt(erase_area * aspect_ratio)))
+            erase_w = int(round(np.sqrt(erase_area / aspect_ratio)))
+            if erase_h >= h or erase_w >= w:
+                continue
+
+            if value is None:
+                v = np.random.normal(size=[erase_h, erase_w, c]) * 255
+            else:
+                v = np.array(value)[None, None, :]
+            top = np.random.randint(0, h - erase_h + 1)
+            left = np.random.randint(0, w - erase_w + 1)
+
+            return top, left, erase_h, erase_w, v
+
+        return 0, 0, h, w, img
+
+    def _apply_image(self, img):
+        if random.random() < self.prob:
+            if isinstance(self.value, Number):
+                value = [self.value]
+            elif isinstance(self.value, str):
+                value = None
+            else:
+                value = self.value
+            if value is not None and not (len(value) == 1 or len(value) == 3):
+                raise ValueError(
+                    "Value should be a single number or a sequence with length equals to image's channel."
+                )
+            top, left, erase_h, erase_w, v = self._get_param(img, self.scale,
+                                                             self.ratio, value)
+            return erase(img, top, left, erase_h, erase_w, v, self.inplace)
+        return img
 
 
 @register_op
@@ -392,7 +551,7 @@ class NormalizeImage(BaseOperator):
             2.(optional) Each pixel minus mean and is divided by std
         """
         im = sample['image']
-        im = im.astype(np.float32, copy=False)
+        im = im.astype(np.float32)
         if self.is_scale:
             scale = 1.0 / 255.0
             im *= scale
@@ -3429,7 +3588,8 @@ class RandomColorJitter(BaseOperator):
             from paddle.vision.transforms import ColorJitter
             transform = ColorJitter(self.brightness, self.contrast,
                                     self.saturation, self.hue)
-            sample['image'] = transform(sample['image'])
+            sample['image'] = transform(sample['image'].astype(np.uint8))
+            sample['image'] = sample['image'].astype(np.float32)
         return sample
 
 
@@ -3441,7 +3601,7 @@ class RandomGrayscale(BaseOperator):
     def apply(self, sample, context=None):
         if np.random.uniform(0, 1) < self.prob:
             from paddle.vision.transforms import Grayscale
-            transform = Grayscale()
+            transform = Grayscale(num_output_channels=3)
             sample['image'] = transform(sample['image'])
         return sample
 
@@ -3465,7 +3625,7 @@ class RandomGaussianBlur(BaseOperator):
 class RandomErasingCrop(BaseOperator):
     def __init__(self):
         super(RandomErasingCrop, self).__init__()
-        from paddle.vision.transforms import RandomErasing
+        # from paddle.vision.transforms import RandomErasing
 
     def apply(self, sample, context=None):
         transform1 = RandomErasing(
@@ -3486,23 +3646,18 @@ class RandomErasingCrop(BaseOperator):
 class AugmentationUTStrong(BaseOperator):
     def __init__(self):
         super(AugmentationUTStrong, self).__init__()
-        self.transforms = A.Compose([
-            A.ColorJitter(
-                brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1, p=0.8),
-            A.ToGray(p=0.2),
-            A.GaussianBlur(
-                sigma_limit=(0.1, 2.0), p=0.5),
-            A.Cutout(
-                num_holes=8,
-                max_h_size=70,
-                max_w_size=70,
-                fill_value=0,
-                always_apply=False,
-                p=1),
+        from paddle.vision.transforms import Compose
+        self.transforms = Compose([
+                RandomColorJitter(
+                    brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1,
+                    prob=0.8), 
+                RandomErasingCrop(),
+                RandomGaussianBlur(sigma=(0.1, 2.0), prob=0.5),
+                RandomGrayscale(prob=0.2),
         ])
 
     def apply(self, sample, context=None):
-        im = sample['image']
-        results = self.transforms(image=im)
+        im = sample
+        results = self.transforms(im)
         sample['image'] = results['image']
         return sample

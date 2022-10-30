@@ -79,22 +79,98 @@ class Compose(object):
         return data
 
 
+class BatchCompose(Compose):
+    def __init__(self,num_classes=80):
+        self.transforms =  [{'Permute': {}},{'PadBatch': {'pad_to_stride': 32}}]
+        self.transforms_cls = []
+        for t in self.transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.transforms_cls.append(f)
+
+    def __call__(self, data):
+        for f in self.transforms_cls:
+                data = f(data)
+        from ppdet.data.utils import default_collate_fn
+        batch_data = default_collate_fn(data)
+        for k,v in batch_data.items():
+            batch_data[k]=paddle.to_tensor(v)
+        return batch_data
+
+
+class BatchComposesup(Compose):
+    def __init__(self,num_classes=80):
+        self.transforms =  [
+            {'Permute': {}},
+            {'PadBatch': {'pad_to_stride': 32}},
+            {'Gt2FCOSTarget':{'object_sizes_boundary': [64, 128, 256, 512], 'center_sampling_radius': 1.5, 'downsample_ratios': [8, 16, 32, 64, 128], 'norm_reg_targets': True}},
+        ]
+        self.transforms_cls = []
+        for t in self.transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.transforms_cls.append(f)
+
+    def __call__(self, data):
+        for f in self.transforms_cls:
+                data = f(data)
+        from ppdet.data.utils import default_collate_fn
+        batch_data = default_collate_fn(data)
+        for k,v in batch_data.items():
+            batch_data[k]=paddle.to_tensor(v)
+        return batch_data
+
 def strong_augmentatin(data_weak, strongAug):
     strongAug = Compose(strongAug)
+    batchform= BatchComposesup()
     data_strong = data_weak
     sample_imgs = []
     # only support image transforms now
-    for i in range(data_weak['image'].shape[0]):
+    for i in range(len(data_weak)):
         sample = {}
-        sample['image'] = data_weak['image'][i].numpy().transpose(
-            (1, 2, 0))  # [c, h, w] -》 [h, w, c]
+        # sample['image'] = data_weak[i]['image'].numpy().transpose(
+        #     (1, 2, 0))  # [c, h, w] -》 [h, w, c]
+        sample['image'] = data_weak[i]['image'].numpy()
+        sample['im_shape'] = data_weak[i]['im_shape'].numpy()
+        sample['scale_factor'] = data_weak[i]['scale_factor'].numpy()
+        sample['is_crowd'] = data_weak[i]['is_crowd'].numpy()
+        sample['gt_bbox'] = data_weak[i]['gt_bbox'].numpy()
+        sample['gt_class'] = data_weak[i]['gt_class'].numpy()
+
         sample = strongAug(sample)
-        sample['image'] = paddle.to_tensor(sample['image'].transpose((
-            2, 0, 1))).unsqueeze(0)
-        sample_imgs.append(sample['image'])
-    data_strong['image'] = paddle.concat(sample_imgs, 0)
+        sample_imgs.append(sample)
+    
+    data_strong= sample_imgs
+    data_strong=batchform(data_strong)
+
     return data_strong
 
+def strong_augmentatin_unsup(data_weak, strongAug):
+    strongAug = Compose(strongAug)
+    batchform= BatchCompose()
+    data_strong = data_weak
+    sample_imgs = []
+    # only support image transforms now
+    for i in range(len(data_weak)):
+        sample = {}
+        # sample['image'] = data_weak[i]['image'].numpy().transpose(
+        #     (1, 2, 0))  # [c, h, w] -》 [h, w, c]
+        sample['image'] = data_weak[i]['image'].numpy()
+        sample['im_shape'] = data_weak[i]['im_shape'].numpy()
+        sample['scale_factor'] = data_weak[i]['scale_factor'].numpy()
+        sample = strongAug(sample)
+
+        sample_imgs.append(sample)
+    
+    data_strong= sample_imgs
+    data_strong=batchform(data_strong)
+    return data_strong
 
 class Trainer(object):
     def __init__(self, cfg, mode='train'):
@@ -162,7 +238,7 @@ class Trainer(object):
             self.model = self.cfg.model
             self.is_loaded_weights = True
         if self.mode == 'train':
-            self.model.fuse_norm = self.cfg.get('fuse_normalize', False)
+            self.model.fuse_norm = False #self.cfg.get('fuse_normalize', False)
 
         if cfg.architecture == 'YOLOX':
             for k, m in self.model.named_sublayers():
@@ -832,10 +908,13 @@ class Trainer(object):
                 self.status['iter_id'] = iter_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
-    
+
                 data_sup_w = copy.deepcopy(data_sup)
+                data_sup_s = copy.deepcopy(data_sup)
+                data_sup_w = strong_augmentatin(
+                    data_sup, self.cfg.DenseTeacher['weakAug'])
                 data_sup_s = strong_augmentatin(
-                    data_sup, self.cfg.DenseTeacher['strongAug'])
+                    data_sup, self.cfg.DenseTeacher['strongAug_sup'])
                 for k, v in data_sup_s.items():
                     data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
                 data_sup_w['epoch_id'] = epoch_id
@@ -865,8 +944,38 @@ class Trainer(object):
                         raise ValueError
 
                     data_unsup_w = copy.deepcopy(data_unsup)
-                    data_unsup_s = strong_augmentatin(
-                        data_unsup, self.cfg.DenseTeacher['strongAug'])
+                    # print(paddle.transpose(data_unsup_w["image"],[0, 2, 3, 1])[0][600][570])
+                    #data_unsup_s = copy.deepcopy(data_unsup)
+                    # image1 = data_unsup_w['image'][0].transpose(
+                    #     [1, 2, 0]).numpy()
+                    # image2 = data_unsup_w['image'][1].transpose(
+                    #     [1, 2, 0]).numpy()
+                    # image1 = np.uint8(image1)
+                    # image2 = np.uint8(image2)
+                    # from PIL import Image
+                    # img = Image.fromarray(image1)
+
+                    # img.save('11.jpg')
+                    # img = Image.fromarray(image2)
+                    # img.save('22.jpg')
+                    data_unsup_w = strong_augmentatin_unsup(
+                        data_unsup, self.cfg.DenseTeacher['weakAug'])
+                    data_unsup_w["image"]=paddle.to_tensor(data_unsup_w["image"])
+                    data_unsup_s = strong_augmentatin_unsup(
+                        data_unsup, self.cfg.DenseTeacher['strongAug_unsup'])
+                    data_unsup_s["image"]=paddle.to_tensor(data_unsup_s["image"])
+                    # image3 = data_unsup_s['image'][0].transpose(
+                    #     [1, 2, 0]).numpy()
+                    # image4 = data_unsup_s['image'][1].transpose(
+                    #     [1, 2, 0]).numpy()
+                    # image3 = np.uint8(image3)
+                    # image4 = np.uint8(image4)
+                    # from PIL import Image
+                    # img = Image.fromarray(image3)
+
+                    # img.save('1.jpg')
+                    # img = Image.fromarray(image4)
+                    # img.save('2.jpg')
                     data_unsup_w['epoch_id'] = epoch_id
                     data_unsup_s['epoch_id'] = epoch_id
                     # print('check data info ', step_id, data_sup_w['image'].sum(), data_sup_s['image'].sum(), data_unsup_w['image'].sum(), data_unsup_s['image'].sum())
