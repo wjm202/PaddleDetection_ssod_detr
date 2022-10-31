@@ -62,9 +62,10 @@ class PadBatch(BaseOperator):
             height and width is divisible by `pad_to_stride`.
     """
 
-    def __init__(self, pad_to_stride=0):
+    def __init__(self, pad_to_stride=0, fill_value=0):
         super(PadBatch, self).__init__()
         self.pad_to_stride = pad_to_stride
+        self.fill_value = fill_value
 
     def __call__(self, samples, context=None):
         """
@@ -92,8 +93,12 @@ class PadBatch(BaseOperator):
         for data in inner_samples:
             im = data['image']
             im_c, im_h, im_w = im.shape[:]
+            # padding = np.array([0.485, 0.456, 0.406],dtype=np.float32).reshape(im_c, 1, 1)
             padding_im = np.zeros(
                 (im_c, max_shape[1], max_shape[2]), dtype=np.float32)
+            # padding_im=padding_im*padding* 255.0
+            # padding_im *= np.array([self.fill_value]).reshape(im_c, 1, 1)
+
             padding_im[:, :im_h, :im_w] = im
             data['image'] = padding_im
             if 'semantic' in data and data['semantic'] is not None:
@@ -575,9 +580,9 @@ class Gt2GFLTarget(BaseOperator):
                                               gt_bboxes, gt_bboxes_ignore,
                                               gt_labels)
 
-            vlr_region = self.assigner.get_vlr_region(grid_cells, num_level_cells,
-                                                      gt_bboxes, gt_bboxes_ignore,
-                                                      gt_labels)
+            vlr_region = self.assigner.get_vlr_region(
+                grid_cells, num_level_cells, gt_bboxes, gt_bboxes_ignore,
+                gt_labels)
 
             pos_inds, neg_inds, pos_gt_bboxes, pos_assigned_gt_inds = self.get_sample(
                 assign_gt_inds, gt_bboxes)

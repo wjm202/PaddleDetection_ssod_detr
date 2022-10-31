@@ -39,7 +39,7 @@ class Compose(object):
     def __init__(self, transforms, num_classes=80):
         self.transforms = transforms
         self.transforms_cls = []
-        if self.transforms is None or self.transforms == []:
+        if self.transforms == None:
             self.transforms_cls = []
         else:
             for t in self.transforms:
@@ -104,9 +104,9 @@ class BatchCompose(Compose):
         return batch_data
 
 
-class BatchComposeUnSup(Compose):
+class BatchComposeunsup(Compose):
     def __init__(self, transforms, num_classes=80, collate_batch=True):
-        super(BatchComposeUnSup, self).__init__(transforms, num_classes)
+        super(BatchComposeunsup, self).__init__(transforms, num_classes)
         self.collate_batch = collate_batch
 
     def __call__(self, data):
@@ -131,6 +131,7 @@ class BatchComposeUnSup(Compose):
         # use user-defined here
 
         return data
+
 
 class BaseDataLoader(object):
     """
@@ -279,9 +280,9 @@ class SupTrainReader(BaseDataLoader):
                  collate_batch=True,
                  fuse_normalize=False,
                  **kwargs):
-        super(SupTrainReader, self).__init__(sample_transforms, batch_transforms,
-                                          batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, fuse_normalize, **kwargs)
+        super(SupTrainReader, self).__init__(
+            sample_transforms, batch_transforms, batch_size, shuffle, drop_last,
+            num_classes, collate_batch, fuse_normalize, **kwargs)
         if fuse_normalize:
             sample_transforms_ = []
             batch_transforms_ = []
@@ -303,8 +304,9 @@ class SupTrainReader(BaseDataLoader):
         self._sample_transforms = Compose(
             sample_transforms_, num_classes=num_classes)
         # batch transfrom 
-        self._batch_transforms = BatchComposeUnSup(batch_transforms_, num_classes,
-                                              collate_batch)
+        self._batch_transforms = BatchComposeunsup(batch_transforms_,
+                                                   num_classes, collate_batch)
+
 
 @register
 class UnsupTrainReader(BaseDataLoader):
@@ -320,9 +322,9 @@ class UnsupTrainReader(BaseDataLoader):
                  collate_batch=True,
                  fuse_normalize=False,
                  **kwargs):
-        super(UnsupTrainReader, self).__init__(sample_transforms, batch_transforms,
-                                          batch_size, shuffle, drop_last,
-                                          num_classes, collate_batch, fuse_normalize, **kwargs)
+        super(UnsupTrainReader, self).__init__(
+            sample_transforms, batch_transforms, batch_size, shuffle, drop_last,
+            num_classes, collate_batch, fuse_normalize, **kwargs)
         if fuse_normalize:
             sample_transforms_ = []
             batch_transforms_ = []
@@ -344,8 +346,9 @@ class UnsupTrainReader(BaseDataLoader):
         self._sample_transforms = Compose(
             sample_transforms_, num_classes=num_classes)
         # batch transfrom 
-        self._batch_transforms = BatchComposeUnSup(batch_transforms_, num_classes,
-                                              collate_batch)
+        self._batch_transforms = BatchComposeunsup(batch_transforms_,
+                                                   num_classes, collate_batch)
+
 
 @register
 class EvalReader(BaseDataLoader):

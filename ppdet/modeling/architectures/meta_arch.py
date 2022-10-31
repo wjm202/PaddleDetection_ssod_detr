@@ -23,6 +23,9 @@ class BaseArch(nn.Layer):
 
     def load_meanstd(self, cfg_transform):
         scale = 1.
+        # mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        # std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
         for item in cfg_transform:
@@ -33,7 +36,7 @@ class BaseArch(nn.Layer):
                 if item['NormalizeImage'].get('is_scale', True):
                     scale = 1. / 255.
                 break
-        if self.data_format == 'NHWC':
+        if self.data_format == 'NHWC':  #no change 10.27
             self.scale = paddle.to_tensor(scale / std).reshape((1, 1, 1, 3))
             self.bias = paddle.to_tensor(-mean / std).reshape((1, 1, 1, 3))
         else:
@@ -46,12 +49,44 @@ class BaseArch(nn.Layer):
             inputs['image'] = paddle.transpose(image, [0, 2, 3, 1])
 
         if self.fuse_norm:
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            scale = 1 / 255
             image = inputs['image']
-            self.inputs = inputs #
-            self.inputs['image'] = image * self.scale + self.bias
+            inputs['image'] = paddle.transpose(image, [0, 2, 3, 1])
+            self.inputs = inputs  #
+            mean = paddle.to_tensor(np.array(mean)[np.newaxis, np.newaxis, :])
+            std = paddle.to_tensor(np.array(std)[np.newaxis, np.newaxis, :])
+            print(self.inputs['image'][0][600][570])
+            for i in range(self.inputs['image'].shape[0]):
+                self.inputs['image'][i] = self.inputs['image'][i] * scale
+                self.inputs['image'][i] -= mean
+                self.inputs['image'][i] /= std
+
+            self.inputs['image'] = paddle.transpose(self.inputs['image'],
+                                                    [0, 3, 1, 2])
+
+            for i in range(self.inputs['image'].shape[0]):
+                self.inputs['image'][i, :, :, int(inputs['im_shape'][i][1].item(
+                )) - 1:] = 0
+                self.inputs['image'][i, :, int(inputs['im_shape'][i][0].item())
+                                     - 1:, :] = 0
+            image1 = self.inputs['image'][0].transpose([1, 2, 0]).numpy()
+            image2 = self.inputs['image'][1].transpose([1, 2, 0]).numpy()
+            image1 = np.uint8(image1)
+            image2 = np.uint8(image2)
+            from PIL import Image
+            img = Image.fromarray(image1)
+
+            img.save('归一化1.jpg')
+            img = Image.fromarray(image2)
+            img.save('归一化2.jpg')
+            # print(self.inputs['image'][0].sum())
+            # print(self.inputs['image'][0].mean())
             self.inputs['im_shape'] = inputs['im_shape']
             self.inputs['scale_factor'] = inputs['scale_factor']
         else:
+
             self.inputs = inputs
 
         self.model_arch()

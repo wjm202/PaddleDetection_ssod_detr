@@ -183,4 +183,7 @@ class MeanTeacher(object):
                 v.stop_gradient = True
             state[k] = v
         self.model.set_state_dict(state)
+        for k, v in self.model.state_dict().items():
+            if paddle.is_floating_point(v):
+                self.model.state_dict()[k].stop_gradient = True
         self.step = step

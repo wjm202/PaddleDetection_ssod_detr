@@ -20,7 +20,6 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import division
 import albumentations as A
-
 try:
     from collections.abc import Sequence
 except Exception:
@@ -39,6 +38,13 @@ import cv2
 from PIL import Image, ImageDraw
 import pickle
 import threading
+import math
+import sys
+import random
+import numpy as np
+import numbers
+import collections
+import traceback
 import paddle
 MUTEX = threading.Lock()
 
@@ -106,9 +112,6 @@ class BaseOperator(object):
             sample = self.apply(sample, context)
         return sample
 
-    def __str__(self):
-        return str(self._id)
-
 
 class BaseTransform(object):
     def __init__(self, keys=None):
@@ -164,6 +167,16 @@ class BaseTransform(object):
     def _apply_mask(self, mask):
         raise NotImplementedError
 
+
+def F_terase(img, i, j, h, w, v, inplace=False):
+    _assert_image_tensor(img, 'CHW')
+    if not inplace:
+        img = img.clone()
+
+    img[..., i:i + h, j:j + w] = v
+    return img
+
+
 def F_cv2erase(img, i, j, h, w, v, inplace=False):
     if not inplace:
         img = img.copy()
@@ -171,20 +184,30 @@ def F_cv2erase(img, i, j, h, w, v, inplace=False):
     img[i:i + h, j:j + w, ...] = v
     return img
 
+
 def F_pilerase(img, i, j, h, w, v, inplace=False):
     np_img = np.array(img, dtype=np.uint8)
     np_img[i:i + h, j:j + w, ...] = v
     img = Image.fromarray(np_img, 'RGB')
     return img
 
+
 def _is_pil_image(img):
     return isinstance(img, Image.Image)
+
 
 def _is_numpy_image(img):
     return isinstance(img, np.ndarray) and (img.ndim in {2, 3})
 
+
+def _is_tensor_image(img):
+    return isinstance(img, paddle.Tensor)
+
+
 def erase(img, i, j, h, w, v, inplace=False):
-    if _is_pil_image(img):
+    if _is_tensor_image(img):
+        return F_terase(img, i, j, h, w, v, inplace=inplace)
+    elif _is_pil_image(img):
         return F_pilerase(img, i, j, h, w, v, inplace=inplace)
     else:
         return F_cv2erase(img, i, j, h, w, v, inplace=inplace)
@@ -211,7 +234,7 @@ class RandomErasing(BaseTransform):
         assert (prob >= 0 and
                 prob <= 1), "The probability should be in range [0, 1]"
         assert isinstance(
-            value, (Number, str, tuple,
+            value, (numbers.Number, str, tuple,
                     list)), "value should be a number, tuple, list or str"
         if isinstance(value, str) and value != "random":
             raise ValueError("value must be 'random' when type is str")
@@ -223,11 +246,14 @@ class RandomErasing(BaseTransform):
         self.inplace = inplace
 
     def _get_param(self, img, scale, ratio, value):
+
         if _is_pil_image(img):
             shape = np.asarray(img).astype(np.uint8).shape
             h, w, c = shape[-3], shape[-2], shape[-1]
         elif _is_numpy_image(img):
             h, w, c = img.shape[-3], img.shape[-2], img.shape[-1]
+        elif _is_tensor_image(img):
+            c, h, w = img.shape[-3], img.shape[-2], img.shape[-1]
 
         img_area = h * w
         log_ratio = np.log(ratio)
@@ -238,11 +264,17 @@ class RandomErasing(BaseTransform):
             erase_w = int(round(np.sqrt(erase_area / aspect_ratio)))
             if erase_h >= h or erase_w >= w:
                 continue
-
-            if value is None:
-                v = np.random.normal(size=[erase_h, erase_w, c]) * 255
+            if _is_tensor_image(img):
+                if value is None:
+                    v = paddle.normal(
+                        shape=[c, erase_h, erase_w]).astype(img.dtype)
+                else:
+                    v = paddle.to_tensor(value, dtype=img.dtype)[:, None, None]
             else:
-                v = np.array(value)[None, None, :]
+                if value is None:
+                    v = np.random.normal(size=[erase_h, erase_w, c]) * 255
+                else:
+                    v = np.array(value)[None, None, :]
             top = np.random.randint(0, h - erase_h + 1)
             left = np.random.randint(0, w - erase_w + 1)
 
@@ -251,8 +283,15 @@ class RandomErasing(BaseTransform):
         return 0, 0, h, w, img
 
     def _apply_image(self, img):
+        """
+        Args:
+            img (paddle.Tensor | np.array | PIL.Image): Image to be Erased.
+        Returns:
+            output (paddle.Tensor np.array | PIL.Image): A random erased image.
+        """
+
         if random.random() < self.prob:
-            if isinstance(self.value, Number):
+            if isinstance(self.value, numbers.Number):
                 value = [self.value]
             elif isinstance(self.value, str):
                 value = None
@@ -1086,7 +1125,6 @@ class RandomResize(BaseOperator):
                  target_size,
                  keep_ratio=True,
                  interp=cv2.INTER_LINEAR,
-                 random_range=False,
                  random_size=True,
                  random_interp=False):
         """
@@ -1095,8 +1133,6 @@ class RandomResize(BaseOperator):
             target_size (int, list, tuple): image target size, if random size is True, must be list or tuple
             keep_ratio (bool): whether keep_raio or not, default true
             interp (int): the interpolation method
-            random_range (bool): whether random select target size of image, the target_size must be 
-                a [[min_short_edge, long_edge], [max_short_edge, long_edge]]
             random_size (bool): whether random select target size of image
             random_interp (bool): whether random select interpolation method
         """
@@ -1112,29 +1148,21 @@ class RandomResize(BaseOperator):
         ]
         assert isinstance(target_size, (
             Integral, Sequence)), "target_size must be Integer, List or Tuple"
-        if (random_range or random_size) and not isinstance(target_size, Sequence):
+        if random_size and not isinstance(target_size, Sequence):
             raise TypeError(
-                "Type of target_size is invalid when random_size or random_range is True. Must be List or Tuple, now is {}".
+                "Type of target_size is invalid when random_size is True. Must be List or Tuple, now is {}".
                 format(type(target_size)))
-        if random_range and not len(target_size) == 2:
-            raise TypeError("target_size must be two list as [[min_short_edge, long_edge], [max_short_edge, long_edge]] when random_range is True.")
         self.target_size = target_size
-        self.random_range = random_range
         self.random_size = random_size
         self.random_interp = random_interp
 
     def apply(self, sample, context=None):
         """ Resize the image numpy.
         """
-        if self.random_range:
-            short_edge = np.random.randint(self.target_size[0][0], self.target_size[1][0] + 1)
-            long_edge = max(self.target_size[0][1], self.target_size[1][1] + 1)
-            target_size = [short_edge, long_edge]
+        if self.random_size:
+            target_size = random.choice(self.target_size)
         else:
-            if self.random_size:
-                target_size = random.choice(self.target_size)
-            else:
-                target_size = self.target_size
+            target_size = self.target_size
 
         if self.random_interp:
             interp = random.choice(self.interps)
@@ -3586,6 +3614,7 @@ class RandomColorJitter(BaseOperator):
     def apply(self, sample, context=None):
         if np.random.uniform(0, 1) < self.prob:
             from paddle.vision.transforms import ColorJitter
+
             transform = ColorJitter(self.brightness, self.contrast,
                                     self.saturation, self.hue)
             sample['image'] = transform(sample['image'].astype(np.uint8))
@@ -3625,7 +3654,6 @@ class RandomGaussianBlur(BaseOperator):
 class RandomErasingCrop(BaseOperator):
     def __init__(self):
         super(RandomErasingCrop, self).__init__()
-        # from paddle.vision.transforms import RandomErasing
 
     def apply(self, sample, context=None):
         transform1 = RandomErasing(
@@ -3648,16 +3676,14 @@ class AugmentationUTStrong(BaseOperator):
         super(AugmentationUTStrong, self).__init__()
         from paddle.vision.transforms import Compose
         self.transforms = Compose([
-                RandomColorJitter(
-                    brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1,
-                    prob=0.8), 
-                RandomErasingCrop(),
-                RandomGaussianBlur(sigma=(0.1, 2.0), prob=0.5),
-                RandomGrayscale(prob=0.2),
+            RandomColorJitter(
+                brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1,
+                prob=0.8), RandomErasingCrop(), RandomGaussianBlur(
+                    sigma=(0.1, 2.0), prob=0.5), RandomGrayscale(prob=0.2)
         ])
 
     def apply(self, sample, context=None):
         im = sample
         results = self.transforms(im)
-        sample['image'] = results['image']
+        sample['image'] = results["image"]
         return sample

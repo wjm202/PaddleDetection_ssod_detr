@@ -1,8 +1,8 @@
 _BASE_: [
   '../../fcos/fcos_r50_fpn_1x_coco.yml',
 ]
-log_iter: 20
-snapshot_epoch: 5
+log_iter: 1
+snapshot_epoch: 3
 weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
@@ -17,6 +17,8 @@ ema_decay: 0.9996
 ema_decay_type: None
 ema_start_steps: 1000 #3000
 
+fuse_normalize: False # in trainreader
+
 save_interval: &save_interval 5000
 eval_interval: &eval_interval 2000
 
@@ -29,19 +31,11 @@ DenseTeacher:
     suppress: linear
     loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0}
     gamma: 2.0
-  test_cfg: 
+  test_cfg:
     #inference_on: teacher
     inference_on: student
   strongAug:
     - AugmentationUTStrong: {}
-  strongAug_unsup:
-    - AugmentationUTStrong: {}
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
-  weakAug:
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
-  strongAug_sup:
-    - AugmentationUTStrong: {}
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
 
 
 ### dataset config
@@ -80,7 +74,16 @@ SupTrainReader:
   sample_transforms:
     - Decode: {}
     - RandomResize: {target_size: [[640, 1333], [672, 1333], [704, 1333], [736, 1333], [768, 1333], [800, 1333]], keep_ratio: True, interp: 1}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
+  batch_transforms:
+    - Permute: {}
+    - PadBatch: {pad_to_stride: 32} #
+    - Gt2FCOSTarget:
+        object_sizes_boundary: [64, 128, 256, 512]
+        center_sampling_radius: 1.5
+        downsample_ratios: [8, 16, 32, 64, 128]
+        norm_reg_targets: True
   batch_size: 2
   shuffle: True
   drop_last: True
@@ -90,14 +93,15 @@ UnsupTrainReader:
   sample_transforms:
     - Decode: {}
     - RandomResize: {target_size: [[640, 1333], [672, 1333], [704, 1333], [736, 1333], [768, 1333], [800, 1333]], keep_ratio: True, interp: 1}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - RandomFlip: {}
+  batch_transforms:
+    - Permute: {}
+    - PadBatch: {pad_to_stride: 32} #
   batch_size: 2
   shuffle: True
   drop_last: False
 
-batch_transforms_unsup:
-  - Permute: {}
-  - PadBatch: {pad_to_stride: 32} #
 
 EvalReader:
   sample_transforms:
@@ -137,7 +141,7 @@ OptimizerBuilder:
 ### model config
 architecture: FCOS
 #pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-pretrain_weights: /paddle/fcos_r50_fpn_multiscale_2x_coco_sup_010_iou_26.3.pdparams
+pretrain_weights: fcos_r50_fpn_multiscale_2x_coco_sup_010_iou_26.3.pdparams
 #norm_type: sync_bn
 
 FCOS:
