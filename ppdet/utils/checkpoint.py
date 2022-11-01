@@ -74,8 +74,10 @@ def load_weight(model, weight, optimizer=None, ema=None):
 
     if ema is not None and os.path.exists(path + '.pdema'):
         # Exchange model and ema_model to load
-        ema_state_dict = paddle.load(pdparam_path)
-        param_state_dict = paddle.load(path + '.pdema')
+        param_state_dict = paddle.load(pdparam_path)
+        ema_state_dict = paddle.load(path + '.pdema')
+        logger.info('Finish resuming teacher weights: {}'.format(path +
+                                                                 '.pdema'))
     else:
         ema_state_dict = None
         param_state_dict = paddle.load(pdparam_path)
@@ -99,7 +101,7 @@ def load_weight(model, weight, optimizer=None, ema=None):
     assert incorrect_keys == 0, "Load weight {} incorrectly, \
             {} keys unmatched, please check again.".format(weight,
                                                            incorrect_keys)
-    logger.info('Finish resuming model weights: {}'.format(pdparam_path))
+    logger.info('Finish resuming student weights: {}'.format(pdparam_path))
 
     model.set_dict(model_weight)
 

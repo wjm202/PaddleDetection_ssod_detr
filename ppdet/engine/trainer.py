@@ -61,6 +61,8 @@ __all__ = ['Trainer']
 MOT_ARCH = ['DeepSORT', 'JDE', 'FairMOT', 'ByteTrack']
 
 from ppdet.data.reader import transform
+
+
 class Compose(object):
     def __init__(self, transforms, num_classes=80):
         self.transforms = transforms
@@ -80,8 +82,8 @@ class Compose(object):
 
 
 class BatchCompose(Compose):
-    def __init__(self,num_classes=80):
-        self.transforms =  [{'Permute': {}},{'PadBatch': {'pad_to_stride': 32}}]
+    def __init__(self, num_classes=80):
+        self.transforms = [{'Permute': {}}, {'PadBatch': {'pad_to_stride': 32}}]
         self.transforms_cls = []
         for t in self.transforms:
             for k, v in t.items():
@@ -93,20 +95,33 @@ class BatchCompose(Compose):
 
     def __call__(self, data):
         for f in self.transforms_cls:
-                data = f(data)
+            data = f(data)
         from ppdet.data.utils import default_collate_fn
         batch_data = default_collate_fn(data)
-        for k,v in batch_data.items():
-            batch_data[k]=paddle.to_tensor(v)
+        for k, v in batch_data.items():
+            batch_data[k] = paddle.to_tensor(v)
         return batch_data
 
 
 class BatchComposesup(Compose):
-    def __init__(self,num_classes=80):
-        self.transforms =  [
-            {'Permute': {}},
-            {'PadBatch': {'pad_to_stride': 32}},
-            {'Gt2FCOSTarget':{'object_sizes_boundary': [64, 128, 256, 512], 'center_sampling_radius': 1.5, 'downsample_ratios': [8, 16, 32, 64, 128], 'norm_reg_targets': True}},
+    def __init__(self, num_classes=80):
+        self.transforms = [
+            {
+                'Permute': {}
+            },
+            {
+                'PadBatch': {
+                    'pad_to_stride': 32
+                }
+            },
+            {
+                'Gt2FCOSTarget': {
+                    'object_sizes_boundary': [64, 128, 256, 512],
+                    'center_sampling_radius': 1.5,
+                    'downsample_ratios': [8, 16, 32, 64, 128],
+                    'norm_reg_targets': True
+                }
+            },
         ]
         self.transforms_cls = []
         for t in self.transforms:
@@ -119,16 +134,17 @@ class BatchComposesup(Compose):
 
     def __call__(self, data):
         for f in self.transforms_cls:
-                data = f(data)
+            data = f(data)
         from ppdet.data.utils import default_collate_fn
         batch_data = default_collate_fn(data)
-        for k,v in batch_data.items():
-            batch_data[k]=paddle.to_tensor(v)
+        for k, v in batch_data.items():
+            batch_data[k] = paddle.to_tensor(v)
         return batch_data
+
 
 def strong_augmentatin(data_weak, strongAug):
     strongAug = Compose(strongAug)
-    batchform= BatchComposesup()
+    batchform = BatchComposesup()
     data_strong = data_weak
     sample_imgs = []
     # only support image transforms now
@@ -145,15 +161,16 @@ def strong_augmentatin(data_weak, strongAug):
 
         sample = strongAug(sample)
         sample_imgs.append(sample)
-    
-    data_strong= sample_imgs
-    data_strong=batchform(data_strong)
+
+    data_strong = sample_imgs
+    data_strong = batchform(data_strong)
 
     return data_strong
 
+
 def strong_augmentatin_unsup(data_weak, strongAug):
     strongAug = Compose(strongAug)
-    batchform= BatchCompose()
+    batchform = BatchCompose()
     data_strong = data_weak
     sample_imgs = []
     # only support image transforms now
@@ -167,10 +184,11 @@ def strong_augmentatin_unsup(data_weak, strongAug):
         sample = strongAug(sample)
 
         sample_imgs.append(sample)
-    
-    data_strong= sample_imgs
-    data_strong=batchform(data_strong)
+
+    data_strong = sample_imgs
+    data_strong = batchform(data_strong)
     return data_strong
+
 
 class Trainer(object):
     def __init__(self, cfg, mode='train'):
@@ -238,7 +256,7 @@ class Trainer(object):
             self.model = self.cfg.model
             self.is_loaded_weights = True
         if self.mode == 'train':
-            self.model.fuse_norm = False #self.cfg.get('fuse_normalize', False)
+            self.model.fuse_norm = False  #self.cfg.get('fuse_normalize', False)
 
         if cfg.architecture == 'YOLOX':
             for k, m in self.model.named_sublayers():
@@ -301,7 +319,7 @@ class Trainer(object):
         self.use_ema = ('use_ema' in cfg and cfg['use_ema'])
         if self.use_ema:
             ema_decay = self.cfg.get('ema_decay', 0.9996)
-            self.ema = MeanTeacher(self.model, ema_decay) ### replace ema
+            self.ema = MeanTeacher(self.model, ema_decay)  ### replace ema
             self.ema_start_steps = self.cfg.get('ema_start_steps', 3000)
         else:
             if self.semi_supervised:
@@ -878,7 +896,7 @@ class Trainer(object):
             self.loader.dataset.set_epoch(epoch_id)
             self.loader_unsup.dataset.set_epoch(epoch_id)
             model.train()
-            self.ema.model.eval() # teacher
+            self.ema.model.eval()  # teacher
             for param in self.ema.model.parameters():
                 param.trainable = False
 
@@ -960,10 +978,12 @@ class Trainer(object):
                     # img.save('22.jpg')
                     data_unsup_w = strong_augmentatin_unsup(
                         data_unsup, self.cfg.DenseTeacher['weakAug'])
-                    data_unsup_w["image"]=paddle.to_tensor(data_unsup_w["image"])
+                    data_unsup_w["image"] = paddle.to_tensor(data_unsup_w[
+                        "image"])
                     data_unsup_s = strong_augmentatin_unsup(
                         data_unsup, self.cfg.DenseTeacher['strongAug_unsup'])
-                    data_unsup_s["image"]=paddle.to_tensor(data_unsup_s["image"])
+                    data_unsup_s["image"] = paddle.to_tensor(data_unsup_s[
+                        "image"])
                     # image3 = data_unsup_s['image'][0].transpose(
                     #     [1, 2, 0]).numpy()
                     # image4 = data_unsup_s['image'][1].transpose(
@@ -991,11 +1011,13 @@ class Trainer(object):
                     if self._nranks > 1:
                         loss_dict_unsup = model._layers.fcos_head.get_distill_loss(
                             [student_logits, student_deltas, student_quality],
-                            [teacher_logits, teacher_deltas, teacher_quality], ratio=train_cfg['ratio'])
+                            [teacher_logits, teacher_deltas, teacher_quality],
+                            ratio=train_cfg['ratio'])
                     else:
                         loss_dict_unsup = model.fcos_head.get_distill_loss(
                             [student_logits, student_deltas, student_quality],
-                            [teacher_logits, teacher_deltas, teacher_quality], ratio=train_cfg['ratio'])
+                            [teacher_logits, teacher_deltas, teacher_quality],
+                            ratio=train_cfg['ratio'])
 
                     fg_num = loss_dict_unsup["fg_sum"]
                     del loss_dict_unsup["fg_sum"]
@@ -1044,6 +1066,9 @@ class Trainer(object):
             if is_snapshot and self.use_ema:
                 # apply ema weight on model
                 weight = copy.deepcopy(self.ema.model.state_dict())
+                for k, v in weight.items():
+                    if paddle.is_floating_point(v):
+                        weight[k].stop_gradient = True
                 self.status['weight'] = weight
 
             self._compose_callback.on_epoch_end(self.status)
