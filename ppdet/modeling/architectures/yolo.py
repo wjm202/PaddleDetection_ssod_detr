@@ -19,6 +19,10 @@ from __future__ import print_function
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 from ..post_process import JDEBBoxPostProcess
+import paddle
+import paddle.nn.functional as F
+from ..ssod_utils import QFLv2, giou_loss
+from IPython import embed
 
 __all__ = ['YOLOv3']
 
@@ -87,7 +91,8 @@ class YOLOv3(BaseArch):
             emb_feats = neck_feats['emb_feats']
             neck_feats = neck_feats['yolo_feats']
 
-        if self.training:
+        is_teacher = self.inputs.get('is_teacher', False)
+        if self.training or is_teacher:
             yolo_losses = self.yolo_head(neck_feats, self.inputs)
 
             if self.for_mot:
@@ -128,3 +133,45 @@ class YOLOv3(BaseArch):
 
     def get_pred(self):
         return self._forward()
+
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
+        # student_probs: already sigmoid
+        student_probs, student_deltas = head_outs # [1, 8400, 80] [1, 8400, 4]
+        teacher_probs, teacher_deltas = teacher_head_outs
+        nc = student_probs.shape[-1]
+
+        student_probs = student_probs.reshape([-1, nc])
+        teacher_probs = teacher_probs.transpose([0, 2, 1]).reshape([-1, nc])
+        student_deltas = student_deltas.reshape([-1, 4])
+        teacher_deltas = teacher_deltas.reshape([-1, 4])
+
+        with paddle.no_grad():
+            # Region Selection
+            count_num = int(teacher_probs.shape[0] * ratio) # top 84
+            # teacher_probs = F.sigmoid(teacher_logits) # [8400, 80] already sigmoid
+            max_vals = paddle.max(teacher_probs, 1)
+            sorted_vals, sorted_inds = paddle.topk(max_vals, teacher_probs.shape[0])
+            mask = paddle.zeros_like(max_vals)
+            mask[sorted_inds[:count_num]] = 1.
+            fg_num = sorted_vals[:count_num].sum()
+            b_mask = mask > 0.
+
+        loss_logits = QFLv2(
+            student_probs,
+            teacher_probs,
+            weight=mask,
+            reduction="sum") / fg_num
+
+        inputs = paddle.concat(
+            (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
+            axis=-1)
+        targets = paddle.concat(
+            (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
+            axis=-1)
+        loss_deltas = giou_loss(inputs, targets).mean()
+
+        return {
+            "distill_loss_cls": loss_logits,
+            "distill_loss_box": loss_deltas,
+            "fg_sum": fg_num,
+        }

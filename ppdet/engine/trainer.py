@@ -61,7 +61,7 @@ __all__ = ['Trainer']
 MOT_ARCH = ['DeepSORT', 'JDE', 'FairMOT', 'ByteTrack']
 
 from ppdet.data.reader import transform
-
+from IPython import embed
 
 class Compose(object):
     def __init__(self, transforms, num_classes=80):
@@ -81,9 +81,9 @@ class Compose(object):
         return data
 
 
-class BatchCompose(Compose):
-    def __init__(self, num_classes=80):
-        self.transforms = [{'Permute': {}}, {'PadBatch': {'pad_to_stride': 32}}]
+class BatchComposeUnSup(Compose):
+    def __init__(self, transforms, num_classes=80):
+        self.transforms = transforms
         self.transforms_cls = []
         for t in self.transforms:
             for k, v in t.items():
@@ -103,26 +103,9 @@ class BatchCompose(Compose):
         return batch_data
 
 
-class BatchComposesup(Compose):
-    def __init__(self, num_classes=80):
-        self.transforms = [
-            {
-                'Permute': {}
-            },
-            {
-                'PadBatch': {
-                    'pad_to_stride': 32
-                }
-            },
-            {
-                'Gt2FCOSTarget': {
-                    'object_sizes_boundary': [64, 128, 256, 512],
-                    'center_sampling_radius': 1.5,
-                    'downsample_ratios': [8, 16, 32, 64, 128],
-                    'norm_reg_targets': True
-                }
-            },
-        ]
+class BatchComposeSup(Compose):
+    def __init__(self, transforms, num_classes=80):
+        self.transforms = transforms
         self.transforms_cls = []
         for t in self.transforms:
             for k, v in t.items():
@@ -142,9 +125,9 @@ class BatchComposesup(Compose):
         return batch_data
 
 
-def strong_augmentatin(data_weak, strongAug):
+def strong_augmentatin_sup(data_weak, strongAug, sup_batch_transforms, num_classes=80):
     strongAug = Compose(strongAug)
-    batchform = BatchComposesup()
+    batchform = BatchComposeSup(sup_batch_transforms, num_classes)
     data_strong = data_weak
     sample_imgs = []
     # only support image transforms now
@@ -164,13 +147,12 @@ def strong_augmentatin(data_weak, strongAug):
 
     data_strong = sample_imgs
     data_strong = batchform(data_strong)
-
     return data_strong
 
 
-def strong_augmentatin_unsup(data_weak, strongAug):
+def strong_augmentatin_unsup(data_weak, strongAug, unsup_batch_transforms, num_classes=80):
     strongAug = Compose(strongAug)
-    batchform = BatchCompose()
+    batchform = BatchComposeUnSup(unsup_batch_transforms, num_classes)
     data_strong = data_weak
     sample_imgs = []
     # only support image transforms now
@@ -181,8 +163,8 @@ def strong_augmentatin_unsup(data_weak, strongAug):
         sample['image'] = data_weak[i]['image'].numpy()
         sample['im_shape'] = data_weak[i]['im_shape'].numpy()
         sample['scale_factor'] = data_weak[i]['scale_factor'].numpy()
-        sample = strongAug(sample)
 
+        sample = strongAug(sample)
         sample_imgs.append(sample)
 
     data_strong = sample_imgs
@@ -901,18 +883,31 @@ class Trainer(object):
                 param.trainable = False
 
             iter_tic = time.time()
-            loss_dict = {
-                'loss': paddle.to_tensor([0]),
-                'loss_cls': paddle.to_tensor([0]),
-                'loss_box': paddle.to_tensor([0]),
-                'loss_quality': paddle.to_tensor([0]),
-                'loss_sup_sum': paddle.to_tensor([0]),
-                'distill_loss_cls': paddle.to_tensor([0]),
-                'distill_loss_box': paddle.to_tensor([0]),
-                'distill_loss_quality': paddle.to_tensor([0]),
-                'loss_unsup_sum': paddle.to_tensor([0]),
-                "fg_sum": paddle.to_tensor([0]),
-            }
+            if self.cfg.architecture == 'FCOS': # TODO
+                loss_dict = {
+                    'loss': paddle.to_tensor([0]),
+                    'loss_cls': paddle.to_tensor([0]),
+                    'loss_box': paddle.to_tensor([0]),
+                    'loss_quality': paddle.to_tensor([0]),
+                    'loss_sup_sum': paddle.to_tensor([0]),
+                    'distill_loss_cls': paddle.to_tensor([0]),
+                    'distill_loss_box': paddle.to_tensor([0]),
+                    'distill_loss_quality': paddle.to_tensor([0]),
+                    'loss_unsup_sum': paddle.to_tensor([0]),
+                    "fg_sum": paddle.to_tensor([0]),
+                }
+            else:
+                loss_dict = {
+                    'loss': paddle.to_tensor([0]),
+                    'loss_cls': paddle.to_tensor([0]),
+                    'loss_iou': paddle.to_tensor([0]), #
+                    'loss_dfl': paddle.to_tensor([0]), #
+                    'loss_sup_sum': paddle.to_tensor([0]),
+                    'distill_loss_cls': paddle.to_tensor([0]),
+                    'distill_loss_box': paddle.to_tensor([0]),
+                    'loss_unsup_sum': paddle.to_tensor([0]),
+                    "fg_sum": paddle.to_tensor([0]),
+                }
             for step_id, data_sup in enumerate(self.loader):
                 try:
                     data_unsup = self.loader_unsup.next()
@@ -929,10 +924,16 @@ class Trainer(object):
 
                 data_sup_w = copy.deepcopy(data_sup)
                 data_sup_s = copy.deepcopy(data_sup)
-                data_sup_w = strong_augmentatin(
-                    data_sup, self.cfg.DenseTeacher['weakAug'])
-                data_sup_s = strong_augmentatin(
-                    data_sup, self.cfg.DenseTeacher['strongAug_sup'])
+                data_sup_w = strong_augmentatin_sup(
+                    data_sup,
+                    self.cfg.DenseTeacher['weakAug'],
+                    self.cfg.DenseTeacher['sup_batch_transforms'],
+                    self.cfg.num_classes)
+                data_sup_s = strong_augmentatin_sup(
+                    data_sup,
+                    self.cfg.DenseTeacher['strongAug'],
+                    self.cfg.DenseTeacher['sup_batch_transforms'],
+                    self.cfg.num_classes)
                 for k, v in data_sup_s.items():
                     data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
                 data_sup_w['epoch_id'] = epoch_id
@@ -977,13 +978,17 @@ class Trainer(object):
                     # img = Image.fromarray(image2)
                     # img.save('22.jpg')
                     data_unsup_w = strong_augmentatin_unsup(
-                        data_unsup, self.cfg.DenseTeacher['weakAug'])
-                    data_unsup_w["image"] = paddle.to_tensor(data_unsup_w[
-                        "image"])
+                        data_unsup,
+                        self.cfg.DenseTeacher['weakAug'],
+                        self.cfg.DenseTeacher['unsup_batch_transforms'],
+                        self.cfg.num_classes)
+                    data_unsup_w["image"] = paddle.to_tensor(data_unsup_w["image"])
                     data_unsup_s = strong_augmentatin_unsup(
-                        data_unsup, self.cfg.DenseTeacher['strongAug_unsup'])
-                    data_unsup_s["image"] = paddle.to_tensor(data_unsup_s[
-                        "image"])
+                        data_unsup,
+                        self.cfg.DenseTeacher['strongAug'],
+                        self.cfg.DenseTeacher['unsup_batch_transforms'],
+                        self.cfg.num_classes)
+                    data_unsup_s["image"] = paddle.to_tensor(data_unsup_s["image"])
                     # image3 = data_unsup_s['image'][0].transpose(
                     #     [1, 2, 0]).numpy()
                     # image4 = data_unsup_s['image'][1].transpose(
@@ -1001,23 +1006,17 @@ class Trainer(object):
                     # print('check data info ', step_id, data_sup_w['image'].sum(), data_sup_s['image'].sum(), data_unsup_w['image'].sum(), data_unsup_s['image'].sum())
 
                     data_unsup_s['get_data'] = True
-                    student_logits, student_deltas, student_quality = model(
-                        data_unsup_s)  # see fcos_head.py forward
+                    student_preds = model(data_unsup_s)
 
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
-                        teacher_logits, teacher_deltas, teacher_quality = self.ema.model(
-                            data_unsup_w)  # see fcos_head.py forward
+                        teacher_preds = self.ema.model(data_unsup_w)
                     if self._nranks > 1:
-                        loss_dict_unsup = model._layers.fcos_head.get_distill_loss(
-                            [student_logits, student_deltas, student_quality],
-                            [teacher_logits, teacher_deltas, teacher_quality],
-                            ratio=train_cfg['ratio'])
+                        loss_dict_unsup = model._layers.get_distill_loss(
+                            student_preds, teacher_preds, ratio=train_cfg['ratio'])
                     else:
-                        loss_dict_unsup = model.fcos_head.get_distill_loss(
-                            [student_logits, student_deltas, student_quality],
-                            [teacher_logits, teacher_deltas, teacher_quality],
-                            ratio=train_cfg['ratio'])
+                        loss_dict_unsup = model.get_distill_loss(
+                            student_preds, teacher_preds, ratio=train_cfg['ratio'])
 
                     fg_num = loss_dict_unsup["fg_sum"]
                     del loss_dict_unsup["fg_sum"]

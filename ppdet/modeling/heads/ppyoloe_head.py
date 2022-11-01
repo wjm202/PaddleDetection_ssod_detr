@@ -158,6 +158,18 @@ class PPYOLOEHead(nn.Layer):
         cls_score_list = paddle.concat(cls_score_list, axis=1)
         reg_distri_list = paddle.concat(reg_distri_list, axis=1)
 
+        is_teacher = targets.get('is_teacher', False)
+        if is_teacher:
+            anchor_points_s = anchor_points / stride_tensor
+            pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
+            return cls_score_list, pred_bboxes
+        
+        get_data = targets.get('get_data', False)
+        if get_data:
+            anchor_points_s = anchor_points / stride_tensor
+            pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
+            return cls_score_list, pred_bboxes
+
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
             num_anchors_list, stride_tensor
@@ -185,7 +197,7 @@ class PPYOLOEHead(nn.Layer):
         stride_tensor = paddle.concat(stride_tensor)
         return anchor_points, stride_tensor
 
-    def forward_eval(self, feats):
+    def forward_eval(self, feats, targets):
         if self.eval_size:
             anchor_points, stride_tensor = self.anchor_points, self.stride_tensor
         else:
@@ -209,6 +221,11 @@ class PPYOLOEHead(nn.Layer):
         cls_score_list = paddle.concat(cls_score_list, axis=-1)
         reg_dist_list = paddle.concat(reg_dist_list, axis=1)
 
+        is_teacher = targets.get('is_teacher', False)
+        if is_teacher:
+            pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
+            return cls_score_list, pred_bboxes
+
         return cls_score_list, reg_dist_list, anchor_points, stride_tensor
 
     def forward(self, feats, targets=None):
@@ -218,7 +235,7 @@ class PPYOLOEHead(nn.Layer):
         if self.training:
             return self.forward_train(feats, targets)
         else:
-            return self.forward_eval(feats)
+            return self.forward_eval(feats, targets)
 
     @staticmethod
     def _focal_loss(score, label, alpha=0.25, gamma=2.0):
