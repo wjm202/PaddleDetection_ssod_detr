@@ -164,6 +164,7 @@ class BaseTransform(object):
     def _apply_mask(self, mask):
         raise NotImplementedError
 
+
 def F_cv2erase(img, i, j, h, w, v, inplace=False):
     if not inplace:
         img = img.copy()
@@ -171,17 +172,21 @@ def F_cv2erase(img, i, j, h, w, v, inplace=False):
     img[i:i + h, j:j + w, ...] = v
     return img
 
+
 def F_pilerase(img, i, j, h, w, v, inplace=False):
     np_img = np.array(img, dtype=np.uint8)
     np_img[i:i + h, j:j + w, ...] = v
     img = Image.fromarray(np_img, 'RGB')
     return img
 
+
 def _is_pil_image(img):
     return isinstance(img, Image.Image)
 
+
 def _is_numpy_image(img):
     return isinstance(img, np.ndarray) and (img.ndim in {2, 3})
+
 
 def erase(img, i, j, h, w, v, inplace=False):
     if _is_pil_image(img):
@@ -393,6 +398,54 @@ class DecodeCache(BaseOperator):
 
         finally:
             MUTEX.release()
+
+
+@register_op
+class NormalizeImage_cvpods(BaseOperator):
+    def __init__(self,
+                 mean=[0.485, 0.456, 0.406],
+                 std=[0.229, 0.224, 0.225],
+                 is_scale=True,
+                 norm_type='mean_std'):
+        """
+        Args:
+            mean (list): the pixel mean
+            std (list): the pixel variance
+            is_scale (bool): scale the pixel to [0,1]
+            norm_type (str): type in ['mean_std', 'none']
+        """
+        super(NormalizeImage_cvpods, self).__init__()
+        self.mean = mean
+        self.std = std
+        self.is_scale = is_scale
+        self.norm_type = norm_type
+        if not (isinstance(self.mean, list) and isinstance(self.std, list) and
+                isinstance(self.is_scale, bool) and
+                self.norm_type in ['mean_std', 'none']):
+            raise TypeError("{}: input type is invalid.".format(self))
+        from functools import reduce
+        if reduce(lambda x, y: x * y, self.std) == 0:
+            raise ValueError('{}: std is invalid!'.format(self))
+
+    def apply(self, sample, context=None):
+        """Normalize the image.
+        Operators:
+            1.(optional) Scale the pixel to [0,1]
+            2.(optional) Each pixel minus mean and is divided by std
+        """
+        im = sample['image']
+        im = im.astype(np.float32)
+        if self.is_scale:
+            scale = 1.0
+            im *= scale
+
+        if self.norm_type == 'mean_std':
+            mean = np.array(self.mean)[np.newaxis, np.newaxis, :]
+            std = np.array(self.std)[np.newaxis, np.newaxis, :]
+            im -= mean
+            im /= std
+        sample['image'] = im
+        return sample
 
 
 @register_op
@@ -1112,12 +1165,15 @@ class RandomResize(BaseOperator):
         ]
         assert isinstance(target_size, (
             Integral, Sequence)), "target_size must be Integer, List or Tuple"
-        if (random_range or random_size) and not isinstance(target_size, Sequence):
+        if (random_range or random_size) and not isinstance(target_size,
+                                                            Sequence):
             raise TypeError(
                 "Type of target_size is invalid when random_size or random_range is True. Must be List or Tuple, now is {}".
                 format(type(target_size)))
         if random_range and not len(target_size) == 2:
-            raise TypeError("target_size must be two list as [[min_short_edge, long_edge], [max_short_edge, long_edge]] when random_range is True.")
+            raise TypeError(
+                "target_size must be two list as [[min_short_edge, long_edge], [max_short_edge, long_edge]] when random_range is True."
+            )
         self.target_size = target_size
         self.random_range = random_range
         self.random_size = random_size
@@ -1127,7 +1183,8 @@ class RandomResize(BaseOperator):
         """ Resize the image numpy.
         """
         if self.random_range:
-            short_edge = np.random.randint(self.target_size[0][0], self.target_size[1][0] + 1)
+            short_edge = np.random.randint(self.target_size[0][0],
+                                           self.target_size[1][0] + 1)
             long_edge = max(self.target_size[0][1], self.target_size[1][1] + 1)
             target_size = [short_edge, long_edge]
         else:
@@ -3648,12 +3705,13 @@ class AugmentationUTStrong(BaseOperator):
         super(AugmentationUTStrong, self).__init__()
         from paddle.vision.transforms import Compose
         self.transforms = Compose([
-                RandomColorJitter(
-                    brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1,
-                    prob=0.8), 
-                RandomErasingCrop(),
-                RandomGaussianBlur(sigma=(0.1, 2.0), prob=0.5),
-                RandomGrayscale(prob=0.2),
+            RandomColorJitter(
+                brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1,
+                prob=0.8),
+            RandomErasingCrop(),
+            RandomGaussianBlur(
+                sigma=(0.1, 2.0), prob=0.5),
+            RandomGrayscale(prob=0.2),
         ])
 
     def apply(self, sample, context=None):
