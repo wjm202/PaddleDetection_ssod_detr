@@ -197,7 +197,7 @@ class PPYOLOEHead(nn.Layer):
         stride_tensor = paddle.concat(stride_tensor)
         return anchor_points, stride_tensor
 
-    def forward_eval(self, feats, targets):
+    def forward_eval(self, feats, targets=None):
         if self.eval_size:
             anchor_points, stride_tensor = self.anchor_points, self.stride_tensor
         else:
@@ -221,10 +221,11 @@ class PPYOLOEHead(nn.Layer):
         cls_score_list = paddle.concat(cls_score_list, axis=-1)
         reg_dist_list = paddle.concat(reg_dist_list, axis=1)
 
-        is_teacher = targets.get('is_teacher', False)
-        if is_teacher:
-            pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
-            return cls_score_list, pred_bboxes
+        if targets is not None:
+            is_teacher = targets.get('is_teacher', False)
+            if is_teacher:
+                pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
+                return cls_score_list, pred_bboxes
 
         return cls_score_list, reg_dist_list, anchor_points, stride_tensor
 

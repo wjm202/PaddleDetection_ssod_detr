@@ -21,6 +21,7 @@ if sys.version_info >= (3, 0):
 else:
     pass
 import numpy as np
+import paddle
 
 from paddle.io import DataLoader, DistributedBatchSampler
 from .utils import default_collate_fn
@@ -131,6 +132,76 @@ class BatchComposeUnSup(Compose):
         # use user-defined here
 
         return data
+
+
+class BatchComposeSemi(Compose):
+    def __init__(self, transforms, num_classes=80):
+        self.transforms = transforms
+        self.transforms_cls = []
+        for t in self.transforms:
+            for k, v in t.items():
+                op_cls = getattr(transform, k)
+                f = op_cls(**v)
+                if hasattr(f, 'num_classes'):
+                    f.num_classes = num_classes
+                self.transforms_cls.append(f)
+
+    def __call__(self, data):
+        for f in self.transforms_cls:
+            data = f(data)
+        from ppdet.data.utils import default_collate_fn
+        batch_data = default_collate_fn(data)
+        for k, v in batch_data.items():
+            batch_data[k] = paddle.to_tensor(v)
+        return batch_data
+
+
+def SupAugmentation(data_ori, sample_aug_lists, sup_batch_aug_lists, num_classes=80):
+    sampleAug = Compose(sample_aug_lists)
+    batchAug = BatchComposeSemi(sup_batch_aug_lists, num_classes)
+    data_aug = data_ori
+    sample_imgs = []
+    # only support image transforms now
+    for i in range(len(data_ori)):
+        sample = {}
+        # sample['image'] = data_ori[i]['image'].numpy().transpose(
+        #     (1, 2, 0))  # [c, h, w] -》 [h, w, c]
+        sample['image'] = data_ori[i]['image'].numpy()
+        sample['im_shape'] = data_ori[i]['im_shape'].numpy()
+        sample['scale_factor'] = data_ori[i]['scale_factor'].numpy()
+        sample['is_crowd'] = data_ori[i]['is_crowd'].numpy()
+        sample['gt_bbox'] = data_ori[i]['gt_bbox'].numpy()
+        sample['gt_class'] = data_ori[i]['gt_class'].numpy()
+
+        sample = sampleAug(sample)
+        sample_imgs.append(sample)
+
+    data_aug = sample_imgs
+    data_aug = batchAug(data_aug)
+    return data_aug
+
+
+def UnSupAugmentation(data_ori, sample_aug_lists, unsup_batch_aug_lists, num_classes=80):
+    sampleAug = Compose(sample_aug_lists)
+    batchAug = BatchComposeSemi(unsup_batch_aug_lists, num_classes)
+    data_aug = data_ori
+    sample_imgs = []
+    # only support image transforms now
+    for i in range(len(data_ori)):
+        sample = {}
+        # sample['image'] = data_ori[i]['image'].numpy().transpose(
+        #     (1, 2, 0))  # [c, h, w] -》 [h, w, c]
+        sample['image'] = data_ori[i]['image'].numpy()
+        sample['im_shape'] = data_ori[i]['im_shape'].numpy()
+        sample['scale_factor'] = data_ori[i]['scale_factor'].numpy()
+
+        sample = sampleAug(sample)
+        sample_imgs.append(sample)
+
+    data_aug = sample_imgs
+    data_aug = batchAug(data_aug)
+    return data_aug
+
 
 class BaseDataLoader(object):
     """

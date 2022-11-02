@@ -251,7 +251,16 @@ class BBoxHead(nn.Layer):
         scores = self.bbox_score(feat)
         deltas = self.bbox_delta(feat)
 
-        if self.training:
+        if inputs is not None:
+            is_teacher = inputs.get('is_teacher', False)
+            if is_teacher:
+                return [scores, deltas], True
+
+        if self.training and inputs is not None:
+            get_data = inputs.get('get_data', False)
+            if get_data:
+                return [scores, deltas], True
+
             loss = self.get_loss(
                 scores,
                 deltas,

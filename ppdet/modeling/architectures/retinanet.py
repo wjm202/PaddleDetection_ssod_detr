@@ -19,6 +19,9 @@ from __future__ import print_function
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 import paddle
+import paddle.nn.functional as F
+from ..ssod_utils import permute_to_N_HWA_K, QFLv2, giou_loss
+from IPython import embed
 
 __all__ = ['RetinaNet']
 
@@ -53,7 +56,8 @@ class RetinaNet(BaseArch):
         body_feats = self.backbone(self.inputs)
         neck_feats = self.neck(body_feats)
 
-        if self.training:
+        is_teacher = self.inputs.get('is_teacher', False)
+        if self.training or is_teacher:
             return self.head(neck_feats, self.inputs)
         else:
             head_outs = self.head(neck_feats)
@@ -66,3 +70,57 @@ class RetinaNet(BaseArch):
 
     def get_pred(self):
         return self._forward()
+
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
+        student_logits, student_deltas = head_outs # list[0] [1, 720, 40, 52] [1, 36, 40, 52]
+        teacher_logits, teacher_deltas = teacher_head_outs
+        nc = int(student_logits[0].shape[1] / 9) # dense anchor
+ 
+        stu_cls_logits = [
+            _.transpose([0, 2, 3, 1]).reshape([0, -1, nc])
+            for _ in student_logits]
+        stu_bboxes_reg = [
+            _.transpose([0, 2, 3, 1]).reshape([0, -1, 4])
+            for _ in student_deltas]
+        student_logits = paddle.concat(stu_cls_logits, axis=1).reshape([-1, nc])
+        student_deltas = paddle.concat(stu_bboxes_reg, axis=1).reshape([-1, 4])
+
+        tea_cls_logits = [
+            _.transpose([0, 2, 3, 1]).reshape([0, -1, nc])
+            for _ in teacher_logits]
+        tea_bboxes_reg = [
+            _.transpose([0, 2, 3, 1]).reshape([0, -1, 4])
+            for _ in teacher_deltas]
+        teacher_logits = paddle.concat(tea_cls_logits, axis=1).reshape([-1, nc])
+        teacher_deltas = paddle.concat(tea_bboxes_reg, axis=1).reshape([-1, 4])
+
+        with paddle.no_grad():
+            # Region Selection
+            count_num = int(teacher_logits.shape[0] * ratio)
+            teacher_probs = F.sigmoid(teacher_logits) # [8184 * 9, 80]?
+            max_vals = paddle.max(teacher_probs, 1)
+            sorted_vals, sorted_inds = paddle.topk(max_vals, teacher_logits.shape[0])
+            mask = paddle.zeros_like(max_vals)
+            mask[sorted_inds[:count_num]] = 1.
+            fg_num = sorted_vals[:count_num].sum()
+            b_mask = mask > 0.
+
+        loss_logits = QFLv2(
+            F.sigmoid(student_logits),
+            teacher_probs,
+            weight=mask,
+            reduction="sum") / fg_num
+
+        inputs = paddle.concat(
+            (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
+            axis=-1)
+        targets = paddle.concat(
+            (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
+            axis=-1)
+        loss_deltas = giou_loss(inputs, targets).mean()
+
+        return {
+            "distill_loss_cls": loss_logits,
+            "distill_loss_reg": loss_deltas,
+            "fg_sum": fg_num,
+        }

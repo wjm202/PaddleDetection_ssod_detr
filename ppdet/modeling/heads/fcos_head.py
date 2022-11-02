@@ -255,11 +255,12 @@ class FCOSHead(nn.Layer):
             bboxes_reg_list.append(bbox_reg)
             centerness_list.append(centerness)
 
-        is_teacher = targets.get('is_teacher', False)
-        if is_teacher:
-            return [cls_logits_list, bboxes_reg_list, centerness_list]
+        if targets is not None:
+            is_teacher = targets.get('is_teacher', False)
+            if is_teacher:
+                return [cls_logits_list, bboxes_reg_list, centerness_list]
 
-        if self.training:
+        if self.training and targets is not None:
             get_data = targets.get('get_data', False)
             if get_data:
                 return [cls_logits_list, bboxes_reg_list, centerness_list]
