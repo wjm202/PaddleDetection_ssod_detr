@@ -21,6 +21,7 @@ from .meta_arch import BaseArch
 from ..post_process import JDEBBoxPostProcess
 import paddle
 import paddle.nn.functional as F
+from ..bbox_utils import batch_distance2bbox
 from ..ssod_utils import QFLv2, giou_loss
 from IPython import embed
 
@@ -134,15 +135,34 @@ class YOLOv3(BaseArch):
     def get_pred(self):
         return self._forward()
 
+    def decode_head_outs(self, head_outs):
+        pred_scores, pred_dist, anchor_points, stride_tensor = head_outs
+
+        if pred_dist.shape[-1] > 4: # self.proj_conv 68->4
+            anchor_points_s = anchor_points / stride_tensor
+            pred_bboxes = self.yolo_head._bbox_decode(anchor_points_s, pred_dist)
+        else:
+            pred_bboxes = batch_distance2bbox(anchor_points, pred_dist)
+            pred_bboxes *= stride_tensor
+
+        # scale bbox to origin
+        scale_y, scale_x = paddle.split(self.inputs['scale_factor'], 2, axis=-1)
+        scale_factor = paddle.concat(
+            [scale_x, scale_y, scale_x, scale_y],
+            axis=-1).reshape([-1, 1, 4])
+        pred_bboxes /= scale_factor
+
+        return pred_scores, pred_bboxes
+
     def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
         # student_probs: already sigmoid
-        student_probs, student_deltas = head_outs # [1, 8400, 80] [1, 8400, 4]
-        teacher_probs, teacher_deltas = teacher_head_outs
-        nc = student_probs.shape[-1]
+        student_probs, student_deltas = self.decode_head_outs(head_outs)
+        teacher_probs, teacher_deltas = self.decode_head_outs(teacher_head_outs)
 
+        nc = student_probs.shape[-1]
         student_probs = student_probs.reshape([-1, nc])
-        teacher_probs = teacher_probs.transpose([0, 2, 1]).reshape([-1, nc])
         student_deltas = student_deltas.reshape([-1, 4])
+        teacher_probs = teacher_probs.transpose([0, 2, 1]).reshape([-1, nc])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
 
         with paddle.no_grad():

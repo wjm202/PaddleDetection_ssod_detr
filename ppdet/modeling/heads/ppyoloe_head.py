@@ -160,15 +160,16 @@ class PPYOLOEHead(nn.Layer):
 
         is_teacher = targets.get('is_teacher', False)
         if is_teacher:
-            anchor_points_s = anchor_points / stride_tensor
-            pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes
+            # anchor_points_s = anchor_points / stride_tensor
+            # pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
+            return cls_score_list, reg_distri_list, anchor_points, stride_tensor
         
         get_data = targets.get('get_data', False)
         if get_data:
-            anchor_points_s = anchor_points / stride_tensor
-            pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes
+            # anchor_points_s = anchor_points / stride_tensor
+            # pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
+            return cls_score_list, reg_distri_list, anchor_points, stride_tensor
+
 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
@@ -221,11 +222,11 @@ class PPYOLOEHead(nn.Layer):
         cls_score_list = paddle.concat(cls_score_list, axis=-1)
         reg_dist_list = paddle.concat(reg_dist_list, axis=1)
 
-        if targets is not None:
-            is_teacher = targets.get('is_teacher', False)
-            if is_teacher:
-                pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
-                return cls_score_list, pred_bboxes
+        # if targets is not None:
+        #     is_teacher = targets.get('is_teacher', False)
+        #     if is_teacher:
+        #         pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
+        #         return cls_score_list, pred_bboxes
 
         return cls_score_list, reg_dist_list, anchor_points, stride_tensor
 
@@ -388,6 +389,7 @@ class PPYOLOEHead(nn.Layer):
         pred_scores, pred_dist, anchor_points, stride_tensor = head_outs
         pred_bboxes = batch_distance2bbox(anchor_points, pred_dist)
         pred_bboxes *= stride_tensor
+
         if self.exclude_post_process:
             return paddle.concat(
                 [pred_bboxes, pred_scores.transpose([0, 2, 1])], axis=-1), None
