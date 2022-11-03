@@ -3652,7 +3652,7 @@ class AugmentationUTStrong(BaseOperator):
                     prob=0.8), 
                 RandomErasingCrop(),
                 RandomGaussianBlur(sigma=(0.1, 2.0), prob=0.5),
-                RandomGrayscale(prob=0.2),
+                # RandomGrayscale(prob=0.2), # sometimes bug
         ])
 
     def apply(self, sample, context=None):

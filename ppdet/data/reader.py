@@ -22,6 +22,7 @@ else:
     pass
 import numpy as np
 import paddle
+import paddle.nn.functional as F
 
 from paddle.io import DataLoader, DistributedBatchSampler
 from .utils import default_collate_fn
@@ -201,6 +202,47 @@ def UnSupAugmentation(data_ori, sample_aug_lists, unsup_batch_aug_lists, num_cla
     data_aug = sample_imgs
     data_aug = batchAug(data_aug)
     return data_aug
+
+
+def align_weak_strong_shape(data_weak, data_strong):
+    max_shape_x = max(data_strong['image'].shape[2], data_weak['image'].shape[2])
+    max_shape_y = max(data_strong['image'].shape[3], data_weak['image'].shape[3])
+
+    scale_x_s = max_shape_x / data_strong['image'].shape[2]
+    scale_y_s = max_shape_y / data_strong['image'].shape[3]
+    scale_x_w = max_shape_x / data_weak['image'].shape[2]
+    scale_y_w = max_shape_y / data_weak['image'].shape[3]
+    target_size = [max_shape_x, max_shape_y]
+
+    if scale_x_s != 1 or scale_y_s != 1:
+        data_strong['image'] = F.interpolate(
+            data_strong['image'],
+            size=target_size,
+            mode='bilinear',
+            align_corners=False)
+        if 'gt_bbox' in data_strong:
+            gt_bboxes = data_strong['gt_bbox']
+            for i in range(len(gt_bboxes)):
+                if len(gt_bboxes[i]) > 0:
+                    gt_bboxes[i][:, 0::2] = gt_bboxes[i][:, 0::2] * scale_x_s
+                    gt_bboxes[i][:, 1::2] = gt_bboxes[i][:, 1::2] * scale_y_s
+            data_strong['gt_bbox'] = gt_bboxes
+    
+    if scale_x_w != 1 or scale_y_w != 1:
+        data_weak['image'] = F.interpolate(
+            data_weak['image'],
+            size=target_size,
+            mode='bilinear',
+            align_corners=False)
+        if 'gt_bbox' in data_weak:
+            gt_bboxes = data_weak['gt_bbox']
+            for i in range(len(gt_bboxes)):
+                if len(gt_bboxes[i]) > 0:
+                    gt_bboxes[i][:, 0::2] = gt_bboxes[i][:, 0::2] * scale_x_w
+                    gt_bboxes[i][:, 1::2] = gt_bboxes[i][:, 1::2] * scale_y_w
+            data_weak['gt_bbox'] = gt_bboxes
+
+    return data_weak, data_strong
 
 
 class BaseDataLoader(object):

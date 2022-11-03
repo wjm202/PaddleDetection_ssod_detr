@@ -50,8 +50,7 @@ from ppdet.modeling.post_process import multiclass_nms
 
 from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator, WandbCallback
 from .export_utils import _dump_infer_config, _prune_input_spec
-from ppdet.data.reader import SupAugmentation, UnSupAugmentation
-from IPython import embed
+from ppdet.data.reader import SupAugmentation, UnSupAugmentation, align_weak_strong_shape
 from paddle.distributed.fleet.utils.hybrid_parallel_util import fused_allreduce_gradients
 
 from ppdet.utils.logger import setup_logger
@@ -839,8 +838,13 @@ class Trainer(object):
                     self.cfg.DenseTeacher['strongAug'],
                     self.cfg.DenseTeacher['sup_batch_transforms'],
                     self.cfg.num_classes)
+
+                if data_sup_w['image'].shape != data_sup_s['image'].shape:
+                    data_sup_w, data_sup_s = align_weak_strong_shape(data_sup_w, data_sup_s)
+
                 for k, v in data_sup_s.items():
                     data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
+
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
                 train_cfg = self.cfg.DenseTeacher['train_cfg']
@@ -894,6 +898,10 @@ class Trainer(object):
                         self.cfg.DenseTeacher['unsup_batch_transforms'],
                         self.cfg.num_classes)
                     data_unsup_s["image"] = paddle.to_tensor(data_unsup_s["image"])
+
+                    if data_unsup_w['image'].shape != data_unsup_s['image'].shape:
+                        data_unsup_w, data_unsup_s = align_weak_strong_shape(data_unsup_w, data_unsup_s)
+
                     # image3 = data_unsup_s['image'][0].transpose(
                     #     [1, 2, 0]).numpy()
                     # image4 = data_unsup_s['image'][1].transpose(

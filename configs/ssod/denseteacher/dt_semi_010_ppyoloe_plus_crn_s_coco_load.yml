@@ -23,11 +23,11 @@ eval_interval: &eval_interval 2000
 SSOD: DenseTeacher
 DenseTeacher:
   train_cfg:
-    ratio: 0.01
+    ratio: 0.01 #
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: linear
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0}
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_box: 3.0}
     gamma: 2.0
   test_cfg: 
     #inference_on: teacher
@@ -38,11 +38,11 @@ DenseTeacher:
     - AugmentationUTStrong: {}
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   sup_batch_transforms:
-    #- BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
     - PadGT: {}
   unsup_batch_transforms:
-    #- BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
 
 
@@ -52,14 +52,14 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@1.json
+    anno_path: semi_annotations/instances_train2017.1@10.json
     dataset_dir: /paddle/dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@1-unlabeled.json
+    anno_path: semi_annotations/instances_train2017.1@10-unlabeled.json
     dataset_dir: /paddle/dataset/coco
     data_fields: ['image']
     supervised: False
@@ -83,19 +83,17 @@ SupTrainReader:
     - Decode: {}
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
-    - RandomCrop: {}
+    #- RandomCrop: {}
     - RandomFlip: {}
-    - RandomResize: 
-        target_size: [[640, 640]] # only single scale
-        #target_size: [[416, 416], [512, 512], [640, 640], [768, 768]]
-        keep_ratio: False
-        random_size: True
-        random_interp: True
+    # - RandomResize: 
+    #     target_size: [[640, 640]] # only single scale
+    #     #target_size: [[416, 416], [512, 512], [640, 640], [768, 768]]
+    #     keep_ratio: False
+    #     random_size: True
+    #     random_interp: True
   batch_size: 8
   shuffle: True
   drop_last: True
-  #use_shared_memory: true #
-  #collate_batch: true
 
 UnsupTrainReader:
   sample_transforms:
@@ -104,12 +102,12 @@ UnsupTrainReader:
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
     #- RandomCrop: {} # need gt_box
     - RandomFlip: {}
-    - RandomResize:
-        target_size: [[640, 640]] # only single scale
-        #target_size: [[416, 416], [512, 512], [640, 640], [768, 768]]
-        keep_ratio: False
-        random_size: True
-        random_interp: True
+    # - RandomResize:
+    #     target_size: [[640, 640]] # only single scale
+    #     #target_size: [[416, 416], [512, 512], [640, 640], [768, 768]]
+    #     keep_ratio: False
+    #     random_size: True
+    #     random_interp: True
   batch_size: 8
   shuffle: True
   drop_last: True
@@ -122,6 +120,16 @@ EvalReader:
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
   batch_size: 2
+
+TestReader:
+  inputs_def:
+    image_shape: [3, 640, 640]
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [640, 640], keep_ratio: False, interp: 2}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - Permute: {}
+  batch_size: 1
 
 
 ### other config
@@ -151,7 +159,7 @@ OptimizerBuilder:
 #pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
 pretrain_weights: /paddle/ppyoloe_plus_crn_s_coco_sup010_353.pdparams
 architecture: YOLOv3
-norm_type: bn #sync_bn !!!
+norm_type: bn # sync_bn bug in ssod !!!
 # use_ema: true
 # ema_decay: 0.9998
 # ema_black_list: ['proj_conv.weight']
@@ -164,8 +172,8 @@ YOLOv3:
   post_process: ~
 
 
+eval_size: ~ # means None, but not str 'None'
 PPYOLOEHead:
-  # eval_size: [640, 640]
   fpn_strides: [32, 16, 8]
   grid_cell_scale: 5.0
   grid_cell_offset: 0.5
