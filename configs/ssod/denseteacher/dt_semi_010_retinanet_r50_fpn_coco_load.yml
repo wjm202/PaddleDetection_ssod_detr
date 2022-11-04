@@ -23,11 +23,11 @@ eval_interval: &eval_interval 2000
 SSOD: DenseTeacher
 DenseTeacher:
   train_cfg:
-    ratio: 0.01
+    ratio: 0.02 # 0.01
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: linear
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_reg: 1.0}
+    loss_weight: {distill_loss_cls: 2.0, distill_loss_reg: 1.0}
     gamma: 2.0
   test_cfg: 
     #inference_on: teacher
@@ -136,7 +136,7 @@ OptimizerBuilder:
 ### model config
 architecture: RetinaNet
 #pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-pretrain_weights: /paddle/retinanet_r50_fpn_2x_coco_010_23.9.pdparams
+pretrain_weights: /paddle/retinanet_r50_fpn_coco_sup010_23.6.pdparams
 
 RetinaNet:
   backbone: ResNet

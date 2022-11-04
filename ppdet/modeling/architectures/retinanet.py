@@ -77,10 +77,10 @@ class RetinaNet(BaseArch):
         cls_logits = [_.transpose([0, 2, 3, 1]) for _ in cls_logits_list]
         bboxes_reg = [_.transpose([0, 2, 3, 1]) for _ in bboxes_reg_list]
         bboxes, scores = self.head.decode(
-            anchors, cls_logits, bboxes_reg, self.inputs['im_shape'], self.inputs['scale_factor'])
+            anchors, cls_logits, bboxes_reg, self.inputs['scale_factor'], rescale=False)
         return scores, bboxes
 
-    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.01):
         student_logits, student_deltas = self.decode_head_outs(head_outs) # [2, 80, 4729] [2, 4729, 4]
         teacher_logits, teacher_deltas = self.decode_head_outs(teacher_head_outs)
 

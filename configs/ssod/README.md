@@ -86,6 +86,28 @@ wget https://bj.bcebos.com/v1/paddledet/data/coco/unlabeled2017.zip
 wget https://bj.bcebos.com/v1/paddledet/data/coco/image_info_unlabeled2017.zip
 ```
 
+如果需要用到COCO全量unlabeled无标注数据集，需要将原版的`image_info_unlabeled2017.json`进行格式转换，运行以下代码:
+
+<details>
+<summary> COCO unlabeled 标注转换代码：</summary>
+
+```python
+import json
+anns_train = json.load(open('annotations/instances_train2017.json', 'r'))
+anns_unlabeled = json.load(open('annotations/image_info_unlabeled2017.json', 'r'))
+unlabeled_json = {
+  'images': anns_unlabeled['images'],
+  'annotations': [],
+  'categories': anns_train['categories'],
+}
+path = 'annotations/instances_unlabeled2017.json'
+with open(path, 'w') as f:
+  json.dump(unlabeled_json, f)
+```
+
+</details>
+
+
 <details>
 <summary> 解压后的数据集目录如下：</summary>
 
@@ -94,8 +116,8 @@ PaddleDetection
 ├── dataset
 │   ├── coco
 │   │   ├── annotations
-│   │   │   ├── image_info_unlabeled2017.json
 │   │   │   ├── instances_train2017.json
+│   │   │   ├── instances_unlabeled2017.json
 │   │   │   ├── instances_val2017.json
 │   │   ├── semi_annotations
 │   │   │   ├── instances_train2017.1@1.json
@@ -122,7 +144,7 @@ PaddleDetection
 _BASE_: [
   '../../fcos/fcos_r50_fpn_1x_coco.yml',
 ]
-weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
+weights: output/dt_semi_010_fcos_r50_fpn_coco/model_final
 ```
 
 并依次做出如下5点改动：

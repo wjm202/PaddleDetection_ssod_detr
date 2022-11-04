@@ -143,14 +143,6 @@ class YOLOv3(BaseArch):
             pred_bboxes = self.yolo_head._bbox_decode(anchor_points_s, pred_dist)
         else:
             pred_bboxes = batch_distance2bbox(anchor_points, pred_dist)
-            pred_bboxes *= stride_tensor
-
-        # scale bbox to origin
-        scale_y, scale_x = paddle.split(self.inputs['scale_factor'], 2, axis=-1)
-        scale_factor = paddle.concat(
-            [scale_x, scale_y, scale_x, scale_y],
-            axis=-1).reshape([-1, 1, 4])
-        pred_bboxes /= scale_factor
 
         return pred_scores, pred_bboxes
 

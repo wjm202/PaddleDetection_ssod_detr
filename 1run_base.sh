@@ -9,10 +9,10 @@ job_name=ppyoloe_plus_crn_s_coco_sup010
 config=configs/${model_type}/${job_name}.yml
 log_dir=log_dir/${job_name}
 weights=output/dt_semi_010_ppyoloe_plus_crn_s_coco_load/0_.pdparams # ln -s 0.pdema 0_.pdparams
-#weights=/paddle/fcos_r50_fpn_multiscale_2x_coco_sup_010_iou_26.3.pdparams
+#weights=/paddle/fcos_r50_fpn_coco_sup010_26.3.pdparams
 #weights=/paddle/ppyoloe_plus_crn_s_coco_sup010_353.pdparams
-#weights=/paddle/faster_rcnn_r50_fpn_2x_coco_010_26.0.pdparams
-#weights=/paddle/retinanet_r50_fpn_2x_coco_010_23.9.pdparams
+#weights=/paddle/faster_rcnn_r50_fpn_coco_sup010_25.6.pdparams
+#weights=/paddle/retinanet_r50_fpn_coco_sup010_23.6.pdparams
 
 # 1. training
 #CUDA_VISIBLE_DEVICES=6 python3.7 tools/train.py -c ${config} # -r ${weights}
