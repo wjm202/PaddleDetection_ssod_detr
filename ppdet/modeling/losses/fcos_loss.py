@@ -228,12 +228,16 @@ class FCOSLoss(nn.Layer):
             # 2. bboxes_reg: giou_loss
             mask_positive_float = paddle.squeeze(mask_positive_float, axis=-1)
             tag_center_flatten = paddle.squeeze(tag_center_flatten, axis=-1)
-            reg_loss = self.__iou_loss(
-                bboxes_reg_flatten,
-                tag_bboxes_flatten,
-                mask_positive_float,
-                weights=None)
-            reg_loss = reg_loss * mask_positive_float / num_positive_fp32
+            inputs = paddle.concat(
+                (-bboxes_reg_flatten[mask_positive_float > 0][..., :2],
+                 bboxes_reg_flatten[mask_positive_float > 0][..., 2:]),
+                axis=-1)  #wjm add
+            targets = paddle.concat(
+                (-tag_bboxes_flatten[mask_positive_float > 0][..., :2],
+                 tag_bboxes_flatten[mask_positive_float > 0][..., 2:]),
+                axis=-1)  #wjm add
+            reg_loss = iou_loss(inputs, targets)
+            reg_loss = reg_loss / num_positive_fp32
             # num_positive_fp32 is num_foreground
 
             # 3. centerness: sigmoid_cross_entropy_with_logits_loss
@@ -263,3 +267,34 @@ class FCOSLoss(nn.Layer):
         total_loss = paddle.add_n(list(losses.values()))
         losses['loss'] += total_loss
         return losses
+
+
+def iou_loss(inputs, targets):
+
+    eps = 1.1920928955078125e-07
+
+    inputs_area = (inputs[..., 2] - inputs[..., 0]).clip_(min=0) \
+        * (inputs[..., 3] - inputs[..., 1]).clip_(min=0)
+    targets_area = (targets[..., 2] - targets[..., 0]).clip_(min=0) \
+        * (targets[..., 3] - targets[..., 1]).clip_(min=0)
+
+    w_intersect = (paddle.minimum(inputs[..., 2], targets[..., 2]) -
+                   paddle.maximum(inputs[..., 0], targets[..., 0])).clip_(min=0)
+    h_intersect = (paddle.minimum(inputs[..., 3], targets[..., 3]) -
+                   paddle.maximum(inputs[..., 1], targets[..., 1])).clip_(min=0)
+
+    area_intersect = w_intersect * h_intersect
+    area_union = targets_area + inputs_area - area_intersect
+
+    ious = area_intersect / area_union.clip(min=eps)
+
+
+    g_w_intersect = paddle.maximum(inputs[..., 2], targets[..., 2]) \
+        - paddle.minimum(inputs[..., 0], targets[..., 0])
+    g_h_intersect = paddle.maximum(inputs[..., 3], targets[..., 3]) \
+        - paddle.minimum(inputs[..., 1], targets[..., 1])
+    ac_uion = g_w_intersect * g_h_intersect
+    gious = ious - (ac_uion - area_union) / ac_uion.clip(min=eps)
+    loss = 1 - gious
+
+    return loss

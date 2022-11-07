@@ -320,7 +320,7 @@ class Gt2FCOSTarget(BaseOperator):
             shift_x, shift_y = np.meshgrid(shift_x, shift_y)
             shift_x = shift_x.flatten()
             shift_y = shift_y.flatten()
-            location = np.stack([shift_x, shift_y], axis=1) + stride // 2
+            location = np.stack([shift_x, shift_y], axis=1)
             locations.append(location)
         num_points_each_level = [len(location) for location in locations]
         locations = np.concatenate(locations, axis=0)
@@ -383,7 +383,8 @@ class Gt2FCOSTarget(BaseOperator):
 
         for sample in samples:
             im = sample['image']
-            bboxes = sample['gt_bbox']
+            bboxes = sample['gt_bbox'].astype(np.int)
+            bboxes = bboxes.astype(np.float32)
             gt_class = sample['gt_class']
             # calculate the locations
             h, w = im.shape[1:3]
@@ -461,8 +462,7 @@ class Gt2FCOSTarget(BaseOperator):
                 if self.norm_reg_targets:
                     sample['reg_target{}'.format(lvl)] = \
                         np.reshape(
-                            reg_targets_by_level[lvl] / \
-                            self.downsample_ratios[lvl],
+                            reg_targets_by_level[lvl],
                             newshape=[grid_h, grid_w, 4])
                 else:
                     sample['reg_target{}'.format(lvl)] = np.reshape(
