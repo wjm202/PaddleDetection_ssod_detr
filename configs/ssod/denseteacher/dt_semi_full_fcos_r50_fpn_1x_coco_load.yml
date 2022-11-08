@@ -1,9 +1,9 @@
 _BASE_: [
-  '../../retinanet/retinanet_r50_fpn_1x_coco.yml',
+  '../../fcos/fcos_r50_fpn_1x_coco.yml',
 ]
-log_iter: 20
+log_iter: 50
 snapshot_epoch: 1
-weights: output/dt_semi_010_retinanet_r50_fpn_1x_coco/model_final
+weights: output/dt_semi_full_fcos_r50_fpn_1x_coco_load/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
 
@@ -23,11 +23,11 @@ eval_interval: &eval_interval 2000
 SSOD: DenseTeacher
 DenseTeacher:
   train_cfg:
-    ratio: 0.02 # 0.01
+    ratio: 0.01
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: linear
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_reg: 1.0}
+    loss_weight: {distill_loss_cls: 2.0, distill_loss_box: 1.0, distill_loss_quality: 1.0} # 2:1:1
     gamma: 2.0
   test_cfg: 
     #inference_on: teacher
@@ -40,7 +40,11 @@ DenseTeacher:
   sup_batch_transforms:
     - Permute: {}
     - PadBatch: {pad_to_stride: 32}
-    - PadGT: {} # do not support collate_batch: False
+    - Gt2FCOSTarget:
+        object_sizes_boundary: [64, 128, 256, 512]
+        center_sampling_radius: 1.5
+        downsample_ratios: [8, 16, 32, 64, 128]
+        norm_reg_targets: True
   unsup_batch_transforms:
     - Permute: {}
     - PadBatch: {pad_to_stride: 32}
@@ -52,14 +56,14 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@10.json
+    anno_path: annotations/instances_train2017.json
     dataset_dir: /paddle/dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
 UnsupTrainDataset:
   !SemiCOCODataSet
-    image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@10-unlabeled.json
+    image_dir: unlabeled2017
+    anno_path: annotations/instances_unlabeled2017.json
     dataset_dir: /paddle/dataset/coco
     data_fields: ['image']
     supervised: False
@@ -95,32 +99,32 @@ UnsupTrainReader:
     - RandomFlip: {}
   batch_size: 2
   shuffle: True
-  drop_last: True
+  drop_last: False
 
 
 EvalReader:
   sample_transforms:
     - Decode: {}
-    - Resize: {target_size: [800, 1333], keep_ratio: True, interp: 1}
-    - NormalizeImage: {is_scale: True, mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225]}
+    - Resize: {target_size: [800, 1333], keep_ratio: True, interp: 1} # 18.3  41.3
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
     - Permute: {}
   batch_transforms:
-    - PadBatch: {pad_to_stride: 32}
-  batch_size: 1
+    - PadBatch: {pad_to_stride: 32} #
+  batch_size: 1 # must be 1
 
 
 ### other config
-epoch: 240
+epoch: 24
 LearningRate:
   base_lr: 0.01
   schedulers:
   - !PiecewiseDecay
     gamma: 0.1
-    milestones: [240]
+    milestones: [24] # 180k iter
     use_warmup: False # True
   - !LinearWarmup
-    start_factor: 0.1 #0.001
-    steps: 10 #500
+    start_factor: 0.001
+    steps: 500
 
 OptimizerBuilder:
   optimizer:
@@ -134,11 +138,55 @@ OptimizerBuilder:
 
 
 ### model config
-architecture: RetinaNet
+architecture: FCOS
 #pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-pretrain_weights: /paddle/retinanet_r50_fpn_coco_sup010_23.6.pdparams
+pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_iou_multiscale_2x_coco.pdparams # mAP=42.6
+#norm_type: sync_bn
 
-RetinaNet:
+FCOS:
   backbone: ResNet
   neck: FPN
-  head: RetinaHead
+  fcos_head: FCOSHead
+
+ResNet:
+  depth: 50
+  #variant: 'a' #
+  norm_type: bn
+  freeze_at: 0 # res2
+  return_idx: [1, 2, 3]
+  num_stages: 4
+
+FPN:
+  out_channel: 256
+  spatial_scales: [0.125, 0.0625, 0.03125]
+  extra_stage: 2
+  has_extra_convs: True
+  use_c5: False
+
+FCOSHead:
+  fcos_feat:
+    name: FCOSFeat
+    feat_in: 256
+    feat_out: 256
+    num_convs: 4
+    norm_type: "gn"
+    use_dcn: False
+  fpn_stride: [8, 16, 32, 64, 128]
+  prior_prob: 0.01
+  norm_reg_targets: True
+  centerness_on_reg: True
+  #num_shift: 0 #
+  #sqrt_score: True #
+  fcos_loss:
+    name: FCOSLoss
+    loss_alpha: 0.25
+    loss_gamma: 2.0
+    iou_loss_type: "giou"
+    reg_weights: 1.0
+    quality: "iou" #
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 1000
+    keep_top_k: 100
+    score_threshold: 0.05 #0.025
+    nms_threshold: 0.6

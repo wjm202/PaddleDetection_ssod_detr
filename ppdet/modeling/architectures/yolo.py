@@ -136,13 +136,12 @@ class YOLOv3(BaseArch):
 
     def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
         # student_probs: already sigmoid
-        student_probs, student_deltas = head_outs # [1, 8400, 80] [1, 8400, 4]
+        student_probs, student_deltas = head_outs
         teacher_probs, teacher_deltas = teacher_head_outs
         nc = student_probs.shape[-1]
-
         student_probs = student_probs.reshape([-1, nc])
-        teacher_probs = teacher_probs.transpose([0, 2, 1]).reshape([-1, nc])
         student_deltas = student_deltas.reshape([-1, 4])
+        teacher_probs = teacher_probs.transpose([0, 2, 1]).reshape([-1, nc])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
 
         with paddle.no_grad():

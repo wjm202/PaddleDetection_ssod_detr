@@ -720,20 +720,21 @@ class Trainer(object):
             self.cfg['EvalDataset'] = self.cfg.EvalDataset = create(
                 "EvalDataset")()
 
-        model = self.model
+        # model = self.model
         sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
                    self.cfg.use_gpu and self._nranks > 1)
         if sync_bn:
-            model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+            self.model = paddle.nn.SyncBatchNorm.convert_sync_batchnorm(
+                self.model)
 
         if self.cfg.get('fleet', False):
-            model = fleet.distributed_model(model)
+            self.model = fleet.distributed_model(self.model)
             self.optimizer = fleet.distributed_optimizer(self.optimizer)
         elif self._nranks > 1:
             find_unused_parameters = self.cfg[
                 'find_unused_parameters'] if 'find_unused_parameters' in self.cfg else False
-            model = paddle.DataParallel(
-                model, find_unused_parameters=find_unused_parameters)
+            self.model = paddle.DataParallel(
+                self.model, find_unused_parameters=find_unused_parameters)
             self.ema.model = paddle.DataParallel(
                 self.ema.model, find_unused_parameters=find_unused_parameters)
 
@@ -760,16 +761,16 @@ class Trainer(object):
         self.status['iter_id'] = 0
         self.status['eval_interval'] = self.cfg.get('eval_interval', 2000)
         self.status['save_interval'] = self.cfg.get('save_interval', 5000)
+        for param in self.ema.model.parameters():
+            param.stop_gradient = True
+
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
             self._compose_callback.on_epoch_begin(self.status)
             self.loader.dataset.set_epoch(epoch_id)
             self.loader_unsup.dataset.set_epoch(epoch_id)
-            model.train()
-            self.ema.model.eval()  # teacher
-            for param in self.ema.model.parameters():
-                param.trainable = False
+            # teacher
 
             iter_tic = time.time()
             if self.cfg.architecture == 'FCOS': # TODO
@@ -813,6 +814,8 @@ class Trainer(object):
                 raise ValueError
 
             for step_id, data_sup in enumerate(self.loader):
+                self.model.train()
+                self.ema.model.eval()
                 try:
                     data_unsup = self.loader_unsup.next()
                 except StopIteration:
@@ -848,7 +851,7 @@ class Trainer(object):
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
                 train_cfg = self.cfg.DenseTeacher['train_cfg']
-                loss_dict_sup = model(data_sup_s)
+                loss_dict_sup = self.model(data_sup_s)
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
 
@@ -919,16 +922,16 @@ class Trainer(object):
                     # print('check data info ', step_id, data_sup_w['image'].sum(), data_sup_s['image'].sum(), data_unsup_w['image'].sum(), data_unsup_s['image'].sum())
 
                     data_unsup_s['get_data'] = True
-                    student_preds = model(data_unsup_s)
+                    student_preds = self.model(data_unsup_s)
 
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
                         teacher_preds = self.ema.model(data_unsup_w)
                     if self._nranks > 1:
-                        loss_dict_unsup = model._layers.get_distill_loss(
+                        loss_dict_unsup = self.model._layers.get_distill_loss(
                             student_preds, teacher_preds, ratio=train_cfg['ratio'])
                     else:
-                        loss_dict_unsup = model.get_distill_loss(
+                        loss_dict_unsup = self.model.get_distill_loss(
                             student_preds, teacher_preds, ratio=train_cfg['ratio'])
 
                     fg_num = loss_dict_unsup["fg_sum"]
@@ -966,9 +969,9 @@ class Trainer(object):
                     logger.info("***" * 30)
                     logger.info('EMA starting ...')
                     logger.info("***" * 30)
-                    self.ema.update(model, decay=0)
+                    self.ema.update(self.model, decay=0)
                 elif self.use_ema and curr_iter > self.ema_start_steps:  #wjm add
-                    self.ema.update(model)
+                    self.ema.update(self.model)
                 iter_tic = time.time()
 
             is_snapshot = (self._nranks < 2 or self._local_rank == 0) \

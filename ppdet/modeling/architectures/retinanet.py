@@ -71,33 +71,29 @@ class RetinaNet(BaseArch):
     def get_pred(self):
         return self._forward()
 
-    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
-        student_logits, student_deltas = head_outs # list[0] [1, 720, 40, 52] [1, 36, 40, 52]
-        teacher_logits, teacher_deltas = teacher_head_outs
-        nc = int(student_logits[0].shape[1] / 9) # dense anchor
- 
-        stu_cls_logits = [
-            _.transpose([0, 2, 3, 1]).reshape([0, -1, nc])
-            for _ in student_logits]
-        stu_bboxes_reg = [
-            _.transpose([0, 2, 3, 1]).reshape([0, -1, 4])
-            for _ in student_deltas]
-        student_logits = paddle.concat(stu_cls_logits, axis=1).reshape([-1, nc])
-        student_deltas = paddle.concat(stu_bboxes_reg, axis=1).reshape([-1, 4])
+    def decode_head_outs(self, head_outs):
+        cls_logits_list, bboxes_reg_list = head_outs
+        anchors = self.head.anchor_generator(cls_logits_list)
+        cls_logits = [_.transpose([0, 2, 3, 1]) for _ in cls_logits_list]
+        bboxes_reg = [_.transpose([0, 2, 3, 1]) for _ in bboxes_reg_list]
+        bboxes, scores = self.head.decode(
+            anchors, cls_logits, bboxes_reg, self.inputs['scale_factor'], rescale=False)
+        return scores, bboxes
 
-        tea_cls_logits = [
-            _.transpose([0, 2, 3, 1]).reshape([0, -1, nc])
-            for _ in teacher_logits]
-        tea_bboxes_reg = [
-            _.transpose([0, 2, 3, 1]).reshape([0, -1, 4])
-            for _ in teacher_deltas]
-        teacher_logits = paddle.concat(tea_cls_logits, axis=1).reshape([-1, nc])
-        teacher_deltas = paddle.concat(tea_bboxes_reg, axis=1).reshape([-1, 4])
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.01):
+        student_logits, student_deltas = self.decode_head_outs(head_outs) # [2, 80, 4729] [2, 4729, 4]
+        teacher_logits, teacher_deltas = self.decode_head_outs(teacher_head_outs)
+
+        nc = student_logits.shape[1]
+        student_logits = student_logits.transpose([0, 2, 1]).reshape([-1, nc])
+        student_deltas = student_deltas.reshape([-1, 4])
+        teacher_logits = teacher_logits.transpose([0, 2, 1]).reshape([-1, nc])
+        teacher_deltas = teacher_deltas.reshape([-1, 4])
 
         with paddle.no_grad():
             # Region Selection
             count_num = int(teacher_logits.shape[0] * ratio)
-            teacher_probs = F.sigmoid(teacher_logits) # [8184 * 9, 80]?
+            teacher_probs = teacher_logits #F.sigmoid(teacher_logits) # [4729*2, 80]
             max_vals = paddle.max(teacher_probs, 1)
             sorted_vals, sorted_inds = paddle.topk(max_vals, teacher_logits.shape[0])
             mask = paddle.zeros_like(max_vals)
@@ -106,7 +102,8 @@ class RetinaNet(BaseArch):
             b_mask = mask > 0.
 
         loss_logits = QFLv2(
-            F.sigmoid(student_logits),
+            #F.sigmoid(student_logits),
+            student_logits,
             teacher_probs,
             weight=mask,
             reduction="sum") / fg_num

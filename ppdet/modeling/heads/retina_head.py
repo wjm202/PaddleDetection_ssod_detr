@@ -202,7 +202,6 @@ class RetinaHead(nn.Layer):
                           anchors,
                           cls_scores_list,
                           bbox_preds_list,
-                          im_shape,
                           scale_factor,
                           rescale=True):
         assert len(cls_scores_list) == len(bbox_preds_list)
@@ -230,7 +229,7 @@ class RetinaHead(nn.Layer):
         mlvl_scores = mlvl_scores.transpose([1, 0])
         return mlvl_bboxes, mlvl_scores
 
-    def decode(self, anchors, cls_logits, bboxes_reg, im_shape, scale_factor):
+    def decode(self, anchors, cls_logits, bboxes_reg, scale_factor, rescale=True):
         batch_bboxes = []
         batch_scores = []
         for img_id in range(cls_logits[0].shape[0]):
@@ -238,8 +237,7 @@ class RetinaHead(nn.Layer):
             cls_scores_list = [cls_logits[i][img_id] for i in range(num_lvls)]
             bbox_preds_list = [bboxes_reg[i][img_id] for i in range(num_lvls)]
             bboxes, scores = self.get_bboxes_single(
-                anchors, cls_scores_list, bbox_preds_list, im_shape[img_id],
-                scale_factor[img_id])
+                anchors, cls_scores_list, bbox_preds_list, scale_factor[img_id], rescale)
             batch_bboxes.append(bboxes)
             batch_scores.append(scores)
         batch_bboxes = paddle.stack(batch_bboxes, axis=0)
@@ -251,8 +249,7 @@ class RetinaHead(nn.Layer):
         anchors = self.anchor_generator(cls_logits_list)
         cls_logits = [_.transpose([0, 2, 3, 1]) for _ in cls_logits_list]
         bboxes_reg = [_.transpose([0, 2, 3, 1]) for _ in bboxes_reg_list]
-        bboxes, scores = self.decode(anchors, cls_logits, bboxes_reg, im_shape,
-                                     scale_factor)
+        bboxes, scores = self.decode(anchors, cls_logits, bboxes_reg, scale_factor)
 
         bbox_pred, bbox_num, _ = self.nms(bboxes, scores)
         return bbox_pred, bbox_num
