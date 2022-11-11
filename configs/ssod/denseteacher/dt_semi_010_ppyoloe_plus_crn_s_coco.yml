@@ -84,7 +84,7 @@ SupTrainReader:
     - Decode: {}
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
-    #- RandomCrop: {}
+    - RandomCrop: {}
     - RandomFlip: {}
   batch_size: 8
   shuffle: True
@@ -95,7 +95,7 @@ UnsupTrainReader:
     - Decode: {}
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
-    #- RandomCrop: {} # need gt_box
+    - RandomCropFake: {} # fake gt_box
     - RandomFlip: {}
   batch_size: 8
   shuffle: True
@@ -122,14 +122,13 @@ TestReader:
 
 
 ### other config
-epoch: 240
+epoch: 200
 LearningRate:
   base_lr: 0.01
   schedulers:
-  - !PiecewiseDecay
-    gamma: 0.1
-    milestones: [240]
-    use_warmup: True
+  - !CosineDecay
+    max_epochs: 240
+    use_warmup: False # True
   - !LinearWarmup
     start_factor: 0.001
     steps: 100
@@ -147,7 +146,7 @@ OptimizerBuilder:
 ### model config
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
 architecture: YOLOv3
-norm_type: bn # sync_bn bug in ssod !!!
+norm_type: sync_bn
 # use_ema: true
 # ema_decay: 0.9998
 # ema_black_list: ['proj_conv.weight']
@@ -165,7 +164,7 @@ PPYOLOEHead:
   fpn_strides: [32, 16, 8]
   grid_cell_scale: 5.0
   grid_cell_offset: 0.5
-  static_assigner_epoch: -1 #30
+  static_assigner_epoch: -1 # 30
   use_varifocal_loss: True
   loss_weight: {class: 1.0, iou: 2.5, dfl: 0.5}
   static_assigner:

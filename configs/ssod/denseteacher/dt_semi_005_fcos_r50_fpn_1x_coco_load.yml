@@ -2,7 +2,7 @@ _BASE_: [
   '../../fcos/fcos_r50_fpn_1x_coco.yml',
 ]
 log_iter: 20
-snapshot_epoch: 1
+snapshot_epoch: 2
 weights: output/dt_semi_010_fcos_r50_fpn_1x_coco/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
@@ -56,14 +56,14 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@10.json
+    anno_path: semi_annotations/instances_train2017.1@5.json
     dataset_dir: /paddle/dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@10-unlabeled.json
+    anno_path: semi_annotations/instances_train2017.1@5-unlabeled.json
     dataset_dir: /paddle/dataset/coco
     data_fields: ['image']
     supervised: False
@@ -140,7 +140,7 @@ OptimizerBuilder:
 ### model config
 architecture: FCOS
 #pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-pretrain_weights: /paddle/fcos_r50_fpn_multiscale_2x_coco_sup_010_iou_26.3.pdparams
+pretrain_weights: /paddle/fcos_r50_fpn_multiscale_2x_coco_sup_005_iou_21.3.pdparams
 #norm_type: sync_bn
 
 FCOS:

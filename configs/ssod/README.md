@@ -84,6 +84,8 @@ wget https://bj.bcebos.com/v1/paddledet/data/coco/semi_annotations.zip
 # 下载COCO全量 unlabeled 无标注数据集
 wget https://bj.bcebos.com/v1/paddledet/data/coco/unlabeled2017.zip
 wget https://bj.bcebos.com/v1/paddledet/data/coco/image_info_unlabeled2017.zip
+# 下载转换完的 unlabeled2017 无标注json文件
+wget https://bj.bcebos.com/v1/paddledet/data/coco/instances_unlabeled2017.zip
 ```
 
 如果需要用到COCO全量unlabeled无标注数据集，需要将原版的`image_info_unlabeled2017.json`进行格式转换，运行以下代码:

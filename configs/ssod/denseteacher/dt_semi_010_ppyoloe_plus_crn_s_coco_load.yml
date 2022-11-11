@@ -3,7 +3,7 @@ _BASE_: [
   '../../ppyoloe/ppyoloe_plus_crn_s_80e_coco.yml',
 ]
 log_iter: 20
-snapshot_epoch: 1
+snapshot_epoch: 2
 weights: output/dt_semi_010_ppyoloe_plus_crn_s_coco_load/model_final
 # when export model for deploy, just keep _BASE_ and `dataset config`
 # Then comment all the other config component (global,model,data_aug,other)
@@ -31,8 +31,8 @@ DenseTeacher:
     loss_weight: {distill_loss_cls: 1.0, distill_loss_box: 2.0}
     gamma: 2.0
   test_cfg: 
-    #inference_on: teacher
-    inference_on: student
+    inference_on: teacher
+    #inference_on: student
   weakAug:
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   strongAug:
@@ -84,14 +84,8 @@ SupTrainReader:
     - Decode: {}
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
-    #- RandomCrop: {}
+    - RandomCrop: {}
     - RandomFlip: {}
-    # - RandomResize: 
-    #     target_size: [[640, 640]] # only single scale
-    #     #target_size: [[416, 416], [512, 512], [640, 640], [768, 768]]
-    #     keep_ratio: False
-    #     random_size: True
-    #     random_interp: True
   batch_size: 8
   shuffle: True
   drop_last: True
@@ -101,14 +95,8 @@ UnsupTrainReader:
     - Decode: {}
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
-    #- RandomCrop: {} # need gt_box
+    - RandomCropFake: {} # fake gt_box
     - RandomFlip: {}
-    # - RandomResize:
-    #     target_size: [[640, 640]] # only single scale
-    #     #target_size: [[416, 416], [512, 512], [640, 640], [768, 768]]
-    #     keep_ratio: False
-    #     random_size: True
-    #     random_interp: True
   batch_size: 8
   shuffle: True
   drop_last: True
@@ -134,16 +122,16 @@ TestReader:
 
 
 ### other config
-epoch: 80
+epoch: 200
 LearningRate:
-  base_lr: 0.001
+  base_lr: 0.01
   schedulers:
-    - !CosineDecay
-      max_epochs: 96
-      use_warmup: False # True
-    - !LinearWarmup
-      start_factor: 0.
-      epochs: 1
+  - !CosineDecay
+    max_epochs: 240
+    use_warmup: False # True
+  - !LinearWarmup
+    start_factor: 0.001
+    steps: 100
 
 OptimizerBuilder:
   optimizer:
@@ -160,7 +148,7 @@ OptimizerBuilder:
 #pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
 pretrain_weights: /paddle/ppyoloe_plus_crn_s_coco_sup010_353.pdparams
 architecture: YOLOv3
-norm_type: bn # sync_bn bug in ssod !!!
+norm_type: sync_bn
 # use_ema: true
 # ema_decay: 0.9998
 # ema_black_list: ['proj_conv.weight']
