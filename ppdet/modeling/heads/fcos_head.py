@@ -173,34 +173,18 @@ class FCOSHead(nn.Layer):
                     initializer=Constant(value=bias_init_value))))
 
         conv_reg_name = "fcos_head_reg"
-        if self.reg_discrete:                           
-            self.fcos_head_reg = self.add_sublayer(
-                conv_reg_name,
-                nn.Conv2D(
-                    in_channels=256,
-                    out_channels=4*(self.rea_max+1),
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                    weight_attr=ParamAttr(initializer=Normal(
-                        mean=0., std=0.01)),
-                    bias_attr=ParamAttr(initializer=Constant(value=0))))
-        else:
-            self.fcos_head_reg = self.add_sublayer(
-                conv_reg_name,
-                nn.Conv2D(
-                    in_channels=256,
-                    out_channels=4,
-                    kernel_size=3,
-                    stride=1,
-                    padding=1,
-                    weight_attr=ParamAttr(initializer=Normal(
-                        mean=0., std=0.01)),
-                    bias_attr=ParamAttr(initializer=Constant(value=0))))
-        if self.kl_loss:
-            self.bbox_pred_std = nn.Conv2d(
-                in_channels, 4, kernel_size=3, stride=1, padding=1
-            )
+        self.fcos_head_reg = self.add_sublayer(
+            conv_reg_name,
+            nn.Conv2D(
+                in_channels=256,
+                out_channels=4,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                weight_attr=ParamAttr(initializer=Normal(
+                    mean=0., std=0.01)),
+                bias_attr=ParamAttr(initializer=Constant(value=0))))
+
         conv_centerness_name = "fcos_head_centerness"
         self.fcos_head_centerness = self.add_sublayer(
             conv_centerness_name,
@@ -251,9 +235,6 @@ class FCOSHead(nn.Layer):
         cls_logits_list = []
         bboxes_reg_list = []
         centerness_list = []
-        bbox_towers = []
-        top_feats = []
-        bbox_reg_std = []
         for scale_reg, fpn_stride, fpn_feat in zip(self.scales_regs,
                                                    self.fpn_stride, fpn_feats):
             fcos_cls_feat, fcos_reg_feat = self.fcos_feat(fpn_feat)
@@ -263,55 +244,14 @@ class FCOSHead(nn.Layer):
                 centerness = self.fcos_head_centerness(fcos_reg_feat)
             else:
                 centerness = self.fcos_head_centerness(fcos_cls_feat)
-            '''
-            if self.centerness_on_reg:
-                centerness = self.fcos_head_centerness(fcos_reg_feat)
-            else:
-                centerness = self.fcos_head_centerness(fcos_cls_feat)
             if self.norm_reg_targets:
                 bbox_reg = F.relu(bbox_reg)
-                if not self.training:
-                    bbox_reg = bbox_reg * fpn_stride
+                bbox_reg = bbox_reg * fpn_stride
             else:
                 bbox_reg = paddle.exp(bbox_reg)
             cls_logits_list.append(cls_logits)
             bboxes_reg_list.append(bbox_reg)
             centerness_list.append(centerness)
-            '''
-            
-            if yield_bbox_towers:
-                bbox_towers.append(fcos_reg_feat)
-            cls_logits_list.append(cls_logits)
-            bboxes_reg_list.append(bbox_reg)
-            centerness_list.append(centerness)
-            if self.reg_discrete:
-                bbox_reg=bbox_reg
-            else:
-                bbox_reg = F.relu(bbox_reg)
-                        if self.kl_loss:
-            reg_std = self.bbox_pred_std(bbox_tower)
-                bbox_reg_std.append(reg_std)
-
-            # logits.append(self.cls_logits(cls_tower))
-            # ctrness.append(self.ctrness(bbox_tower))
-            # reg = self.bbox_pred(bbox_tower)
-
-            # if self.scales is not None:
-            #     reg = self.scales[l](reg)
-            # # Note that we use relu, as in the improved FCOS, instead of exp.
-
-            # if self.reg_discrete:
-            #     # generalized focal loss use softmax
-            #     bbox_reg.append(reg)
-            # else:
-            #     bbox_reg.append(F.relu(reg))
-
-            # if self.kl_loss:
-            #     reg_std = self.bbox_pred_std(bbox_tower)
-            #     bbox_reg_std.append(reg_std)
-
-            # if top_module is not None:
-            #     top_feats.append(top_module(bbox_tower))
 
         if targets is not None:
             is_teacher = targets.get('is_teacher', False)

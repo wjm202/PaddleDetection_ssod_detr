@@ -320,9 +320,10 @@ class Gt2FCOSTarget(BaseOperator):
             shift_x, shift_y = np.meshgrid(shift_x, shift_y)
             shift_x = shift_x.flatten()
             shift_y = shift_y.flatten()
-            location = np.stack([shift_x, shift_y], axis=1) + stride // 2
+            location = np.stack([shift_x, shift_y], axis=1)
             locations.append(location)
         num_points_each_level = [len(location) for location in locations]
+        #len和cvpods的 object_sizes_of_interest 对应上
         locations = np.concatenate(locations, axis=0)
         return locations, num_points_each_level
 
@@ -384,6 +385,7 @@ class Gt2FCOSTarget(BaseOperator):
         for sample in samples:
             im = sample['image']
             bboxes = sample['gt_bbox']
+            # bboxes=bboxes.astype(np.float32)
             gt_class = sample['gt_class']
             # calculate the locations
             h, w = im.shape[1:3]
@@ -395,6 +397,7 @@ class Gt2FCOSTarget(BaseOperator):
                         np.array([self.object_sizes_of_interest[i]]),
                         reps=[num_pts, 1]))
             object_scale_exp = np.concatenate(object_scale_exp, axis=0)
+            #和object_sizes_of_interest相对应
 
             gt_area = (bboxes[:, 2] - bboxes[:, 0]) * (
                 bboxes[:, 3] - bboxes[:, 1])
@@ -461,8 +464,7 @@ class Gt2FCOSTarget(BaseOperator):
                 if self.norm_reg_targets:
                     sample['reg_target{}'.format(lvl)] = \
                         np.reshape(
-                            reg_targets_by_level[lvl] / \
-                            self.downsample_ratios[lvl],
+                            reg_targets_by_level[lvl],
                             newshape=[grid_h, grid_w, 4])
                 else:
                     sample['reg_target{}'.format(lvl)] = np.reshape(
@@ -478,7 +480,6 @@ class Gt2FCOSTarget(BaseOperator):
             sample.pop('gt_class', None)
             sample.pop('gt_bbox', None)
         return samples
-
 
 @register_op
 class Gt2GFLTarget(BaseOperator):
