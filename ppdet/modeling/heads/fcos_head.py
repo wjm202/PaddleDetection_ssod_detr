@@ -139,7 +139,6 @@ class FCOSHead(nn.Layer):
                  norm_reg_targets=True,
                  centerness_on_reg=True,
                  num_shift=0.5,
-                 sqrt_score=False,
                  fcos_loss='FCOSLoss',
                  nms='MultiClassNMS',
                  trt=False):
@@ -155,7 +154,6 @@ class FCOSHead(nn.Layer):
         self.nms = nms
         if isinstance(self.nms, MultiClassNMS) and trt:
             self.nms.trt = trt
-        self.sqrt_score = sqrt_score
 
         conv_cls_name = "fcos_head_cls"
         bias_init_value = -math.log((1 - self.prior_prob) / self.prior_prob)
@@ -246,8 +244,8 @@ class FCOSHead(nn.Layer):
                 centerness = self.fcos_head_centerness(fcos_cls_feat)
             if self.norm_reg_targets:
                 bbox_reg = F.relu(bbox_reg)
-                if not self.training or targets.get(
-                        'get_data', False) or targets.get('is_teacher', False):
+                if not self.training:
+                    # eval or infer
                     bbox_reg = bbox_reg * fpn_stride
             else:
                 bbox_reg = paddle.exp(bbox_reg)
@@ -255,19 +253,15 @@ class FCOSHead(nn.Layer):
             bboxes_reg_list.append(bbox_reg)
             centerness_list.append(centerness)
 
-        if targets is not None:
-            is_teacher = targets.get('is_teacher', False)
-            if is_teacher:
-                return [cls_logits_list, bboxes_reg_list, centerness_list]
-
-        if self.training and targets is not None:
-            get_data = targets.get('get_data', False)
-            if get_data:
-                return [cls_logits_list, bboxes_reg_list, centerness_list]
-
+        if self.training:
+            losses = {}
             fcos_head_outs = [cls_logits_list, bboxes_reg_list, centerness_list]
             losses_fcos = self.get_loss(fcos_head_outs, targets)
-            return losses_fcos
+            losses.update(losses_fcos)
+
+            total_loss = paddle.add_n(list(losses.values()))
+            losses.update({'loss': total_loss})
+            return losses
         else:
             # eval or infer
             locations_list = []
@@ -302,12 +296,10 @@ class FCOSHead(nn.Layer):
                                      tag_labels, tag_bboxes, tag_centerness)
         return losses_fcos
 
-    def _post_process_by_level(self, locations, box_cls, box_reg, box_ctn, sqrt_score=False):
+    def _post_process_by_level(self, locations, box_cls, box_reg, box_ctn):
         box_scores = F.sigmoid(box_cls).flatten(2).transpose([0, 2, 1])
         box_centerness = F.sigmoid(box_ctn).flatten(2).transpose([0, 2, 1])
         pred_scores = box_scores * box_centerness
-        if sqrt_score:
-            pred_scores = paddle.sqrt(pred_scores)
 
         box_reg_ch_last = box_reg.flatten(2).transpose([0, 2, 1])
         box_reg_decoding = paddle.stack(
@@ -328,7 +320,7 @@ class FCOSHead(nn.Layer):
 
         for pts, cls, reg, ctn in zip(locations, cls_logits, bboxes_reg,
                                       centerness):
-            scores, boxes = self._post_process_by_level(pts, cls, reg, ctn, self.sqrt_score)
+            scores, boxes = self._post_process_by_level(pts, cls, reg, ctn)
             pred_scores.append(scores)
             pred_bboxes.append(boxes)
         pred_bboxes = paddle.concat(pred_bboxes, axis=1)
