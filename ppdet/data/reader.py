@@ -92,6 +92,7 @@ class BatchCompose(Compose):
 
         # batch data, if user-define batch function needed
         # use user-defined here
+        
         if self.collate_batch:
             batch_data = default_collate_fn(data)
         else:
@@ -136,8 +137,9 @@ class BatchComposeUnSup(Compose):
 
 
 class BatchComposeSemi(Compose):
-    def __init__(self, transforms, num_classes=80):
+    def __init__(self, transforms, num_classes=80,collate_batch=True):
         self.transforms = transforms
+        self.collate_batch=collate_batch
         self.transforms_cls = []
         for t in self.transforms:
             for k, v in t.items():
@@ -151,15 +153,30 @@ class BatchComposeSemi(Compose):
         for f in self.transforms_cls:
             data = f(data)
         from ppdet.data.utils import default_collate_fn
-        batch_data = default_collate_fn(data)
+        if self.collate_batch:
+            batch_data = default_collate_fn(data)
+        else:
+            batch_data = {}
+            for k in data[0].keys():
+                tmp_data = []
+                for i in range(len(data)):
+                    tmp_data.append(data[i][k])
+                if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                    tmp_data = np.stack(tmp_data, axis=0)
+                batch_data[k] = tmp_data
         for k, v in batch_data.items():
-            batch_data[k] = paddle.to_tensor(v)
+            if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                batch_data[k] = paddle.to_tensor(v)
+            else:
+                batch_data[k]=[paddle.to_tensor(v[i]) for i  in range(len(v))]
+
+                
         return batch_data
 
 
-def SupAugmentation(data_ori, sample_aug_lists, sup_batch_aug_lists, num_classes=80):
+def SupAugmentation(data_ori, sample_aug_lists, sup_batch_aug_lists, num_classes=80,collate_batch=True):
     sampleAug = Compose(sample_aug_lists)
-    batchAug = BatchComposeSemi(sup_batch_aug_lists, num_classes)
+    batchAug = BatchComposeSemi(sup_batch_aug_lists, num_classes,collate_batch)
     data_aug = data_ori
     sample_imgs = []
     # only support image transforms now
@@ -182,9 +199,9 @@ def SupAugmentation(data_ori, sample_aug_lists, sup_batch_aug_lists, num_classes
     return data_aug
 
 
-def UnSupAugmentation(data_ori, sample_aug_lists, unsup_batch_aug_lists, num_classes=80):
+def UnSupAugmentation(data_ori, sample_aug_lists, unsup_batch_aug_lists, num_classes=80,collate_batch=True):
     sampleAug = Compose(sample_aug_lists)
-    batchAug = BatchComposeSemi(unsup_batch_aug_lists, num_classes)
+    batchAug = BatchComposeSemi(unsup_batch_aug_lists, num_classes,collate_batch)
     data_aug = data_ori
     sample_imgs = []
     # only support image transforms now

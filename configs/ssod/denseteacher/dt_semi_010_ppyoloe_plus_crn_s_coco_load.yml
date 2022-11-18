@@ -146,7 +146,7 @@ OptimizerBuilder:
 
 ### model config
 #pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
-pretrain_weights: /paddle/ppyoloe_plus_crn_s_coco_sup010_353.pdparams
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/CSPResNetb_s_pretrained.pdparams
 architecture: YOLOv3
 norm_type: sync_bn
 # use_ema: true

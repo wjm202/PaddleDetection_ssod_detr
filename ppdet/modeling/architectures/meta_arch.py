@@ -56,7 +56,7 @@ class BaseArch(nn.Layer):
 
         self.model_arch()
 
-        if self.training:
+        if self.training or inputs.get('is_teacher', False):
             out = self.get_loss()
         else:
             inputs_list = []

@@ -27,7 +27,7 @@ DenseTeacher:
     sup_weight: 1.0
     unsup_weight: 1.0
     suppress: linear
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0}
     gamma: 2.0
   test_cfg: 
     #inference_on: teacher
@@ -41,15 +41,9 @@ DenseTeacher:
   sup_batch_transforms:
     - Permute: {}
     - PadBatch: {pad_to_stride: 32}
-    - Gt2FCOSTarget:
-        object_sizes_boundary: [64, 128, 256, 512]
-        center_sampling_radius: 1.5
-        downsample_ratios: [8, 16, 32, 64, 128]
-        norm_reg_targets: True
   unsup_batch_transforms:
     - Permute: {}
     - PadBatch: {pad_to_stride: 32}
-
 
 ### dataset config
 metric: COCO
@@ -102,7 +96,6 @@ UnsupTrainReader:
   shuffle: True
   drop_last: False
 
-
 EvalReader:
   sample_transforms:
     - Decode: {}
@@ -136,57 +129,78 @@ OptimizerBuilder:
     type: L2
   clip_grad_by_norm: 1.0
 
-
-
-### model config
-architecture: FCOS
-pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
 #norm_type: sync_bn
 
-FCOS:
+architecture: FasterRCNN
+pretrain_weights: https://paddledet.bj.bcebos.com/models/faster_rcnn_r50_fpn_1x_coco.pdparams
+
+FasterRCNN:
   backbone: ResNet
   neck: FPN
-  fcos_head: FCOSHead
+  rpn_head: RPNHead
+  bbox_head: BBoxHead
+  # post process
+  bbox_post_process: BBoxPostProcess
+
 
 ResNet:
+  # index 0 stands for res2
   depth: 50
-  #variant: 'a' #
   norm_type: bn
-  freeze_at: 0 # res2
-  return_idx: [1, 2, 3]
+  freeze_at: 0
+  return_idx: [0,1,2,3]
   num_stages: 4
 
 FPN:
   out_channel: 256
-  spatial_scales: [0.125, 0.0625, 0.03125]
-  extra_stage: 2
-  has_extra_convs: True
-  use_c5: False
 
-FCOSHead:
-  fcos_feat:
-    name: FCOSFeat
-    feat_in: 256
-    feat_out: 256
-    num_convs: 4
-    norm_type: "gn"
-    use_dcn: False
-  fpn_stride: [8, 16, 32, 64, 128]
-  prior_prob: 0.01
-  norm_reg_targets: True
-  centerness_on_reg: True
-  #num_shift: 0 #
-  #sqrt_score: True #
-  fcos_loss:
-    name: FCOSLoss
-    loss_alpha: 0.25
-    loss_gamma: 2.0
-    iou_loss_type: "giou"
-    reg_weights: 1.0
-    quality: "iou" #
+RPNHead:
+  anchor_generator:
+    aspect_ratios: [0.5, 1.0, 2.0]
+    anchor_sizes: [[32], [64], [128], [256], [512]]
+    strides: [4, 8, 16, 32, 64]
+  rpn_target_assign:
+    batch_size_per_im: 256
+    fg_fraction: 0.5
+    negative_overlap: 0.3
+    positive_overlap: 0.7
+    use_random: True
+  train_proposal:
+    min_size: 0.0
+    nms_thresh: 0.7
+    pre_nms_top_n: 2000
+    post_nms_top_n: 1000
+    topk_after_collect: True
+  test_proposal:
+    min_size: 0.0
+    nms_thresh: 0.7
+    pre_nms_top_n: 1000
+    post_nms_top_n: 1000
+
+
+BBoxHead:
+  head: TwoFCHead
+  roi_extractor:
+    resolution: 7
+    sampling_ratio: 0
+    aligned: True
+  bbox_assigner: BBoxAssigner
+
+BBoxAssigner:
+  batch_size_per_im: 512
+  bg_thresh: 0.5
+  fg_thresh: 0.5
+  fg_fraction: 0.25
+  use_random: True
+
+TwoFCHead:
+  out_channel: 1024
+
+
+BBoxPostProcess:
+  decode: RCNNBox
   nms:
     name: MultiClassNMS
-    nms_top_k: 1000
     keep_top_k: 100
-    score_threshold: 0.05 #0.025
-    nms_threshold: 0.6
+    score_threshold: 0.05
+    nms_threshold: 0.5

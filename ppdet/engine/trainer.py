@@ -813,6 +813,21 @@ class Trainer(object):
                     'loss_unsup_sum': paddle.to_tensor([0]),
                     "fg_sum": paddle.to_tensor([0]),
                 }
+            elif self.cfg.architecture == 'FasterRCNN':
+                loss_dict = {
+                    'loss': paddle.to_tensor([0]),
+                    'loss_cls': paddle.to_tensor([0]),
+                    'loss_reg': paddle.to_tensor([0]), #
+                    'loss_rpn_cls': paddle.to_tensor([0]),
+                    'loss_rpn_reg': paddle.to_tensor([0]),
+                    'loss_sup_sum': paddle.to_tensor([0]),
+                    'distill_loss_cls': paddle.to_tensor([0]),
+                    'distill_loss_reg': paddle.to_tensor([0]),
+                    # 'distill_loss_rpn_reg': paddle.to_tensor([0]),
+                    # 'distill_loss_rpn_cls': paddle.to_tensor([0]),
+                    'loss_unsup_sum': paddle.to_tensor([0]),
+                    "fg_sum": paddle.to_tensor([0]),
+                }
             else:
                 # TODO faster rcnn
                 raise ValueError
@@ -839,32 +854,32 @@ class Trainer(object):
                     data_sup,
                     self.cfg.DenseTeacher['weakAug'],
                     self.cfg.DenseTeacher['sup_batch_transforms'],
-                    self.cfg.num_classes)
+                    self.cfg.num_classes,
+                    self.cfg.DenseTeacher['collate_batch'])
                 data_sup_s = SupAugmentation(
                     data_sup,
                     self.cfg.DenseTeacher['strongAug'],
                     self.cfg.DenseTeacher['sup_batch_transforms'],
-                    self.cfg.num_classes)
+                    self.cfg.num_classes,
+                    self.cfg.DenseTeacher['collate_batch'])
 
                 if data_sup_w['image'].shape != data_sup_s['image'].shape:
                     data_sup_w, data_sup_s = align_weak_strong_shape(data_sup_w, data_sup_s)
 
                 for k, v in data_sup_s.items():
-                    data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
+                    if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
+                        data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
+                    else:
+                        data_sup_s[k].extend(data_sup_w[k])
 
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
                 train_cfg = self.cfg.DenseTeacher['train_cfg']
                 # loss_dict_sup = self.model(data_sup_s)
                 # losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
-                with paddle.amp.auto_cast(
-                        enable=self.cfg.use_gpu or self.cfg.use_mlu,
-                        custom_white_list=self.custom_white_list,
-                        custom_black_list=self.custom_black_list,
-                        level=self.amp_level):
-                    loss_dict_sup = self.model(data_sup_s)
-                    losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
-                losses_sup = scaler.scale(losses_sup)
+
+                loss_dict_sup = self.model(data_sup_s)
+                losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
 
                 losses = losses_sup.detach()
@@ -905,13 +920,15 @@ class Trainer(object):
                         data_unsup,
                         self.cfg.DenseTeacher['weakAug'],
                         self.cfg.DenseTeacher['unsup_batch_transforms'],
-                        self.cfg.num_classes)
+                        self.cfg.num_classes,
+                        self.cfg.DenseTeacher['collate_batch'])
                     data_unsup_w["image"] = paddle.to_tensor(data_unsup_w["image"])
                     data_unsup_s = UnSupAugmentation(
                         data_unsup,
                         self.cfg.DenseTeacher['strongAug'],
                         self.cfg.DenseTeacher['unsup_batch_transforms'],
-                        self.cfg.num_classes)
+                        self.cfg.num_classes,
+                        self.cfg.DenseTeacher['collate_batch'])
                     data_unsup_s["image"] = paddle.to_tensor(data_unsup_s["image"])
 
                     if data_unsup_w['image'].shape != data_unsup_s['image'].shape:
@@ -934,36 +951,30 @@ class Trainer(object):
                     # print('check data info ', step_id, data_sup_w['image'].sum(), data_sup_s['image'].sum(), data_unsup_w['image'].sum(), data_unsup_s['image'].sum())
 
                     data_unsup_s['get_data'] = True
-                    with paddle.amp.auto_cast(
-                        enable=self.cfg.use_gpu or self.cfg.use_mlu,
-                        custom_white_list=self.custom_white_list,
-                        custom_black_list=self.custom_black_list,
-                        level=self.amp_level):
-                        student_preds = self.model(data_unsup_s)
 
-                        with paddle.no_grad():
-                            data_unsup_w['is_teacher'] = True
-                            teacher_preds = self.ema.model(data_unsup_w)
-                        if self._nranks > 1:
-                            loss_dict_unsup = self.model._layers.get_distill_loss(
-                                student_preds, teacher_preds, ratio=train_cfg['ratio'])
-                        else:
-                            loss_dict_unsup = self.model.get_distill_loss(
-                                student_preds, teacher_preds, ratio=train_cfg['ratio'])
+                    student_preds = self.model(data_unsup_s)
 
-                        fg_num = loss_dict_unsup["fg_sum"]
-                        del loss_dict_unsup["fg_sum"]
-                        distill_weights = train_cfg['loss_weight']
-                        loss_dict_unsup = {
-                            k: v * distill_weights[k]
-                            for k, v in loss_dict_unsup.items()
-                        }
+                    with paddle.no_grad():
+                        data_unsup_w['is_teacher'] = True
+                        teacher_preds = self.ema.model(data_unsup_w)
+                    if self._nranks > 1:
+                        loss_dict_unsup = self.model._layers.get_distill_loss(
+                            student_preds, teacher_preds, ratio=train_cfg['ratio'])
+                    else:
+                        loss_dict_unsup = self.model.get_distill_loss(
+                            student_preds, teacher_preds, ratio=train_cfg['ratio'])
+                    fg_num = loss_dict_unsup["fg_sum"]
+                    del loss_dict_unsup["fg_sum"]
+                    distill_weights = train_cfg['loss_weight']
+                    loss_dict_unsup = {
+                        k: v * distill_weights[k]
+                        for k, v in loss_dict_unsup.items()
+                    }
 
-                        losses_unsup = sum([
-                            metrics_value
-                            for metrics_value in loss_dict_unsup.values()
-                        ]) * unsup_weight
-                    losses_unsup = scaler.scale(losses_unsup)
+                    losses_unsup = sum([
+                        metrics_value
+                        for metrics_value in loss_dict_unsup.values()
+                    ]) * unsup_weight
                     losses_unsup.backward()
 
                     loss_dict.update(loss_dict_unsup)

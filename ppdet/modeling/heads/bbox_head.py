@@ -236,7 +236,7 @@ class BBoxHead(nn.Layer):
         rois_num (Tensor): The number of RoIs in each image
         inputs (dict{Tensor}): The ground-truth of image
         """
-        if self.training:
+        if self.training and not inputs.get('get_data', False):
             rois, rois_num, targets = self.bbox_assigner(rois, rois_num, inputs)
             self.assigned_rois = (rois, rois_num)
             self.assigned_targets = targets

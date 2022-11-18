@@ -129,19 +129,34 @@ class RPNHead(nn.Layer):
         rpn_feats = self.rpn_feat(feats)
         scores = []
         deltas = []
-
+        
         for rpn_feat in rpn_feats:
             rrs = self.rpn_rois_score(rpn_feat)
             rrd = self.rpn_rois_delta(rpn_feat)
             scores.append(rrs)
             deltas.append(rrd)
-
+            
         anchors = self.anchor_generator(rpn_feats)
-
         rois, rois_num = self._gen_proposal(scores, deltas, anchors, inputs)
         if self.training:
-            loss = self.get_loss(scores, deltas, anchors, inputs)
-            return rois, rois_num, loss
+            if inputs.get('get_data', False):
+                for i in range (len(deltas)-1):
+                    deltas[i] = deltas[i].transpose([0,2,3,1])
+                    S,N = anchors[i].shape
+                    deltas[i] = deltas[i].reshape([2,S,N])
+                    deltas[i] =  (deltas[i]+anchors[i]).reshape([-1,N])
+                return rois, rois_num, scores, deltas[0:-1]
+            else:
+                loss = self.get_loss(scores, deltas, anchors, inputs)
+                return rois, rois_num, loss
+        elif inputs.get('is_teacher', False):
+            for i in range (len(deltas)-1):
+                deltas[i] = deltas[i].transpose([0,2,3,1])
+                S,N = anchors[i].shape
+                deltas[i] = deltas[i].reshape([2,S,N])
+                deltas[i] =  (deltas[i]+anchors[i]).reshape([-1,N])
+            return rois, rois_num, scores, deltas[0:-1]
+
         else:
             return rois, rois_num, None
 
