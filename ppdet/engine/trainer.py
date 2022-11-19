@@ -816,13 +816,13 @@ class Trainer(object):
             elif self.cfg.architecture == 'FasterRCNN':
                 loss_dict = {
                     'loss': paddle.to_tensor([0]),
-                    'loss_cls': paddle.to_tensor([0]),
-                    'loss_reg': paddle.to_tensor([0]), #
+                    'loss_bbox_cls': paddle.to_tensor([0]),
+                    'loss_bbox_reg': paddle.to_tensor([0]), #
                     'loss_rpn_cls': paddle.to_tensor([0]),
                     'loss_rpn_reg': paddle.to_tensor([0]),
                     'loss_sup_sum': paddle.to_tensor([0]),
                     'distill_loss_cls': paddle.to_tensor([0]),
-                    'distill_loss_reg': paddle.to_tensor([0]),
+                    'distill_loss_box': paddle.to_tensor([0]),
                     # 'distill_loss_rpn_reg': paddle.to_tensor([0]),
                     # 'distill_loss_rpn_cls': paddle.to_tensor([0]),
                     'loss_unsup_sum': paddle.to_tensor([0]),
