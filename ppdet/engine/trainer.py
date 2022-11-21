@@ -562,7 +562,7 @@ class Trainer(object):
                 self.status['batch_time'].update(time.time() - iter_tic)
                 self._compose_callback.on_step_end(self.status)
                 if self.use_ema:
-                    self.ema.update()
+                    self.ema.update(self.model)
                 iter_tic = time.time()
 
             if self.cfg.get('unstructured_prune'):
@@ -675,7 +675,7 @@ class Trainer(object):
         else:
             print("***** student evaluate *****")
             eval_model = self.model
-
+        
         eval_model.eval()
         if self.cfg.get('print_flops', False):
             flops_loader = create('{}Reader'.format(self.mode.capitalize()))(

@@ -391,6 +391,7 @@ class SupTrainReader(BaseDataLoader):
                  num_classes=80,
                  collate_batch=True,
                  fuse_normalize=False,
+                 use_shared_memory=False,
                  **kwargs):
         super(SupTrainReader, self).__init__(sample_transforms, batch_transforms,
                                           batch_size, shuffle, drop_last,
@@ -432,6 +433,7 @@ class UnsupTrainReader(BaseDataLoader):
                  num_classes=80,
                  collate_batch=True,
                  fuse_normalize=False,
+                 use_shared_memory=False,
                  **kwargs):
         super(UnsupTrainReader, self).__init__(sample_transforms, batch_transforms,
                                           batch_size, shuffle, drop_last,
