@@ -157,18 +157,18 @@ class PPYOLOEHead(nn.Layer):
             reg_distri_list.append(reg_distri.flatten(2).transpose([0, 2, 1]))
         cls_score_list = paddle.concat(cls_score_list, axis=1)
         reg_distri_list = paddle.concat(reg_distri_list, axis=1)
-
+        
         is_teacher = targets.get('is_teacher', False)
         if is_teacher:
             anchor_points_s = anchor_points / stride_tensor
             pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes
+            return cls_score_list, pred_bboxes, reg_distri_list
         
         get_data = targets.get('get_data', False)
         if get_data:
             anchor_points_s = anchor_points / stride_tensor
             pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes
+            return cls_score_list, pred_bboxes, reg_distri_list
 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
@@ -225,7 +225,7 @@ class PPYOLOEHead(nn.Layer):
             is_teacher = targets.get('is_teacher', False)
             if is_teacher:
                 pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
-                return cls_score_list, pred_bboxes
+                return cls_score_list, pred_bboxes, reg_dist_list
 
         return cls_score_list, reg_dist_list, anchor_points, stride_tensor
 
@@ -268,12 +268,12 @@ class PPYOLOEHead(nn.Layer):
         return paddle.concat([lt, rb], -1).clip(0, self.reg_max - 0.01)
 
     def _df_loss(self, pred_dist, target):
-        target_left = paddle.cast(target, 'int64')
-        target_right = target_left + 1
-        weight_left = target_right.astype('float32') - target
-        weight_right = 1 - weight_left
+        target_left = paddle.cast(target, 'int64')#[1258, 4]
+        target_right = target_left + 1#[1258, 4]
+        weight_left = target_right.astype('float32') - target#[1258, 4]
+        weight_right = 1 - weight_left#[1258, 4]
         loss_left = F.cross_entropy(
-            pred_dist, target_left, reduction='none') * weight_left
+            pred_dist, target_left, reduction='none') * weight_left#1258,4
         loss_right = F.cross_entropy(
             pred_dist, target_right, reduction='none') * weight_right
         return (loss_left + loss_right).mean(-1, keepdim=True)

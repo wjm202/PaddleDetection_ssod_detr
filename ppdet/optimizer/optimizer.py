@@ -283,12 +283,12 @@ class OptimizerBuilder():
         self.optimizer = optimizer
 
     def __call__(self, learning_rate, model=None):
-        # if self.clip_grad_by_norm is not None:
-        #     grad_clip = nn.ClipGradByGlobalNorm(
-        #         clip_norm=self.clip_grad_by_norm)
-        # else:
-        #     grad_clip = None
-        grad_clip = nn.ClipGradByValue(min=-1, max=1)
+        if self.clip_grad_by_norm is not None:
+            grad_clip = nn.ClipGradByGlobalNorm(
+                clip_norm=self.clip_grad_by_norm)
+        else:
+            grad_clip = None
+        # grad_clip = nn.ClipGradByValue(min=-1, max=1)
 
         if self.regularizer and self.regularizer != 'None':
             reg_type = self.regularizer['type'] + 'Decay'

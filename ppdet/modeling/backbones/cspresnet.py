@@ -297,15 +297,6 @@ class CSPResNet(nn.Layer):
         if use_checkpoint:
             paddle.seed(0)
 
-
-        self._freeze_parameters(self.stem)
-        for i in range(min(1, n)):
-            self._freeze_parameters(self.stages[i])
-        
-    def _freeze_parameters(self, m):
-        for p in m.parameters():
-            p.stop_gradient = True
-
     def forward(self, inputs):
         x = inputs['image']
         x = self.stem(x)

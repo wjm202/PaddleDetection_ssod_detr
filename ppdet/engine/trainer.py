@@ -801,6 +801,7 @@ class Trainer(object):
                     'loss_sup_sum': paddle.to_tensor([0]),
                     'distill_loss_cls': paddle.to_tensor([0]),
                     'distill_loss_box': paddle.to_tensor([0]),
+                    "distill_loss_dfl" : paddle.to_tensor([0]),
                     'loss_unsup_sum': paddle.to_tensor([0]),
                     "fg_sum": paddle.to_tensor([0]),
                 }

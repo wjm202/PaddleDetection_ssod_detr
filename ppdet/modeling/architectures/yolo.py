@@ -136,14 +136,15 @@ class YOLOv3(BaseArch):
 
     def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
         # student_probs: already sigmoid
-        student_probs, student_deltas = head_outs
-        teacher_probs, teacher_deltas = teacher_head_outs
+        student_probs, student_deltas ,student_dfl= head_outs
+        teacher_probs, teacher_deltas , teacher_dfl= teacher_head_outs
         nc = student_probs.shape[-1]
         student_probs = student_probs.reshape([-1, nc])
         student_deltas = student_deltas.reshape([-1, 4])
         teacher_probs = teacher_probs.transpose([0, 2, 1]).reshape([-1, nc])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
-
+        student_dfl= student_dfl.reshape([-1, 4, 17])
+        teacher_dfl = teacher_dfl.reshape([-1, 4])
         with paddle.no_grad():
             # Region Selection
             count_num = int(teacher_probs.shape[0] * ratio) # top 84
@@ -167,10 +168,46 @@ class YOLOv3(BaseArch):
         targets = paddle.concat(
             (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
             axis=-1)
+        ious =iou(inputs ,targets)
         loss_deltas = giou_loss(inputs, targets).mean()
-
+        bbox_weight = teacher_probs[b_mask] / teacher_probs[b_mask].max(axis=-1).unsqueeze(axis=-1)
+        # max_metrics_per_instance =bbox_weight.max(axis=-1, keepdim=True)
+        # max_ious = ious.max(axis=-1,  keepdim=True)
+        # bbox_weight = bbox_weight /(max_metrics_per_instance + 1e-7) *max_ious 
+        loss_dfl = _df_loss(student_dfl[b_mask],
+                                     teacher_dfl[b_mask]).sum()/bbox_weight.sum()
         return {
             "distill_loss_cls": loss_logits,
             "distill_loss_box": loss_deltas,
+            "distill_loss_dfl": loss_dfl,
             "fg_sum": fg_num,
         }
+
+def iou(inputs, targets, eps=1e-7):
+    inputs_area = (inputs[..., 2] - inputs[..., 0]).clip_(min=0) \
+        * (inputs[..., 3] - inputs[..., 1]).clip_(min=0)
+    targets_area = (targets[..., 2] - targets[..., 0]).clip_(min=0) \
+        * (targets[..., 3] - targets[..., 1]).clip_(min=0)
+
+    w_intersect = (paddle.minimum(inputs[..., 2], targets[..., 2]) -
+                   paddle.maximum(inputs[..., 0], targets[..., 0])).clip_(min=0)
+    h_intersect = (paddle.minimum(inputs[..., 3], targets[..., 3]) -
+                   paddle.maximum(inputs[..., 1], targets[..., 1])).clip_(min=0)
+
+    area_intersect = w_intersect * h_intersect
+    area_union = targets_area + inputs_area - area_intersect
+
+    ious = area_intersect / area_union.clip(min=eps)
+    return ious
+
+
+def _df_loss(pred_dist, target):
+    target_left = paddle.cast(target, 'int64')
+    target_right = target_left + 1
+    weight_left = target_right.astype('float32') - target
+    weight_right = 1 - weight_left
+    loss_left = F.cross_entropy(
+        pred_dist, target_left, reduction='none') * weight_left
+    loss_right = F.cross_entropy(
+        pred_dist, target_right, reduction='none') * weight_right
+    return (loss_left + loss_right).mean(-1, keepdim=True)
