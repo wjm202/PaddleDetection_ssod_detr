@@ -1561,7 +1561,121 @@ class RandomCrop(BaseOperator):
                 crop_segms.append(_crop_rle(segm, crop, height, width))
         return crop_segms
 
+    def apply_unsup(self, sample):
+        # if 'gt_bbox' in sample and len(sample['gt_bbox']) == 0:
+        #     return sample
+        h, w = sample['image'].shape[:2]
+
+        # set fake gt_bbox and gt_class
+        sample['gt_bbox'] = np.array(
+            [
+                [32, 32, 128, 128],
+                [32, 32, 128, 256],
+                [32, 64, 128, 128],
+                [32, 64, 128, 256],
+                [64, 64, 128, 256],
+                [64, 64, 256, 256],
+                [64, 32, 128, 256],
+                [64, 32, 128, 256],
+                [96, 32, 128, 256],
+                [96, 32, 128, 256],
+            ],
+            dtype=np.float32)
+        sample['gt_class'] = np.array(
+            [[1], [2], [3], [4], [5], [6], [7], [8], [9], [10]], np.int32)
+
+        gt_bbox = sample['gt_bbox']
+
+        # NOTE Original method attempts to generate one candidate for each
+        # threshold then randomly sample one from the resulting list.
+        # Here a short circuit approach is taken, i.e., randomly choose a
+        # threshold and attempt to find a valid crop, and simply return the
+        # first one found.
+        # The probability is not exactly the same, kinda resembling the
+        # "Monty Hall" problem. Actually carrying out the attempts will affect
+        # observability (just like opening doors in the "Monty Hall" game).
+        thresholds = list(self.thresholds)
+        if self.allow_no_crop:
+            thresholds.append('no_crop')
+        np.random.shuffle(thresholds)
+
+        for thresh in thresholds:
+            if thresh == 'no_crop':
+                return sample
+
+            found = False
+            for i in range(self.num_attempts):
+                scale = np.random.uniform(*self.scaling)
+                if self.aspect_ratio is not None:
+                    min_ar, max_ar = self.aspect_ratio
+                    aspect_ratio = np.random.uniform(
+                        max(min_ar, scale**2), min(max_ar, scale**-2))
+                    h_scale = scale / np.sqrt(aspect_ratio)
+                    w_scale = scale * np.sqrt(aspect_ratio)
+                else:
+                    h_scale = np.random.uniform(*self.scaling)
+                    w_scale = np.random.uniform(*self.scaling)
+                crop_h = h * h_scale
+                crop_w = w * w_scale
+                if self.aspect_ratio is None:
+                    if crop_h / crop_w < 0.5 or crop_h / crop_w > 2.0:
+                        continue
+
+                crop_h = int(crop_h)
+                crop_w = int(crop_w)
+                crop_y = np.random.randint(0, h - crop_h)
+                crop_x = np.random.randint(0, w - crop_w)
+                crop_box = [crop_x, crop_y, crop_x + crop_w, crop_y + crop_h]
+                iou = self._iou_matrix(
+                    gt_bbox, np.array(
+                        [crop_box], dtype=np.float32))
+                if iou.max() < thresh:
+                    continue
+
+                if self.cover_all_box and iou.min() < thresh:
+                    continue
+
+                cropped_box, valid_ids = self._crop_box_with_center_constraint(
+                    gt_bbox, np.array(
+                        crop_box, dtype=np.float32))
+                if valid_ids.size > 0:
+                    found = True
+                    break
+
+            if found:
+                if self.is_mask_crop and 'gt_poly' in sample and len(sample[
+                        'gt_poly']) > 0:
+                    crop_polys = self.crop_segms(
+                        sample['gt_poly'],
+                        valid_ids,
+                        np.array(
+                            crop_box, dtype=np.int64),
+                        h,
+                        w)
+                    if [] in crop_polys:
+                        delete_id = list()
+                        valid_polys = list()
+                        for id, crop_poly in enumerate(crop_polys):
+                            if crop_poly == []:
+                                delete_id.append(id)
+                            else:
+                                valid_polys.append(crop_poly)
+                        valid_ids = np.delete(valid_ids, delete_id)
+                        if len(valid_polys) == 0:
+                            return sample
+                        sample['gt_poly'] = valid_polys
+                    else:
+                        sample['gt_poly'] = crop_polys
+
+                sample['image'] = self._crop_image(sample['image'], crop_box)
+                return sample
+
+        return sample
+
     def apply(self, sample, context=None):
+        if 'gt_bbox' not in sample:
+            return self.apply_unsup(sample)
+
         if 'gt_bbox' in sample and len(sample['gt_bbox']) == 0:
             return sample
 

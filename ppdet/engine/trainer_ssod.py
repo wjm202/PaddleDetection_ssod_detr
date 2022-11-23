@@ -266,10 +266,16 @@ class Trainer_DenseTeacher(Trainer):
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
 
-                # if data_sup_w['image'].shape != data_sup_s['image'].shape:
-                #     data_sup_w, data_sup_s = align_weak_strong_shape(data_sup_w, data_sup_s)
+                if data_sup_w['image'].shape != data_sup_s['image'].shape:
+                    data_sup_w, data_sup_s = align_weak_strong_shape(data_sup_w,
+                                                                     data_sup_s)
+
+                data_sup_w['epoch_id'] = epoch_id
+                data_sup_s['epoch_id'] = epoch_id
                 if concat_sup_data:
                     for k, v in data_sup_s.items():
+                        if k in ['epoch_id']:
+                            continue
                         data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
                     loss_dict_sup = self.model(data_sup_s)
                 else:
@@ -278,8 +284,6 @@ class Trainer_DenseTeacher(Trainer):
                     for k, v in loss_dict_sup_w.items():
                         loss_dict_sup[k] = (loss_dict_sup[k] + v) / 2
 
-                data_sup_w['epoch_id'] = epoch_id
-                data_sup_s['epoch_id'] = epoch_id
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
 
@@ -307,8 +311,10 @@ class Trainer_DenseTeacher(Trainer):
                     # print('check data info sup ', step_id, data_unsup[0]['im_id'], data_unsup[0]['image'].sum(), data_unsup[0]['image'].shape)
                     # print('check data info sup ', step_id, data_unsup[1]['im_id'], data_unsup[1]['image'].sum(), data_unsup[1]['image'].shape)
 
-                    # if data_unsup_w['image'].shape != data_unsup_s['image'].shape:
-                    #     data_unsup_w, data_unsup_s = align_weak_strong_shape(data_unsup_w, data_unsup_s)
+                    if data_unsup_w['image'].shape != data_unsup_s[
+                            'image'].shape:
+                        data_unsup_w, data_unsup_s = align_weak_strong_shape(
+                            data_unsup_w, data_unsup_s)
 
                     data_unsup_w['epoch_id'] = epoch_id
                     data_unsup_s['epoch_id'] = epoch_id
