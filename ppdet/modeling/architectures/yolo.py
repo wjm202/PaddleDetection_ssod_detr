@@ -134,7 +134,7 @@ class YOLOv3(BaseArch):
         return self._forward()
 
     def get_loss_keys(self):
-        return ['loss_cls', 'loss_box', 'loss_dfl']
+        return ['loss_cls', 'loss_iou', 'loss_dfl']
 
     def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
         # student_probs: already sigmoid
@@ -169,8 +169,11 @@ class YOLOv3(BaseArch):
             axis=-1)
         loss_deltas = giou_loss(inputs, targets).mean()
 
+        loss_dfl = paddle.to_tensor([0])  # todo
+
         return {
             "distill_loss_cls": loss_logits,
-            "distill_loss_box": loss_deltas,
+            "distill_loss_iou": loss_deltas,
+            "distill_loss_dfl": loss_dfl,
             "fg_sum": fg_num,
         }

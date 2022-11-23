@@ -1,8 +1,8 @@
 export FLAGS_allocator_strategy=auto_growth
 model_type=ssod/denseteacher
-job_name=denseteacher_ppyoloe_plus_crn_s_coco_semi010_load
+#job_name=denseteacher_ppyoloe_plus_crn_s_coco_semi010_load
 #job_name=denseteacher_ppyoloe_plus_crn_s_coco_semi010
-#job_name=denseteacher_ppyoloe_plus_crn_s_coco_semi005_load
+job_name=denseteacher_ppyoloe_plus_crn_s_coco_semi005_load
 #job_name=denseteacher_ppyoloe_plus_crn_s_coco_semi005
 
 config=configs/${model_type}/${job_name}.yml

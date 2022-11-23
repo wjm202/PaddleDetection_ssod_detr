@@ -27,7 +27,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_box: 2.0}
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.5}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -89,7 +89,7 @@ TestReader:
 
 ### model config
 architecture: YOLOv3
-# norm_type: sync_bn
+norm_type: sync_bn
 # use_ema: true
 # ema_decay: 0.9998
 # ema_black_list: ['proj_conv.weight']
