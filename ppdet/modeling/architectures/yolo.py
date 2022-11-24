@@ -21,7 +21,9 @@ from .meta_arch import BaseArch
 from ..post_process import JDEBBoxPostProcess
 import paddle
 import paddle.nn.functional as F
-from ..ssod_utils import QFLv2, giou_loss
+from ..ssod_utils import QFLv2
+from ..losses import GIoULoss
+from IPython import embed
 
 __all__ = ['YOLOv3']
 
@@ -145,10 +147,8 @@ class YOLOv3(BaseArch):
         student_deltas = student_deltas.reshape([-1, 4])
         teacher_probs = teacher_probs.reshape([-1, nc])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
-        # student_dfl= student_dfl.reshape([-1, 4, 17])
-        # teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
-        student_dfl = student_dfl.reshape([-1, 4])
-        teacher_dfl = teacher_dfl.reshape([-1, 4])
+        student_dfl = student_dfl.reshape([-1, 4, 17])
+        teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
 
         with paddle.no_grad():
             # Region Selection
@@ -172,11 +172,15 @@ class YOLOv3(BaseArch):
         targets = paddle.concat(
             (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
             axis=-1)
-        loss_deltas = giou_loss(inputs, targets).mean()
+        iou_loss = GIoULoss(reduction='mean')
+        loss_deltas = iou_loss(inputs, targets)
 
         #loss_dfl = paddle.to_tensor([0])  # todo
-        loss_dfl = self.distribution_focal_loss(student_dfl[b_mask],
-                                                teacher_dfl[b_mask])
+        student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
+        teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
+
+        loss_dfl = self.distribution_focal_loss(student_dfl_pred,
+                                                teacher_dfl_tar)
         # todo: weight_targets
 
         return {

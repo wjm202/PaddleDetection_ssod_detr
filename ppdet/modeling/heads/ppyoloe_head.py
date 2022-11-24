@@ -24,6 +24,7 @@ from ..assigners.utils import generate_anchors_for_grid_cell
 from ppdet.modeling.backbones.cspresnet import ConvBNLayer
 from ppdet.modeling.ops import get_static_shape, get_act_fn
 from ppdet.modeling.layers import MultiClassNMS
+from IPython import embed
 
 __all__ = ['PPYOLOEHead']
 
@@ -312,9 +313,10 @@ class PPYOLOEHead(nn.Layer):
 
     def _bbox_decode(self, anchor_points, pred_dist):
         _, l, _ = get_static_shape(pred_dist)
-        pred_dist = F.softmax(pred_dist.reshape([-1, l, 4, self.reg_channels]))
+        tmp_pred_dist = pred_dist.reshape([-1, l, 4, self.reg_channels])
+        pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
         pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
-        return batch_distance2bbox(anchor_points, pred_dist), pred_dist
+        return batch_distance2bbox(anchor_points, pred_dist), tmp_pred_dist
 
     def _bbox2distance(self, points, bbox):
         x1y1, x2y2 = paddle.split(bbox, 2, -1)
