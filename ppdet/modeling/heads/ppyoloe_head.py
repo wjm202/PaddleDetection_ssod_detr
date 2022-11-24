@@ -151,6 +151,33 @@ class PPYOLOEHead(nn.Layer):
             self.anchor_points = anchor_points
             self.stride_tensor = stride_tensor
 
+    def forward_train_fake(self, feats, targets):
+        anchors, anchor_points, num_anchors_list, stride_tensor = \
+            generate_anchors_for_grid_cell(
+                feats, self.fpn_strides, self.grid_cell_scale,
+                self.grid_cell_offset)
+
+        cls_score_list, reg_distri_list = [], []
+        for i, feat in enumerate(feats):
+            avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
+            cls_logit = self.pred_cls[i](self.stem_cls[i](feat, avg_feat) +
+                                         feat)
+            reg_distri = self.pred_reg[i](self.stem_reg[i](feat, avg_feat))
+            # cls and reg
+            cls_score = F.sigmoid(cls_logit)
+            cls_score_list.append(cls_score.flatten(2).transpose([0, 2, 1]))
+            reg_distri_list.append(reg_distri.flatten(2).transpose([0, 2, 1]))
+        cls_score_list = paddle.concat(cls_score_list, axis=1)
+        reg_distri_list = paddle.concat(reg_distri_list, axis=1)
+
+        is_teacher = targets.get('is_teacher', False)
+        assert is_teacher == True
+        if 1:
+            anchor_points_s = anchor_points / stride_tensor
+            pred_bboxes, new_reg_distri_list = self._bbox_decode(
+                anchor_points_s, reg_distri_list)
+            return cls_score_list, pred_bboxes, new_reg_distri_list
+
     def forward_train(self, feats, targets):
         anchors, anchor_points, num_anchors_list, stride_tensor = \
             generate_anchors_for_grid_cell(
@@ -173,14 +200,16 @@ class PPYOLOEHead(nn.Layer):
         is_teacher = targets.get('is_teacher', False)
         if is_teacher:
             anchor_points_s = anchor_points / stride_tensor
-            pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes
+            pred_bboxes, new_reg_distri_list = self._bbox_decode(
+                anchor_points_s, reg_distri_list)
+            return cls_score_list, pred_bboxes, new_reg_distri_list
 
         get_data = targets.get('get_data', False)
         if get_data:
             anchor_points_s = anchor_points / stride_tensor
-            pred_bboxes = self._bbox_decode(anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes
+            pred_bboxes, new_reg_distri_list = self._bbox_decode(
+                anchor_points_s, reg_distri_list)
+            return cls_score_list, pred_bboxes, new_reg_distri_list
 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
@@ -209,7 +238,8 @@ class PPYOLOEHead(nn.Layer):
         stride_tensor = paddle.concat(stride_tensor)
         return anchor_points, stride_tensor
 
-    def forward_eval(self, feats, targets=None):
+    #def forward_eval(self, feats, targets=None):
+    def forward_eval(self, feats):
         if self.eval_size:
             anchor_points, stride_tensor = self.anchor_points, self.stride_tensor
         else:
@@ -241,11 +271,11 @@ class PPYOLOEHead(nn.Layer):
             reg_dist_list = paddle.concat(reg_dist_list, axis=2)
             reg_dist_list = self.proj_conv(reg_dist_list).squeeze(1)
 
-        if targets is not None:
-            is_teacher = targets.get('is_teacher', False)
-            if is_teacher:
-                pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
-                return cls_score_list, pred_bboxes
+        # if targets is not None:
+        #     is_teacher = targets.get('is_teacher', False)
+        #     if is_teacher:
+        #         pred_bboxes = batch_distance2bbox(anchor_points, reg_dist_list)
+        #         return cls_score_list, pred_bboxes, reg_dist_list
 
         return cls_score_list, reg_dist_list, anchor_points, stride_tensor
 
@@ -256,7 +286,12 @@ class PPYOLOEHead(nn.Layer):
         if self.training:
             return self.forward_train(feats, targets)
         else:
-            return self.forward_eval(feats, targets)
+            if targets is not None:
+                is_teacher = targets.get('is_teacher', False)
+                if is_teacher:
+                    return self.forward_train_fake(feats, targets)
+
+            return self.forward_eval(feats)
 
     @staticmethod
     def _focal_loss(score, label, alpha=0.25, gamma=2.0):
@@ -279,7 +314,7 @@ class PPYOLOEHead(nn.Layer):
         _, l, _ = get_static_shape(pred_dist)
         pred_dist = F.softmax(pred_dist.reshape([-1, l, 4, self.reg_channels]))
         pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
-        return batch_distance2bbox(anchor_points, pred_dist)
+        return batch_distance2bbox(anchor_points, pred_dist), pred_dist
 
     def _bbox2distance(self, points, bbox):
         x1y1, x2y2 = paddle.split(bbox, 2, -1)
@@ -344,7 +379,7 @@ class PPYOLOEHead(nn.Layer):
         anchor_points, num_anchors_list, stride_tensor = head_outs
 
         anchor_points_s = anchor_points / stride_tensor
-        pred_bboxes = self._bbox_decode(anchor_points_s, pred_distri)
+        pred_bboxes, _ = self._bbox_decode(anchor_points_s, pred_distri)
 
         gt_labels = gt_meta['gt_class']
         gt_bboxes = gt_meta['gt_bbox']

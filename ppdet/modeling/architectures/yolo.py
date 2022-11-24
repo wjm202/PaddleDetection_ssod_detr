@@ -138,18 +138,22 @@ class YOLOv3(BaseArch):
 
     def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
         # student_probs: already sigmoid
-        student_probs, student_deltas = head_outs
-        teacher_probs, teacher_deltas = teacher_head_outs
+        student_probs, student_deltas, student_dfl = head_outs
+        teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
         nc = student_probs.shape[-1]
         student_probs = student_probs.reshape([-1, nc])
         student_deltas = student_deltas.reshape([-1, 4])
-        teacher_probs = teacher_probs.transpose([0, 2, 1]).reshape([-1, nc])
+        teacher_probs = teacher_probs.reshape([-1, nc])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
+        # student_dfl= student_dfl.reshape([-1, 4, 17])
+        # teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
+        student_dfl = student_dfl.reshape([-1, 4])
+        teacher_dfl = teacher_dfl.reshape([-1, 4])
 
         with paddle.no_grad():
             # Region Selection
-            count_num = int(teacher_probs.shape[0] * ratio)  # top 84
-            # teacher_probs = F.sigmoid(teacher_logits) # [8400, 80] already sigmoid
+            count_num = int(teacher_probs.shape[0] * ratio)
+            #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
             max_vals = paddle.max(teacher_probs, 1)
             sorted_vals, sorted_inds = paddle.topk(max_vals,
                                                    teacher_probs.shape[0])
@@ -160,6 +164,7 @@ class YOLOv3(BaseArch):
 
         loss_logits = QFLv2(
             student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
+        # [88872, 80] [88872, 80]
 
         inputs = paddle.concat(
             (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
@@ -169,7 +174,10 @@ class YOLOv3(BaseArch):
             axis=-1)
         loss_deltas = giou_loss(inputs, targets).mean()
 
-        loss_dfl = paddle.to_tensor([0])  # todo
+        #loss_dfl = paddle.to_tensor([0])  # todo
+        loss_dfl = self.distribution_focal_loss(student_dfl[b_mask],
+                                                teacher_dfl[b_mask])
+        # todo: weight_targets
 
         return {
             "distill_loss_cls": loss_logits,
@@ -177,3 +185,33 @@ class YOLOv3(BaseArch):
             "distill_loss_dfl": loss_dfl,
             "fg_sum": fg_num,
         }
+
+    def _df_loss(self, pred_dist, target):  # [810, 4, 17]  [810, 4]
+        target_left = paddle.cast(target, 'int64')
+        target_right = target_left + 1
+        weight_left = target_right.astype('float32') - target
+        weight_right = 1 - weight_left
+        loss_left = F.cross_entropy(
+            pred_dist, target_left, reduction='none') * weight_left
+        loss_right = F.cross_entropy(
+            pred_dist, target_right, reduction='none') * weight_right
+        return (loss_left + loss_right).mean(-1, keepdim=True)
+
+    def distribution_focal_loss(self,
+                                pred_corners,
+                                target_corners,
+                                weight_targets=None):
+        target_corners_label = F.softmax(target_corners, axis=-1)
+        loss_dfl = F.cross_entropy(
+            pred_corners,
+            target_corners_label,
+            soft_label=True,
+            reduction='none')
+        loss_dfl = loss_dfl.sum(1)
+        if weight_targets is not None:
+            loss_dfl = loss_dfl * (weight_targets.expand([-1, 4]).reshape([-1]))
+            loss_dfl = loss_dfl.sum(-1) / weight_targets.sum()
+        else:
+            loss_dfl = loss_dfl.mean(-1)
+        loss_dfl = loss_dfl / 4.  # 4 direction
+        return loss_dfl
