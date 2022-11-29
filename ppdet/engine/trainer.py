@@ -863,8 +863,8 @@ class Trainer(object):
                 'find_unused_parameters'] if 'find_unused_parameters' in self.cfg else False
             model = paddle.DataParallel(
                 model, find_unused_parameters=find_unused_parameters)
-            self.ema.model = paddle.DataParallel(
-                self.ema.model, find_unused_parameters=find_unused_parameters)
+            # self.ema.model = paddle.DataParallel(
+            #     self.ema.model, find_unused_parameters=find_unused_parameters)
 
         self.status.update({
             'epoch_id': self.start_epoch,
