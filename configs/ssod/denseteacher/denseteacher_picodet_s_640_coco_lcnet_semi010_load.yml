@@ -52,7 +52,7 @@ SemiTrainReader:
     - RandomFlip: {prob: 0.5}
     - RandomDistort: {}
   weak_aug:
-    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
+    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
   strong_aug:
     - StrongAugImage: {transforms: [
         RandomColorJitter: {prob: 0.8, brightness: 0.4, contrast: 0.4, saturation: 0.4, hue: 0.1},
@@ -60,15 +60,13 @@ SemiTrainReader:
         RandomGaussianBlur: {prob: 0.5, sigma: [0.1, 2.0]},
         RandomGrayscale: {prob: 0.2},
       ]}
-    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
+    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
   sup_batch_transforms:
     - BatchRandomResize: {target_size: [576, 608, 640, 672, 704], random_size: True, random_interp: True, keep_ratio: False}
-    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
     - Permute: {}
     - PadGT: {}
   unsup_batch_transforms:
     - BatchRandomResize: {target_size: [576, 608, 640, 672, 704], random_size: True, random_interp: True, keep_ratio: False}
-    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
     - Permute: {}
   sup_batch_size: 4
   unsup_batch_size: 4
