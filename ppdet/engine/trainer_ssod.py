@@ -265,7 +265,11 @@ class Trainer_DenseTeacher(Trainer):
                 self.status['iter_id'] = iter_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
-
+                # img=data_sup_w['image'][0].squeeze_(axis=0)
+                # from PIL import Image
+                # import numpy as np
+                # img = Image.fromarray(img.numpy().astype(np.uint8))
+                # img.save('111.jpg')
                 if data_sup_w['image'].shape != data_sup_s['image'].shape:
                     data_sup_w, data_sup_s = align_weak_strong_shape(data_sup_w,
                                                                      data_sup_s)

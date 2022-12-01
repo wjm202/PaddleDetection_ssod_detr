@@ -542,12 +542,12 @@ class PicoHeadV2(GFLHead):
         if self.eval_size:
             self.anchor_points, self.stride_tensor = self._generate_anchors()
 
-    def forward(self, fpn_feats, export_post_process=True):
+    def forward(self, fpn_feats, export_post_process=True,is_teacher=False):
         assert len(fpn_feats) == len(
             self.fpn_stride
         ), "The size of fpn_feats is not equal to size of fpn_stride"
 
-        if self.training:
+        if self.training or is_teacher:
             return self.forward_train(fpn_feats)
         else:
             return self.forward_eval(

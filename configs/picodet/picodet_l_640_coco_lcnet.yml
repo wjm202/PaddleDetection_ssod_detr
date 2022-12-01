@@ -1,9 +1,7 @@
 _BASE_: [
-  '../datasets/coco_detection.yml',
   '../runtime.yml',
   '_base_/picodet_v2.yml',
   '_base_/optimizer_300e.yml',
-  '_base_/picodet_640_reader.yml',
 ]
 
 pretrain_weights: https://paddle-imagenet-models-name.bj.bcebos.com/dygraph/legendary_models/PPLCNet_x2_0_pretrained.pdparams

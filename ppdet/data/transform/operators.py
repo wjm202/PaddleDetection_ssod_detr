@@ -554,6 +554,9 @@ class NormalizeImage(BaseOperator):
             1.(optional) Scale the pixel to [0,1]
             2.(optional) Each pixel minus mean and is divided by std
         """
+        # from PIL import Image
+        # img=Image.fromarray(sample['image'].astype(np.uint8))
+        # img.save('1.jpg')
         im = sample['image']
         im = im.astype(np.float32, copy=False)
         if self.is_scale:
@@ -566,6 +569,8 @@ class NormalizeImage(BaseOperator):
             im -= mean
             im /= std
         sample['image'] = im
+        # img=Image.fromarray(sample['image'].astype(np.uint8))
+        # img.save('2.jpg')
         return sample
 
 

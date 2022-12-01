@@ -1,0 +1,197 @@
+_BASE_: [
+  '../_base_/coco_detection_percent_10.yml',
+  '../../picodet/picodet_l_640_coco_lcnet.yml',
+  '../../runtime.yml'
+]
+log_iter: 20
+snapshot_epoch: 2
+epochs: &epochs 240
+weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
+
+### pretrain and warmup config, choose one and coment another
+pretrain_weights: https://paddledet.bj.bcebos.com/models/picodet_l_640_coco_lcnet.pdparams
+weights: output/picodet_s_192_lcnet_pedestrian/best_model
+find_unused_parameters: True
+semi_start_iters: 0
+ema_start_iters: 0
+use_warmup: &use_warmup False
+
+# pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
+# semi_start_iters: 5000
+# ema_start_iters: 3000
+# use_warmup: &use_warmup True
+
+
+### global config
+use_simple_ema: True
+ema_decay: 0.9996
+ssod_method: DenseTeacher
+DenseTeacher:
+  train_cfg:
+    sup_weight: 1.0
+    unsup_weight: 1.0
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5}
+    concat_sup_data: True
+    suppress: linear
+    ratio: 0.01 #
+    gamma: 2.0
+  test_cfg:
+    inference_on: teacher
+
+
+### reader config
+worker_num: 6
+eval_height: &eval_height 640
+eval_width: &eval_width 640
+eval_size: &eval_size [*eval_height, *eval_width]
+
+SemiTrainReader:
+  sample_transforms:
+    - Decode: {}
+    - RandomCrop: {}
+    - RandomFlip: {prob: 0.5}
+    - RandomDistort: {}
+  weak_aug:
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
+  strong_aug:
+    - StrongAugImage: {transforms: [
+        RandomColorJitter: {prob: 0.8, brightness: 0.4, contrast: 0.4, saturation: 0.4, hue: 0.1},
+        RandomErasingCrop: {},
+        RandomGaussianBlur: {prob: 0.5, sigma: [0.1, 2.0]},
+        RandomGrayscale: {prob: 0.2},
+      ]}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
+  sup_batch_transforms:
+    - BatchRandomResize: {target_size: [576, 608, 640, 672, 704], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
+    - Permute: {}
+    - PadGT: {}
+  unsup_batch_transforms:
+    - BatchRandomResize: {target_size: [576, 608, 640, 672, 704], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
+    - Permute: {}
+  sup_batch_size: 4
+  unsup_batch_size: 4
+  shuffle: True
+  drop_last: True
+  collate_batch: True
+
+EvalReader:
+  sample_transforms:
+  - Decode: {}
+  - Resize: {interp: 2, target_size: *eval_size, keep_ratio: False}
+  - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
+  - Permute: {}
+  batch_transforms:
+  - PadBatch: {pad_to_stride: 32}
+  batch_size: 8
+  shuffle: false
+
+TestReader:
+  inputs_def:
+    image_shape: [3, 640, 640]
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [640, 640], keep_ratio: False, interp: 2}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - Permute: {}
+  batch_size: 1
+
+
+
+
+architecture: PicoDet
+
+
+PicoDet:
+  backbone: LCNet
+  neck: LCPAN
+  head: PicoHeadV2
+
+### model config
+LCNet:
+  scale: 2.0
+  feature_maps: [3, 4, 5]
+
+LCPAN:
+  out_channels: 160
+
+PicoHeadV2:
+  conv_feat:
+    name: PicoFeat
+    feat_in: 160
+    feat_out: 160
+    num_convs: 4
+    num_fpn_stride: 4
+    norm_type: bn
+    share_cls_reg: True
+    use_se: True
+  feat_in_chan: 160
+
+LearningRate:
+  base_lr: 0.06
+  schedulers:
+  - !CosineDecay
+    max_epochs: 300
+  - !LinearWarmup
+    start_factor: 0.1
+    steps: 300
+
+
+
+### other config
+epoch: *epochs
+LearningRate:
+  base_lr: 0.01
+  schedulers:
+  - !CosineDecay
+    max_epochs: *epochs
+    use_warmup: *use_warmup
+  - !LinearWarmup
+    start_factor: 0.001
+    epochs: 3
+
+LearningRate:
+  base_lr: 0.06
+  schedulers:
+  - !CosineDecay
+    max_epochs: 300
+  - !LinearWarmup
+    start_factor: 0.1
+    steps: 300
+
+
+
+
+
+metric: COCO
+num_classes: 80
+
+# partial labeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
+TrainDataset:
+  !SemiCOCODataSet
+    image_dir: train2017
+    anno_path: semi_annotations/instances_train2017.1@10.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+
+# partial unlabeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
+UnsupTrainDataset:
+  !SemiCOCODataSet
+    image_dir: train2017
+    anno_path: semi_annotations/instances_train2017.1@10-unlabeled.json
+    dataset_dir: dataset/coco
+    data_fields: ['image']
+    supervised: False
+
+EvalDataset:
+  !COCODataSet
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    allow_empty: true
+
+TestDataset:
+  !ImageFolder
+    anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
+    dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'
