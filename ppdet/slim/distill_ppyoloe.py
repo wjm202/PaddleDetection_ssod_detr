@@ -84,7 +84,11 @@ class PPYOLOEDistillModel(nn.Layer):
 
 @register
 class DistillPPYOLOELoss(nn.Layer):
-    def __init__(self, teacher_width_mult=1.0, student_width_mult=0.75):
+    def __init__(self,
+                 teacher_width_mult=1.0,
+                 student_width_mult=0.75,
+                 gkd=True,
+                 pfi=False):
         super(DistillPPYOLOELoss, self).__init__()
         self.loss_bbox = GIoULoss(loss_weight=1.0)
         self.bbox_loss_weight = 1.25
@@ -92,23 +96,28 @@ class DistillPPYOLOELoss(nn.Layer):
         self.qfl_loss_weight = 0.5
         self.loss_num = 3
         neck_out_channels = [768, 384, 192]  # default as L model
+        self.gkd = gkd
+        self.pfi = pfi
 
-        # fgd neck
-        distill_loss_module_list = []
-        self.t_channel_list = [
-            int(c * teacher_width_mult) for c in neck_out_channels
-        ]
-        self.s_channel_list = [
-            int(c * student_width_mult) for c in neck_out_channels
-        ]
-        for i in range(self.loss_num):
-            distill_loss_module = FGDFeatureLoss_norm(
-                student_channels=self.s_channel_list[i],
-                teacher_channels=self.t_channel_list[i])
-            distill_loss_module_list.append(distill_loss_module)
-        self.distill_loss_module_list = nn.LayerList(distill_loss_module_list)
+        if self.gkd:
+            # fgd neck
+            distill_loss_module_list = []
+            self.t_channel_list = [
+                int(c * teacher_width_mult) for c in neck_out_channels
+            ]
+            self.s_channel_list = [
+                int(c * student_width_mult) for c in neck_out_channels
+            ]
+            for i in range(self.loss_num):
+                distill_loss_module = FGDFeatureLoss_norm(
+                    student_channels=self.s_channel_list[i],
+                    teacher_channels=self.t_channel_list[i])
+                distill_loss_module_list.append(distill_loss_module)
+            self.distill_loss_module_list = nn.LayerList(
+                distill_loss_module_list)
 
-        self.pfi_loss = DistillPFILoss()
+        if self.pfi:
+            self.pfi_loss = DistillPFILoss()
 
     def bbox_loss(self, s_bbox, t_bbox, weight_targets=None):
         # sx, sy, sw, sh 
@@ -267,23 +276,27 @@ class DistillPPYOLOELoss(nn.Layer):
                     -1, student_distill_pairs['pred_cls_scores'].shape[-1])),
                 teacher_distill_pairs['pred_cls_scores'].detach().reshape((
                     -1, teacher_distill_pairs['pred_cls_scores'].shape[-1])),
-                num_total_pos=student_distill_pairs['pos_num'],
+                num_total_pos=student_distill_pairs['pos_num'],  ###
                 use_sigmoid=False))
         distill_bbox_loss = paddle.add_n(distill_bbox_loss)
         distill_cls_loss = paddle.add_n(distill_cls_loss)
         distill_dfl_loss = paddle.add_n(distill_dfl_loss)
 
-        # Global Knowledge Distillation for Detectors in necks
-        distill_neck_global_loss = []
-        inputs = student_model.inputs
-        teacher_fpn_feats = teacher_distill_pairs['emb_feats']
-        student_fpn_feats = student_distill_pairs['emb_feats']
-        assert 'gt_bbox' in inputs
-        for i, distill_loss_module in enumerate(self.distill_loss_module_list):
-            distill_neck_global_loss.append(
-                distill_loss_module(student_fpn_feats[i], teacher_fpn_feats[i],
-                                    inputs))
-        distill_neck_global_loss = paddle.add_n(distill_neck_global_loss)
+        if self.gkd:
+            # Global Knowledge Distillation for Detectors in necks
+            distill_neck_global_loss = []
+            inputs = student_model.inputs
+            teacher_fpn_feats = teacher_distill_pairs['emb_feats']
+            student_fpn_feats = student_distill_pairs['emb_feats']
+            assert 'gt_bbox' in inputs
+            for i, distill_loss_module in enumerate(
+                    self.distill_loss_module_list):
+                distill_neck_global_loss.append(
+                    distill_loss_module(student_fpn_feats[i], teacher_fpn_feats[
+                        i], inputs))
+            distill_neck_global_loss = paddle.add_n(distill_neck_global_loss)
+        else:
+            distill_neck_global_loss = paddle.to_tensor([0])
 
         loss = (distill_bbox_loss * self.bbox_loss_weight + distill_cls_loss *
                 self.qfl_loss_weight + distill_dfl_loss * self.dfl_loss_weight)
