@@ -542,18 +542,23 @@ class PicoHeadV2(GFLHead):
         if self.eval_size:
             self.anchor_points, self.stride_tensor = self._generate_anchors()
 
-    def forward(self, fpn_feats, export_post_process=True):
+    def forward(self, fpn_feats, export_post_process=True, targets=None):
         assert len(fpn_feats) == len(
             self.fpn_stride
         ), "The size of fpn_feats is not equal to size of fpn_stride"
 
         if self.training:
-            return self.forward_train(fpn_feats)
+            return self.forward_train(fpn_feats, targets)
         else:
+            if targets is not None:
+                is_teacher = targets.get('is_teacher', False)
+                if is_teacher:
+                    return self.forward_train(fpn_feats, targets)
+
             return self.forward_eval(
                 fpn_feats, export_post_process=export_post_process)
 
-    def forward_train(self, fpn_feats):
+    def forward_train_fake(self, fpn_feats, targets):
         cls_score_list, reg_list, box_list = [], [], []
         for i, (fpn_feat, stride) in enumerate(zip(fpn_feats, self.fpn_stride)):
             b, _, h, w = get_static_shape(fpn_feat)
@@ -588,7 +593,57 @@ class PicoHeadV2(GFLHead):
         cls_score_list = paddle.concat(cls_score_list, axis=1)
         box_list = paddle.concat(box_list, axis=1)
         reg_list = paddle.concat(reg_list, axis=1)
-        return cls_score_list, reg_list, box_list, fpn_feats
+
+        is_teacher = targets.get('is_teacher', False)
+        assert is_teacher == True
+        return cls_score_list, box_list, reg_list
+
+    def forward_train(self, fpn_feats, targets):
+        cls_score_list, reg_list, box_list = [], [], []
+        for i, (fpn_feat, stride) in enumerate(zip(fpn_feats, self.fpn_stride)):
+            b, _, h, w = get_static_shape(fpn_feat)
+            # task decomposition
+            conv_cls_feat, se_feat = self.conv_feat(fpn_feat, i)
+            cls_logit = self.head_cls_list[i](se_feat)
+            reg_pred = self.head_reg_list[i](se_feat)
+
+            # cls prediction and alignment
+            if self.use_align_head:
+                cls_prob = F.sigmoid(self.cls_align[i](conv_cls_feat))
+                cls_score = (F.sigmoid(cls_logit) * cls_prob + eps).sqrt()
+            else:
+                cls_score = F.sigmoid(cls_logit)
+
+            cls_score_out = cls_score.transpose([0, 2, 3, 1])
+            bbox_pred = reg_pred.transpose([0, 2, 3, 1])
+            b, cell_h, cell_w, _ = paddle.shape(cls_score_out)
+            y, x = self.get_single_level_center_point(
+                [cell_h, cell_w], stride, cell_offset=self.cell_offset)
+            center_points = paddle.stack([x, y], axis=-1)
+            cls_score_out = cls_score_out.reshape(
+                [b, -1, self.cls_out_channels])
+            bbox_pred = self.distribution_project(bbox_pred) * stride
+            bbox_pred = bbox_pred.reshape([b, cell_h * cell_w, 4])
+            bbox_pred = batch_distance2bbox(
+                center_points, bbox_pred, max_shapes=None)
+            cls_score_list.append(cls_score.flatten(2).transpose([0, 2, 1]))
+            reg_list.append(reg_pred.flatten(2).transpose([0, 2, 1]))
+            box_list.append(bbox_pred / stride)
+
+        cls_score_list = paddle.concat(cls_score_list, axis=1)
+        box_list = paddle.concat(box_list, axis=1)
+        reg_list = paddle.concat(reg_list, axis=1)
+
+        is_teacher = targets.get('is_teacher', False)
+        if is_teacher:
+            return cls_score_list, box_list, reg_list
+
+        get_data = targets.get('get_data', False)
+        if get_data:
+            return cls_score_list, box_list, reg_list
+
+        return self.get_loss([cls_score_list, reg_list, box_list, fpn_feats],
+                             targets)
 
     def forward_eval(self, fpn_feats, export_post_process=True):
         if self.eval_size:
@@ -738,9 +793,13 @@ class PicoHeadV2(GFLHead):
         loss_bbox = loss_bbox / avg_factor
         loss_dfl = loss_dfl / avg_factor
 
-        loss_states = dict(
-            loss_vfl=loss_vfl, loss_bbox=loss_bbox, loss_dfl=loss_dfl)
-
+        loss = loss_vfl + loss_bbox + loss_dfl
+        loss_states = {
+            'loss': loss,
+            'loss_vfl': loss_vfl,
+            'loss_bbox': loss_bbox,
+            'loss_dfl': loss_dfl,
+        }
         return loss_states
 
     def _generate_anchors(self, feats=None):
