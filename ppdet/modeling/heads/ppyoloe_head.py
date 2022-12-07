@@ -207,10 +207,10 @@ class PPYOLOEHead(nn.Layer):
 
         get_data = targets.get('get_data', False)
         if get_data:
-            anchor_points_s = anchor_points / stride_tensor
-            pred_bboxes, new_reg_distri_list = self._bbox_decode(
-                anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes, new_reg_distri_list
+            # anchor_points_s = anchor_points / stride_tensor
+            # pred_bboxes, new_reg_distri_list = self._bbox_decode(
+            #     anchor_points_s, reg_distri_list)
+            return cls_score_list, reg_distri_list, anchors, anchor_points,num_anchors_list, stride_tensor
 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
@@ -290,7 +290,7 @@ class PPYOLOEHead(nn.Layer):
             if targets is not None:
                 is_teacher = targets.get('is_teacher', False)
                 if is_teacher:
-                    return self.forward_train_fake(feats, targets)
+                    return self.forward_eval(feats)
 
             return self.forward_eval(feats)
 
@@ -456,7 +456,7 @@ class PPYOLOEHead(nn.Layer):
         }
         return out_dict
 
-    def post_process(self, head_outs, scale_factor):
+    def post_process(self, head_outs, scale_factor,is_teacher=False):
         pred_scores, pred_dist, anchor_points, stride_tensor = head_outs
         pred_bboxes = batch_distance2bbox(anchor_points, pred_dist)
         pred_bboxes *= stride_tensor
@@ -474,5 +474,15 @@ class PPYOLOEHead(nn.Layer):
                 # `exclude_nms=True` just use in benchmark
                 return pred_bboxes, pred_scores
             else:
-                bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
-                return bbox_pred, bbox_num
+                if is_teacher:
+                    bbox_pred=[]
+                    bbox_num=[]
+                    for i in range(len(pred_bboxes)):
+                        _pred, _num, _= self.nms(pred_bboxes[i].unsqueeze(0), pred_scores[i].unsqueeze(0))
+                        bbox_pred.append(_pred)
+                        bbox_num.append(_num)
+                    # bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+                    return bbox_pred, bbox_num
+                else:
+                    bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+                    return bbox_pred, bbox_num

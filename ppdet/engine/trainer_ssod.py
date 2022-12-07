@@ -316,16 +316,15 @@ class Trainer_DenseTeacher(Trainer):
                     if self._nranks > 1:
                         loss_dict_unsup = self.model._layers.get_distill_loss(
                             student_preds,
-                            teacher_preds,
-                            ratio=train_cfg['ratio'])
+                            teacher_preds
+                            )
                     else:
                         loss_dict_unsup = self.model.get_distill_loss(
                             student_preds,
-                            teacher_preds,
-                            ratio=train_cfg['ratio'])
+                            teacher_preds)
 
-                    fg_num = loss_dict_unsup["fg_sum"]
-                    del loss_dict_unsup["fg_sum"]
+                    # fg_num = loss_dict_unsup["fg_sum"]
+                    # del loss_dict_unsup["fg_sum"]
                     distill_weights = train_cfg['loss_weight']
                     loss_dict_unsup = {
                         k: v * distill_weights[k]
@@ -341,7 +340,7 @@ class Trainer_DenseTeacher(Trainer):
                     loss_dict.update(loss_dict_unsup)
                     loss_dict.update({'loss_unsup_sum': losses_unsup})
                     losses += losses_unsup.detach()
-                    loss_dict.update({"fg_sum": fg_num})
+                    # loss_dict.update({"fg_sum": fg_num})
                     loss_dict['loss'] = losses
 
                 self.optimizer.step()

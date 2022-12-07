@@ -31,7 +31,12 @@ PicoHeadV2:
     share_cls_reg: True
     use_se: True
   feat_in_chan: 96
-
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 1000
+    keep_top_k: 100
+    score_threshold: 0.0
+    nms_threshold: 0.0
 TrainReader:
   batch_size: 48
 
