@@ -456,7 +456,9 @@ class PPYOLOEHead(nn.Layer):
         }
         return out_dict
 
-    def post_process(self, head_outs, scale_factor,is_teacher=False):
+    def post_process(self, head_outs, scale_factor,is_teacher=False,cls_thr=None):
+        cls=[0.92,0.76, 0.83, 0.87, 0.92, 0.95, 0.95, 0.78, 0.70, 0.72, 0.95, 0.97, 0.88, 0.72,0.75, 0.91,0.91,0.92, 0.84,0.86,0.94, 0.96, 0.96 ,0.96, 0.59, 0.79, 0.58,0.76,0.70,0.92, 0.59, 0.60, 0.85, 0.78 ,0.82, 0.86, 0.85, 0.79,0.91, 0.76,0.78,0.81,0.58, 0.53, 0.56,0.80,0.55, 0.51,0.75,0.56,0.74,0.60,0.64,0.91,0.79, 0.75,0.76, 0.84,0.73,0.88, 0.80, 0.93, 0.93,0.95, 0.91, 0.68, 0.92, 0.76,0.89,0.82,0.48, 0.76 ,0.94, 0.48 ,0.91, 0.73, 0.58, 0.85 ,0.13, 0.50]
+        cls=[0.72,0.56, 0.63, 0.67, 0.72, 0.75, 0.75, 0.58, 0.50, 0.52, 0.75, 0.77, 0.68, 0.52,0.55, 0.71,0.71,0.72, 0.64,0.66,0.74, 0.76, 0.76 ,0.76, 0.49, 0.59, 0.38,0.56,0.50,0.72, 0.39, 0.40, 0.65, 0.58 ,0.62, 0.66, 0.65, 0.59,0.71, 0.56,0.58,0.61,0.38, 0.33, 0.36,0.60,0.35, 0.31,0.55,0.36,0.54,0.40,0.44,0.71,0.59, 0.55,0.56, 0.64,0.53,0.68, 0.60, 0.73, 0.73,0.75, 0.71, 0.48, 0.73, 0.56,0.69,0.62,0.28, 0.56 ,0.74, 0.28 ,0.71, 0.53, 0.38, 0.65 ,0.05, 0.30]
         pred_scores, pred_dist, anchor_points, stride_tensor = head_outs
         pred_bboxes = batch_distance2bbox(anchor_points, pred_dist)
         pred_bboxes *= stride_tensor
@@ -484,5 +486,18 @@ class PPYOLOEHead(nn.Layer):
                     # bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
                     return bbox_pred, bbox_num
                 else:
-                    bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+                    b_mask=[[]]
+                    for j in range(1):
+                        for i in range(80):
+                            cls_thr=cls[i]
+                            b_mask[j].append(pred_scores[j,i,:]>cls_thr)
+                        b_mask[j]=paddle.concat([ _ for _ in b_mask[j]],axis=0).unsqueeze(0).reshape([80,-1])
+                    b_mask=b_mask[0].sum(0)>0
+                    if  b_mask.sum()==0:
+                        pred=pred_scores.squeeze(0).max(0)
+                        ids=paddle.argmax(pred_scores.squeeze(0).max(0))
+                        b_mask[ids]=True
+                    pred_bboxes=pred_bboxes[b_mask.unsqueeze(0)]
+                    pred_scores=pred_scores.transpose([0,2,1])[b_mask.unsqueeze(0)].transpose([1,0])
+                    bbox_pred, bbox_num, _ = self.nms(pred_bboxes.unsqueeze(0), pred_scores.unsqueeze(0))
                     return bbox_pred, bbox_num

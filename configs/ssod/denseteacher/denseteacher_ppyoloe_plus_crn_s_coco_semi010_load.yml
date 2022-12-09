@@ -6,7 +6,7 @@ log_iter: 20
 snapshot_epoch: 2
 epochs: &epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
-
+update_interval: 1
 ### pretrain and warmup config, choose one and coment another
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/ssod/ppyoloe_plus_crn_s_80e_coco_sup010.pdparams # mAP=35.3
 semi_start_iters: 0
@@ -56,14 +56,16 @@ SemiTrainReader:
       ]}
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   sup_batch_transforms:
-    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320,768],  random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
+    - PadBatch: {pad_to_stride: 32}
     - PadGT: {}
   unsup_batch_transforms:
-    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320,768],  random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
-  sup_batch_size: 8
-  unsup_batch_size: 8
+    - PadBatch: {pad_to_stride: 32}
+  sup_batch_size: 2
+  unsup_batch_size: 2
   shuffle: True
   drop_last: True
   collate_batch: True
@@ -74,7 +76,7 @@ EvalReader:
     - Resize: {target_size: [640, 640], keep_ratio: False, interp: 2}
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
-  batch_size: 2
+  batch_size: 1
 
 TestReader:
   inputs_def:
@@ -85,6 +87,24 @@ TestReader:
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
   batch_size: 1
+
+LMReader:
+  sample_transforms:
+    - Decode: {}
+    # - RandomDistort: {}
+    # - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
+    # - RandomCrop: {}
+    # - RandomFlip: {}
+  batch_transforms:
+    - BatchRandomResize: {target_size: [640,640], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - Permute: {}
+    - PadGT: {}
+  batch_size: 2
+  shuffle: true
+  drop_last: false
+  use_shared_memory: true
+  collate_batch: true
 
 
 ### model config
@@ -128,7 +148,7 @@ PPYOLOEHead:
 ### other config
 epoch: *epochs
 LearningRate:
-  base_lr: 0.01
+  base_lr: 0.001
   schedulers:
   - !CosineDecay
     max_epochs: *epochs
@@ -145,3 +165,18 @@ OptimizerBuilder:
     factor: 0.0005 # dt-fcos 0.0001
     type: L2
   clip_grad_by_norm: 1.0 # dt-fcos clip_grad_by_value
+
+
+
+
+
+
+TrainDatasetLM:
+  !LMCocoDataset
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class']
+    manual_length: 5000
+percent: 0.2
+label_match: True

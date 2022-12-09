@@ -35,6 +35,7 @@ from ppdet.utils.checkpoint import load_weight, load_pretrain_weight
 import ppdet.utils.stats as stats
 from ppdet.utils import profiler
 from ppdet.modeling.ssod_utils import align_weak_strong_shape
+from ppdet.engine.labelmatch_callbacks import LabelMatchCallback
 from .trainer import Trainer
 
 from ppdet.utils.logger import setup_logger
@@ -212,7 +213,8 @@ class Trainer_DenseTeacher(Trainer):
 
         for param in self.ema.model.parameters():
             param.stop_gradient = True
-
+        curr_iter = -1
+        self.status['iter_id'] = 0
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -275,6 +277,7 @@ class Trainer_DenseTeacher(Trainer):
                 loss_dict.update({'loss_sup_sum': loss_dict['loss']})
 
                 curr_iter = len(self.loader) * epoch_id + step_id
+                self.status['iter_id'] = curr_iter
                 st_iter = self.semi_start_iters
                 if curr_iter == st_iter:
                     logger.info("***" * 30)

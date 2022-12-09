@@ -63,7 +63,8 @@ class YOLOv3(BaseArch):
         self.post_process = post_process
         self.for_mot = for_mot
         self.return_idx = isinstance(post_process, JDEBBoxPostProcess)
-
+        self.cls_thr = [0.9] * 80
+        self.cls_thr_ig = [0.2] * 80
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
         # backbone
@@ -100,7 +101,7 @@ class YOLOv3(BaseArch):
             yolo_losses = self.yolo_head(neck_feats, self.inputs)
             if is_teacher:
                   bbox, bbox_num = self.yolo_head.post_process(
-                        yolo_losses, paddle.ones_like(self.inputs['scale_factor']),is_teacher=True)
+                        yolo_losses, paddle.ones_like(self.inputs['scale_factor']),is_teacher=True,)
                   return bbox, bbox_num  
             if self.for_mot:
                 return {'det_losses': yolo_losses, 'emb_feats': emb_feats}
@@ -130,7 +131,7 @@ class YOLOv3(BaseArch):
                         self.inputs['im_shape'], self.inputs['scale_factor'])
                 else:
                     bbox, bbox_num = self.yolo_head.post_process(
-                        yolo_head_outs, self.inputs['scale_factor'])
+                        yolo_head_outs, self.inputs['scale_factor'],cls_thr=self.cls_thr)
                 output = {'bbox': bbox, 'bbox_num': bbox_num}
 
             return output
@@ -150,27 +151,24 @@ class YOLOv3(BaseArch):
         gt_meta={}
         pad_gt_mask=[]
         n=300
-        for i in range(8):
+        for i in range((head_outs[0].shape[0])):
             a=paddle.ones([300,1])
             b=paddle.zeros([300,6])
-            # b[:bbox_num[i]]= bbox[i]
-            b_mask=bbox[i][:,1]>0.5
-            if b_mask.sum()==0:
-                ids = paddle.argmax(bbox[i][:,1],axis=-1)
-                b_mask[int(ids)]= True
+            b_mask= bbox[i][:,1]==1
+            for j in range(len(bbox[i])):
+                cls_thr=self.cls_thr[bbox[i][:,0][j]]
+                b_mask[j]=bbox[i][:,1][j]>cls_thr
             b[:len(bbox[i][b_mask])]=bbox[i][b_mask]
             bbox[i]=b
             a[int((b_mask).sum()):]=0
             pad_gt_mask.append(a)
-        bbox=paddle.stack( [_ for _ in bbox],axis=0)
-
+        bbox=paddle.stack( [_ for _ in bbox],axis=0)       
         pad_gt_mask=paddle.stack([_ for _ in pad_gt_mask] ,axis=0)
         gt_meta['gt_class'] = bbox[:,:,0].unsqueeze(-1).astype(paddle.int32)
         gt_meta['gt_bbox'] = bbox[:,:,2:6]
         gt_meta['pad_gt_mask']=pad_gt_mask.astype(paddle.int32)
         gt_meta['epoch_id'] =100
         loss=self.yolo_head.get_loss(head_outs,gt_meta)
-
         return {
             "distill_loss_cls": loss['loss_cls'],
             "distill_loss_iou": loss['loss_iou'],
@@ -178,84 +176,90 @@ class YOLOv3(BaseArch):
         }
 
         
-    # def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
-    #     # student_probs: already sigmoid
-    #     student_probs, student_deltas, student_dfl = head_outs
-    #     teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
-    #     nc = student_probs.shape[-1]
-    #     student_probs = student_probs.reshape([-1, nc])
-    #     student_deltas = student_deltas.reshape([-1, 4])
-    #     teacher_probs = teacher_probs.reshape([-1, nc])
-    #     teacher_deltas = teacher_deltas.reshape([-1, 4])
-    #     student_dfl = student_dfl.reshape([-1, 4, 17])
-    #     teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
+        # student_probs: already sigmoid
+        student_probs, student_deltas, student_dfl = head_outs
+        teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
+        nc = student_probs.shape[-1]
+        student_probs = student_probs.reshape([-1, nc])
+        student_deltas = student_deltas.reshape([-1, 4])
+        teacher_probs = teacher_probs.reshape([-1, nc])
+        teacher_deltas = teacher_deltas.reshape([-1, 4])
+        student_dfl = student_dfl.reshape([-1, 4, 17])
+        teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
+        b_mask=[[]*nc]
+        for i in range(nc):
+            cls_thr=self.cls_thr[i]
+            b_mask[j]=student_probs[:,i]>cls_thr
+        b_mask=paddle.concat([ _ for _ in b_mask],axis=-1)
+        b_mask=b_mask.transpose([1,0])
+        mask=b_mask.sum(1)
+        with paddle.no_grad():
+            # Region Selection
+            count_num = int(teacher_probs.shape[0] * ratio)
+            #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
+            max_vals = paddle.max(teacher_probs, 1)
+            sorted_vals, sorted_inds = paddle.topk(max_vals,
+                                                   teacher_probs.shape[0])
+            mask = paddle.zeros_like(max_vals)
+            mask[sorted_inds[:count_num]] = 1.
+            fg_num = sorted_vals[:count_num].sum()
+            b_mask = mask > 0.
 
-    #     with paddle.no_grad():
-    #         # Region Selection
-    #         count_num = int(teacher_probs.shape[0] * ratio)
-    #         #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
-    #         max_vals = paddle.max(teacher_probs, 1)
-    #         sorted_vals, sorted_inds = paddle.topk(max_vals,
-    #                                                teacher_probs.shape[0])
-    #         mask = paddle.zeros_like(max_vals)
-    #         mask[sorted_inds[:count_num]] = 1.
-    #         fg_num = sorted_vals[:count_num].sum()
-    #         b_mask = mask > 0.
+        loss_logits = QFLv2(
+            student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
+        # [88872, 80] [88872, 80]
 
-    #     loss_logits = QFLv2(
-    #         student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
-    #     # [88872, 80] [88872, 80]
+        inputs = paddle.concat(
+            (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
+            axis=-1)
+        targets = paddle.concat(
+            (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
+            axis=-1)
+        iou_loss = GIoULoss(reduction='mean')
+        loss_deltas = iou_loss(inputs, targets)
 
-    #     inputs = paddle.concat(
-    #         (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
-    #         axis=-1)
-    #     targets = paddle.concat(
-    #         (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
-    #         axis=-1)
-    #     iou_loss = GIoULoss(reduction='mean')
-    #     loss_deltas = iou_loss(inputs, targets)
+        #loss_dfl = paddle.to_tensor([0])  # todo
+        student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
+        teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
 
-    #     #loss_dfl = paddle.to_tensor([0])  # todo
-    #     student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
-    #     teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
+        loss_dfl = self.distribution_focal_loss(student_dfl_pred,
+                                                teacher_dfl_tar)
+        # todo: weight_targets
 
-    #     loss_dfl = self.distribution_focal_loss(student_dfl_pred,
-    #                                             teacher_dfl_tar)
-    #     # todo: weight_targets
+        return {
+            "distill_loss_cls": loss_logits,
+            "distill_loss_iou": loss_deltas,
+            "distill_loss_dfl": loss_dfl,
+            "fg_sum": fg_num,
+        }
 
-    #     return {
-    #         "distill_loss_cls": loss_logits,
-    #         "distill_loss_iou": loss_deltas,
-    #         "distill_loss_dfl": loss_dfl,
-    #         "fg_sum": fg_num,
-    #     }
+    def _df_loss(self, pred_dist, target):  # [810, 4, 17]  [810, 4]
+        target_left = paddle.cast(target, 'int64')
+        target_right = target_left + 1
+        weight_left = target_right.astype('float32') - target
+        weight_right = 1 - weight_left
+        loss_left = F.cross_entropy(
+            pred_dist, target_left, reduction='none') * weight_left
+        loss_right = F.cross_entropy(
+            pred_dist, target_right, reduction='none') * weight_right
+        return (loss_left + loss_right).mean(-1, keepdim=True)
 
-    # def _df_loss(self, pred_dist, target):  # [810, 4, 17]  [810, 4]
-    #     target_left = paddle.cast(target, 'int64')
-    #     target_right = target_left + 1
-    #     weight_left = target_right.astype('float32') - target
-    #     weight_right = 1 - weight_left
-    #     loss_left = F.cross_entropy(
-    #         pred_dist, target_left, reduction='none') * weight_left
-    #     loss_right = F.cross_entropy(
-    #         pred_dist, target_right, reduction='none') * weight_right
-    #     return (loss_left + loss_right).mean(-1, keepdim=True)
-
-    # def distribution_focal_loss(self,
-    #                             pred_corners,
-    #                             target_corners,
-    #                             weight_targets=None):
-    #     target_corners_label = F.softmax(target_corners, axis=-1)
-    #     loss_dfl = F.cross_entropy(
-    #         pred_corners,
-    #         target_corners_label,
-    #         soft_label=True,
-    #         reduction='none')
-    #     loss_dfl = loss_dfl.sum(1)
-    #     if weight_targets is not None:
-    #         loss_dfl = loss_dfl * (weight_targets.expand([-1, 4]).reshape([-1]))
-    #         loss_dfl = loss_dfl.sum(-1) / weight_targets.sum()
-    #     else:
-    #         loss_dfl = loss_dfl.mean(-1)
-    #     loss_dfl = loss_dfl / 4.  # 4 direction
-    #     return loss_dfl
+    def distribution_focal_loss(self,
+                                pred_corners,
+                                target_corners,
+                                weight_targets=None):
+        target_corners_label = F.softmax(target_corners, axis=-1)
+        loss_dfl = F.cross_entropy(
+            pred_corners,
+            target_corners_label,
+            soft_label=True,
+            reduction='none')
+        loss_dfl = loss_dfl.sum(1)
+        if weight_targets is not None:
+            loss_dfl = loss_dfl * (weight_targets.expand([-1, 4]).reshape([-1]))
+            loss_dfl = loss_dfl.sum(-1) / weight_targets.sum()
+        else:
+            loss_dfl = loss_dfl.mean(-1)
+        loss_dfl = loss_dfl / 4.  # 4 direction
+        return loss_dfl

@@ -130,6 +130,7 @@ class BatchRandomResize(BaseOperator):
                  keep_ratio,
                  interp=cv2.INTER_NEAREST,
                  random_size=True,
+                 random_range= False,
                  random_interp=False):
         super(BatchRandomResize, self).__init__()
         self.keep_ratio = keep_ratio
@@ -149,19 +150,28 @@ class BatchRandomResize(BaseOperator):
                 format(type(target_size)))
         self.target_size = target_size
         self.random_size = random_size
+        self.random_range = random_range
         self.random_interp = random_interp
 
     def __call__(self, samples, context=None):
-        if self.random_size:
-            index = np.random.choice(len(self.target_size))
-            target_size = self.target_size[index]
+        if self.random_range:
+            short_edge = np.random.randint(self.target_size[0],
+                                           self.target_size[1]+1)
+            long_edge = short_edge
+            target_size = [short_edge, long_edge]
         else:
-            target_size = self.target_size
+            if self.random_size:
+                short_edge = np.random.randint(self.target_size[0],
+                                            self.target_size[1]+1)
+                long_edge = short_edge
+                target_size = [short_edge, long_edge]
+            else:
+                target_size = self.target_size
 
-        if self.random_interp:
-            interp = np.random.choice(self.interps)
-        else:
-            interp = self.interp
+            if self.random_interp:
+                interp = np.random.choice(self.interps)
+            else:
+                interp = self.interp
 
         resizer = Resize(target_size, keep_ratio=self.keep_ratio, interp=interp)
         return resizer(samples, context=context)
