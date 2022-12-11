@@ -22,7 +22,6 @@ from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 from ..ssod_utils import QFLv2
 from ..losses import GIoULoss
-from IPython import embed
 
 __all__ = ['PicoDet']
 
@@ -47,6 +46,7 @@ class PicoDet(BaseArch):
         self.head = head
         self.export_post_process = True
         self.export_nms = True
+        self.is_teacher = False
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
@@ -68,8 +68,8 @@ class PicoDet(BaseArch):
         body_feats = self.backbone(self.inputs)
         fpn_feats = self.neck(body_feats)
 
-        is_teacher = self.inputs.get('is_teacher', False)
-        if self.training or is_teacher:
+        self.is_teacher = self.inputs.get('is_teacher', False)
+        if self.training or self.is_teacher:
             loss = self.head(fpn_feats, targets=self.inputs)
             return loss
         else:

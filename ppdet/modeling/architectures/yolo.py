@@ -60,6 +60,7 @@ class YOLOv3(BaseArch):
         self.post_process = post_process
         self.for_mot = for_mot
         self.return_idx = isinstance(post_process, JDEBBoxPostProcess)
+        self.is_teacher = False
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
@@ -92,8 +93,8 @@ class YOLOv3(BaseArch):
             emb_feats = neck_feats['emb_feats']
             neck_feats = neck_feats['yolo_feats']
 
-        is_teacher = self.inputs.get('is_teacher', False)
-        if self.training or is_teacher:
+        self.is_teacher = self.inputs.get('is_teacher', False)
+        if self.training or self.is_teacher:
             yolo_losses = self.yolo_head(neck_feats, self.inputs)
 
             if self.for_mot:

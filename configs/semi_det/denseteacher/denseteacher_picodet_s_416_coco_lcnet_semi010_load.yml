@@ -9,6 +9,7 @@ epochs: &epochs 300
 base_lr: &base_lr 0.24
 weights: output/denseteacher_picodet_s_416_lcnet075_coco_semi010/model_final
 
+
 ### pretrain and warmup config, choose one and coment another
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/semi_det/picodet_s_416_coco_lcnet_10.pdparams
 #pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/semi_det/picodet_s_416_coco_lcnet_5.pdparams
@@ -40,7 +41,7 @@ DenseTeacher:
 
 
 ### reader config
-batch_size: &batch_size 48
+batch_size: &batch_size 16 # 48
 worker_num: 2
 eval_height: &eval_height 416
 eval_width: &eval_width 416
