@@ -41,6 +41,7 @@ import threading
 import paddle
 MUTEX = threading.Lock()
 
+import paddle
 from ppdet.core.workspace import serializable
 from ..reader import Compose
 
@@ -488,7 +489,7 @@ class RandomErasingImage(BaseOperator):
         self.higher = higher
         self.aspect_ratio = aspect_ratio
 
-    def apply(self, sample):
+    def apply(self, sample, context=None):
         gt_bbox = sample['gt_bbox']
         im = sample['image']
         if not isinstance(im, np.ndarray):
@@ -3883,6 +3884,21 @@ class RandomShift(BaseOperator):
         return sample
 
 
+@register_op
+class StrongAugImage(BaseOperator):
+    def __init__(self, transforms):
+        super(StrongAugImage, self).__init__()
+        self.transforms = Compose(transforms)
+
+    def apply(self, sample, context=None):
+        im = sample
+        im['image'] = sample['image'].astype('uint8')
+        results = self.transforms(im)
+        sample['image'] = results['image'].astype('uint8')
+        return sample
+
+
+@register_op
 class RandomColorJitter(BaseOperator):
     def __init__(self,
                  prob=0.8,
@@ -3915,10 +3931,9 @@ class RandomGrayscale(BaseOperator):
 
     def apply(self, sample, context=None):
         if np.random.uniform(0, 1) < self.prob:
-            im = sample['image']
-            im_ = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
-            im = np.dstack([im_, im_, im_])
-            sample['image'] = im
+            from paddle.vision.transforms import Grayscale
+            transform = Grayscale(num_output_channels=3)
+            sample['image'] = transform(sample['image'])
         return sample
 
 
@@ -3932,8 +3947,83 @@ class RandomGaussianBlur(BaseOperator):
     def apply(self, sample, context=None):
         if np.random.uniform(0, 1) < self.prob:
             sigma = np.random.uniform(self.sigma[0], self.sigma[1])
-            #im = cv2.GaussianBlur(sample['image'], (0, 0), sigma)
             im = cv2.GaussianBlur(sample['image'], (23, 23), sigma)
+            sample['image'] = im
+        return sample
+
+
+@register_op
+class RandomErasing(BaseOperator):
+    def __init__(self,
+                 prob=0.5,
+                 scale=(0.02, 0.33),
+                 ratio=(0.3, 3.3),
+                 value=0,
+                 inplace=False):
+        super(RandomErasing, self).__init__()
+        assert isinstance(scale,
+                          (tuple, list)), "scale should be a tuple or list"
+        assert (scale[0] >= 0 and scale[1] <= 1 and scale[0] <= scale[1]
+                ), "scale should be of kind (min, max) and in range [0, 1]"
+        assert isinstance(ratio,
+                          (tuple, list)), "ratio should be a tuple or list"
+        assert (ratio[0] >= 0 and
+                ratio[0] <= ratio[1]), "ratio should be of kind (min, max)"
+        assert isinstance(
+            value, (Number, str, tuple,
+                    list)), "value should be a number, tuple, list or str"
+        if isinstance(value, str) and value != "random":
+            raise ValueError("value must be 'random' when type is str")
+        self.prob = prob
+        self.scale = scale
+        self.ratio = ratio
+        self.value = value
+        self.inplace = inplace
+
+    def _erase(self, img, i, j, h, w, v, inplace=False):
+        if not inplace:
+            img = img.copy()
+        img[i:i + h, j:j + w, ...] = v
+        return img
+
+    def _get_param(self, img, scale, ratio, value):
+        shape = np.asarray(img).astype(np.uint8).shape
+        h, w, c = shape[-3], shape[-2], shape[-1]
+        img_area = h * w
+        log_ratio = np.log(ratio)
+        for _ in range(1):
+            erase_area = np.random.uniform(*scale) * img_area
+            aspect_ratio = np.exp(np.random.uniform(*log_ratio))
+            erase_h = int(round(np.sqrt(erase_area * aspect_ratio)))
+            erase_w = int(round(np.sqrt(erase_area / aspect_ratio)))
+            if erase_h >= h or erase_w >= w:
+                continue
+
+            if value is None:
+                v = np.random.normal(size=[erase_h, erase_w, c]) * 255
+            else:
+                v = np.array(value)[None, None, :]
+            top = np.random.randint(0, h - erase_h + 1)
+            left = np.random.randint(0, w - erase_w + 1)
+            return top, left, erase_h, erase_w, v
+        return 0, 0, h, w, img
+
+    def apply(self, sample, context=None):
+        if random.random() < self.prob:
+            if isinstance(self.value, Number):
+                value = [self.value]
+            elif isinstance(self.value, str):
+                value = None
+            else:
+                value = self.value
+            if value is not None and not (len(value) == 1 or len(value) == 3):
+                raise ValueError(
+                    "Value should be a single number or a sequence with length equals to image's channel."
+                )
+            im = sample['image']
+            top, left, erase_h, erase_w, v = self._get_param(im, self.scale,
+                                                             self.ratio, value)
+            im = self._erase(im, top, left, erase_h, erase_w, v, self.inplace)
             sample['image'] = im
         return sample
 
@@ -3942,260 +4032,15 @@ class RandomGaussianBlur(BaseOperator):
 class RandomErasingCrop(BaseOperator):
     def __init__(self):
         super(RandomErasingCrop, self).__init__()
-        # from paddle.vision.transforms import RandomErasing
-
-    def apply(self, sample, context=None):
-        transform1 = RandomErasing(
+        self.transform1 = RandomErasing(
             prob=0.7, scale=(0.05, 0.2), ratio=(0.3, 3.3), value="random")
-        transform2 = RandomErasing(
+        self.transform2 = RandomErasing(
             prob=0.5, scale=(0.05, 0.2), ratio=(0.1, 6), value="random")
-        transform3 = RandomErasing(
+        self.transform3 = RandomErasing(
             prob=0.3, scale=(0.05, 0.2), ratio=(0.05, 8), value="random")
-        im = sample['image']
-        im = transform1(im)
-        im = transform2(im)
-        im = transform3(im)
-        sample['image'] = im
-        return sample
-
-
-from ..reader import Compose
-
-
-@register_op
-class AugStrong(BaseOperator):
-    def __init__(self, transforms):
-        super(AugmentationStrong, self).__init__()
-        self.transforms = Compose(transforms)
 
     def apply(self, sample, context=None):
-        new_sample = copy.deepcopy(sample)
-        new_sample = self.transforms(new_sample)
-        #sample['strong_aug'] = new_sample
-        return sample
-
-
-@register_op
-class StrongAugImage(BaseOperator):
-    def __init__(self, transforms):
-        super(StrongAugImage, self).__init__()
-        self.transforms = Compose(transforms)
-        # from paddle.vision.transforms import Compose
-        # self.transforms = Compose([
-        #         RandomColorJitter(
-        #             brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1,
-        #             prob=0.8), 
-        #         RandomErasingCrop(),
-        #         RandomGaussianBlur(sigma=[0.1, 2.0], prob=0.5),
-        #         RandomGrayscale(prob=0.2),
-        # ])
-
-    def apply(self, sample, context=None):
-        im = sample
-        im['image'] = sample['image'].astype('uint8')
-        results = self.transforms(im)
-        sample['image'] = results['image'].astype('uint8')
-        return sample
-
-
-@register_op
-class RandomDistortFloat32(BaseOperator):
-    """Random color distortion.
-    Args:
-        hue (list): hue settings. in [lower, upper, probability] format.
-        saturation (list): saturation settings. in [lower, upper, probability] format.
-        contrast (list): contrast settings. in [lower, upper, probability] format.
-        brightness (list): brightness settings. in [lower, upper, probability] format.
-        random_apply (bool): whether to apply in random (yolo) or fixed (SSD)
-            order.
-        count (int): the number of doing distrot
-        random_channel (bool): whether to swap channels randomly
-    """
-
-    def __init__(self,
-                 hue=[-18, 18, 0.5],
-                 saturation=[0.5, 1.5, 0.5],
-                 contrast=[0.5, 1.5, 0.5],
-                 brightness=[0.5, 1.5, 0.5],
-                 random_apply=True,
-                 count=4,
-                 random_channel=False):
-        super(RandomDistortFloat32, self).__init__()
-        self.hue = hue
-        self.saturation = saturation
-        self.contrast = contrast
-        self.brightness = brightness
-        self.random_apply = random_apply
-        self.count = count
-        self.random_channel = random_channel
-
-    def apply_hue(self, img):
-        low, high, prob = self.hue
-        if np.random.uniform(0., 1.) < prob:
-            return img
-
-        img = img.astype(np.float32)
-        # it works, but result differ from HSV version
-        delta = np.random.uniform(low, high)
-        u = np.cos(delta * np.pi)
-        w = np.sin(delta * np.pi)
-        bt = np.array([[1.0, 0.0, 0.0], [0.0, u, -w], [0.0, w, u]])
-        tyiq = np.array([[0.299, 0.587, 0.114], [0.596, -0.274, -0.321],
-                         [0.211, -0.523, 0.311]])
-        ityiq = np.array([[1.0, 0.956, 0.621], [1.0, -0.272, -0.647],
-                          [1.0, -1.107, 1.705]])
-        t = np.dot(np.dot(ityiq, bt), tyiq).T
-        img = np.dot(img, t)
-        return img
-
-    def apply_saturation(self, img):
-        low, high, prob = self.saturation
-        if np.random.uniform(0., 1.) < prob:
-            return img
-        delta = np.random.uniform(low, high)
-        img = img.astype(np.float32)
-        # it works, but result differ from HSV version
-        gray = img * np.array([[[0.299, 0.587, 0.114]]], dtype=np.float32)
-        gray = gray.sum(axis=2, keepdims=True)
-        gray *= (1.0 - delta)
-        img *= delta
-        img += gray
-        return img
-
-    def apply_contrast(self, img):
-        low, high, prob = self.contrast
-        if np.random.uniform(0., 1.) < prob:
-            return img
-        delta = np.random.uniform(low, high)
-        img = img.astype(np.float32)
-        img *= delta
-        return img
-
-    def apply_brightness(self, img):
-        low, high, prob = self.brightness
-        if np.random.uniform(0., 1.) < prob:
-            return img
-        delta = np.random.uniform(low, high)
-        img = img.astype(np.float32)
-        img += delta
-        return img
-
-    def apply(self, sample, context=None):
-        img = sample['image']
-        if self.random_apply:
-            functions = [
-                self.apply_brightness, self.apply_contrast,
-                self.apply_saturation, self.apply_hue
-            ]
-            distortions = np.random.permutation(functions)[:self.count]
-            for func in distortions:
-                img = func(img)
-            img = img.astype(np.float32)
-            sample['image'] = img
-            return sample
-
-        img = self.apply_brightness(img)
-        mode = np.random.randint(0, 2)
-
-        if mode:
-            img = self.apply_contrast(img)
-
-        img = self.apply_saturation(img)
-        img = self.apply_hue(img)
-
-        if not mode:
-            img = self.apply_contrast(img)
-
-        if self.random_channel:
-            if np.random.randint(0, 2):
-                img = img[..., np.random.permutation(3)]
-        img = img.astype(np.float32)
-        sample['image'] = img
-        return sample
-
-
-@register_op
-class RandomErasingRealImage(BaseOperator):
-    def __init__(self, prob=0.5, scale=[0.02, 0.2], ratio=[0.3, 3.3]):
-        super(RandomErasingRealImage, self).__init__()
-        self.prob = prob
-        self.scale = scale
-        self.ratio = ratio
-        #self.value = value
-
-    def get_params(self, img, scale, ratio):
-        img_h, img_w, img_c = img.shape
-        area = img_h * img_w
-        log_ratio = np.log(ratio)
-        for _ in range(10):
-            erase_area = area * np.random.uniform(scale[0], scale[1])
-            aspect_ratio = np.exp(np.random.uniform(log_ratio[0], log_ratio[1]))
-            h = int(round(math.sqrt(erase_area * aspect_ratio)))
-            w = int(round(math.sqrt(erase_area / aspect_ratio)))
-            if not (h < img_h and w < img_w):
-                continue
-
-            v = np.random.normal(size=[h, w, img_c])
-            i = np.random.randint(0, img_h - h + 1, 1)[0]
-            j = np.random.randint(0, img_w - w + 1, 1)[0]
-            return i, j, h, w, v
-        return 0, 0, img_h, img_w, img
-
-    def apply(self, sample, context=None):
-        if np.random.uniform(0, 1) < self.prob:
-            im = sample['image']
-            x, y, h, w, v = self.get_params(im, self.scale, self.ratio)
-            #print(x, y, h, w, v.shape)
-            im[x:x + h, y:y + w, :] = v
-            sample['image'] = im
-        return sample
-
-
-@register_op
-class RandomErasingBBox(BaseOperator):
-    def __init__(self, prob=0.5, lower=0.02, higher=0.4, aspect_ratio=0.3):
-        """
-        Random Erasing Data Augmentation, see https://arxiv.org/abs/1708.04896
-        Args:
-            prob (float): probability to carry out random erasing
-            lower (float): lower limit of the erasing area ratio
-            higher (float): upper limit of the erasing area ratio
-            aspect_ratio (float): aspect ratio of the erasing region
-        """
-        super(RandomErasingBBox, self).__init__()
-        self.prob = prob
-        self.lower = lower
-        self.higher = higher
-        self.aspect_ratio = aspect_ratio
-
-    def apply(self, sample, context=None):
-        gt_bbox = sample['gt_bbox']
-        im = sample['image']
-        if not isinstance(im, np.ndarray):
-            raise TypeError("{}: image is not a numpy array.".format(self))
-        if len(im.shape) != 3:
-            raise ImageError("{}: image is not 3-dimensional.".format(self))
-
-        for idx in range(gt_bbox.shape[0]):
-            if self.prob <= np.random.rand():
-                continue
-
-            x1, y1, x2, y2 = gt_bbox[idx, :]
-            w_bbox = x2 - x1
-            h_bbox = y2 - y1
-            area = w_bbox * h_bbox
-
-            target_area = random.uniform(self.lower, self.higher) * area
-            aspect_ratio = random.uniform(self.aspect_ratio,
-                                          1 / self.aspect_ratio)
-
-            h = int(round(math.sqrt(target_area * aspect_ratio)))
-            w = int(round(math.sqrt(target_area / aspect_ratio)))
-
-            if w < w_bbox and h < h_bbox:
-                off_y1 = random.randint(0, int(h_bbox - h))
-                off_x1 = random.randint(0, int(w_bbox - w))
-                im[int(y1 + off_y1):int(y1 + off_y1 + h), int(x1 + off_x1):int(
-                    x1 + off_x1 + w), :] = 0
-        sample['image'] = im
+        sample = self.transform1(sample)
+        sample = self.transform2(sample)
+        sample = self.transform3(sample)
         return sample

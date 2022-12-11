@@ -88,6 +88,8 @@ PaddleDetection团队提供了基于PP-YOLOE的各种垂类检测模型的配置
 |  行人检测   | CrowdHuman  |   [pphuman](../pphuman)  |
 |  车辆检测   | BDD100K、UA-DETRAC  |  [ppvehicle](../ppvehicle)   |
 |  小目标检测 | VisDrone、DOTA、xView |  [smalldet](../smalldet)   |
+| 密集目标检测 | SKU110k | [application](./application) |
+| 旋转框检测 | DOTA | [PP-YOLOE-R](../rotate/ppyoloe_r/) |
 
 
 ## 使用说明
@@ -125,7 +127,7 @@ python -m paddle.distributed.launch --gpus 0,1,2,3,4,5,6,7 tools/train.py -c con
 **注意:**
 - 如果需要边训练边评估，请添加`--eval`.
 - PP-YOLOE+支持混合精度训练，请添加`--amp`.
-- PaddleDetection支持多机训练，可以参考[多机训练教程](../../docs/DistributedTraining_cn.md).
+- PaddleDetection支持多机训练，可以参考[多机训练教程](../../docs/tutorials/DistributedTraining_cn.md).
 
 ### 评估
 

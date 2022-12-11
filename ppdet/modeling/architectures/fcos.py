@@ -44,6 +44,7 @@ class FCOS(BaseArch):
         self.backbone = backbone
         self.neck = neck
         self.fcos_head = fcos_head
+        self.is_teacher = False
 
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
@@ -65,8 +66,8 @@ class FCOS(BaseArch):
         body_feats = self.backbone(self.inputs)
         fpn_feats = self.neck(body_feats)
 
-        is_teacher = self.inputs.get('is_teacher', False)
-        if self.training or is_teacher:
+        self.is_teacher = self.inputs.get('is_teacher', False)
+        if self.training or self.is_teacher:
             losses = self.fcos_head(fpn_feats, self.inputs)
             return losses
         else:
@@ -130,27 +131,6 @@ class FCOS(BaseArch):
                 for _ in teacher_quality
             ],
             axis=0)
-
-        # student_logits = paddle.concat(
-        #     [permute_to_N_HWA_K(x, nc)
-        #      for x in student_logits], axis=1).reshape([-1, nc])
-        # teacher_logits = paddle.concat(
-        #     [permute_to_N_HWA_K(x, nc)
-        #      for x in teacher_logits], axis=1).reshape([-1, nc])
-
-        # student_deltas = paddle.concat(
-        #     [permute_to_N_HWA_K(x, 4)
-        #      for x in student_deltas], axis=1).reshape([-1, 4])
-        # teacher_deltas = paddle.concat(
-        #     [permute_to_N_HWA_K(x, 4)
-        #      for x in teacher_deltas], 1).reshape([-1, 4])
-
-        # student_quality = paddle.concat(
-        #     [permute_to_N_HWA_K(x, 1)
-        #      for x in student_quality], axis=1).reshape([-1, 1])
-        # teacher_quality = paddle.concat(
-        #     [permute_to_N_HWA_K(x, 1)
-        #      for x in teacher_quality], axis=1).reshape([-1, 1])
 
         with paddle.no_grad():
             # Region Selection

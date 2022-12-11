@@ -21,19 +21,19 @@ import sys
 import copy
 import time
 import typing
+import math
+import numpy as np
 
 import paddle
 import paddle.nn as nn
 import paddle.distributed as dist
 from paddle.distributed import fleet
 from ppdet.optimizer import ModelEMA, SimpleModelEMA
-from IPython import embed
 
 from ppdet.core.workspace import create
 from ppdet.utils.checkpoint import load_weight, load_pretrain_weight
 import ppdet.utils.stats as stats
 from ppdet.utils import profiler
-
 from ppdet.modeling.ssod_utils import align_weak_strong_shape
 from .trainer import Trainer
 
@@ -171,7 +171,6 @@ class Trainer_DenseTeacher(Trainer):
             self.cfg['EvalDataset'] = self.cfg.EvalDataset = create(
                 "EvalDataset")()
 
-        # model = self.model
         sync_bn = (getattr(self.cfg, 'norm_type', None) == 'sync_bn' and
                    self.cfg.use_gpu and self._nranks > 1)
         if sync_bn:
@@ -192,8 +191,11 @@ class Trainer_DenseTeacher(Trainer):
         self.status.update({
             'epoch_id': self.start_epoch,
             'step_id': 0,
-            'steps_per_epoch': len(self.loader)
+            'steps_per_epoch': len(self.loader),
+            'exchange_save_model': True,
         })
+        # Note: exchange_save_model
+        # in DenseTeacher SSOD, the teacher model will be higher, so exchange when saving pdparams
 
         self.status['batch_time'] = stats.SmoothedValue(
             self.cfg.log_iter, fmt='{avg:.4f}')
@@ -206,12 +208,7 @@ class Trainer_DenseTeacher(Trainer):
                 self.dataset, self.cfg.worker_num)
             self._flops(flops_loader)
         profiler_options = self.cfg.get('profiler_options', None)
-
         self._compose_callback.on_train_begin(self.status)
-        iter_id = -1
-        self.status['iter_id'] = 0
-        self.status['eval_interval'] = self.cfg.get('eval_interval', 2000)
-        self.status['save_interval'] = self.cfg.get('save_interval', 5000)
 
         train_cfg = self.cfg.DenseTeacher['train_cfg']
         concat_sup_data = train_cfg.get('concat_sup_data', True)
@@ -243,26 +240,16 @@ class Trainer_DenseTeacher(Trainer):
                 for k in self.model.get_loss_keys():
                     loss_dict.update({'distill_' + k: paddle.to_tensor([0.])})
 
-            #for step_id, data in enumerate(self.loader): # enumerate will bug
+            # Note: for step_id, data in enumerate(self.loader): # enumerate bug
             for step_id in range(len(self.loader)):
                 data = next(self.loader)
 
                 self.model.train()
                 self.ema.model.eval()
-                # try:
-                #     data_unsup = self.loader_unsup.next()
-                # except StopIteration:
-                #     self.loader_unsup = iter(self.loader_unsup)
-                #     data_unsup = self.loader_unsup.next()
-
                 data_sup_w, data_sup_s, data_unsup_w, data_unsup_s = data
-                # print('check data info sup ', data_sup_w['image'].sum(), data_sup_w['image'].mean(), data_sup_w['image'].shape, data_sup_s['image'].sum(), data_sup_s['image'].mean(), data_sup_s['image'].shape)
-                # print('check data info unsup ', data_unsup_w['image'].sum(), data_unsup_w['image'].mean(), data_unsup_w['image'].shape, data_unsup_s['image'].sum(), data_unsup_s['image'].mean(), data_unsup_s['image'].shape)
 
-                iter_id += 1
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
-                self.status['iter_id'] = iter_id
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
 
@@ -282,7 +269,7 @@ class Trainer_DenseTeacher(Trainer):
                     loss_dict_sup_w = self.model(data_sup_w)
                     loss_dict_sup = self.model(data_sup_s)
                     for k, v in loss_dict_sup_w.items():
-                        loss_dict_sup[k] = (loss_dict_sup[k] + v) / 2
+                        loss_dict_sup[k] = (loss_dict_sup[k] + v) * 0.5
 
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
@@ -303,13 +290,17 @@ class Trainer_DenseTeacher(Trainer):
                         tar_iter = st_iter * 2
                         if curr_iter <= tar_iter:
                             unsup_weight *= (curr_iter - st_iter) / st_iter
+                    elif train_cfg['suppress'] == 'exp':
+                        tar_iter = st_iter + 2000
+                        if curr_iter <= tar_iter:
+                            scale = np.exp((curr_iter - tar_iter) / 1000)
+                            unsup_weight *= scale
+                    elif train_cfg['suppress'] == 'step':
+                        tar_iter = st_iter * 2
+                        if curr_iter <= tar_iter:
+                            unsup_weight *= 0.25
                     else:
                         raise ValueError
-
-                    #print('check data info sup ', step_id, data_unsup[0]['im_id'], data_unsup[0]['image'].sum(), data_unsup[0]['image'].shape)
-                    #print('check data info sup ', step_id, data_unsup[1]['im_id'], data_unsup[1]['image'].sum(), data_unsup[1]['image'].shape)
-                    # print('check data info sup ', step_id, data_unsup[0]['im_id'], data_unsup[0]['image'].sum(), data_unsup[0]['image'].shape)
-                    # print('check data info sup ', step_id, data_unsup[1]['im_id'], data_unsup[1]['image'].sum(), data_unsup[1]['image'].shape)
 
                     if data_unsup_w['image'].shape != data_unsup_s[
                             'image'].shape:
@@ -318,8 +309,6 @@ class Trainer_DenseTeacher(Trainer):
 
                     data_unsup_w['epoch_id'] = epoch_id
                     data_unsup_s['epoch_id'] = epoch_id
-                    #print('check data info sup ', step_id, data_sup_w['image'].sum(), data_sup_w['image'].shape, data_sup_s['image'].sum(), data_sup_s['image'].shape)
-                    #print('check data info unsup ', step_id, data_unsup_w['image'].sum(), data_unsup_w['image'].shape, data_unsup_s['image'].sum(), data_unsup_s['image'].shape)
 
                     data_unsup_s['get_data'] = True
                     student_preds = self.model(data_unsup_s)
@@ -358,13 +347,13 @@ class Trainer_DenseTeacher(Trainer):
                     loss_dict.update({"fg_sum": fg_num})
                     loss_dict['loss'] = losses
 
-                self.optimizer.step()  # amp not used
+                self.optimizer.step()
                 curr_lr = self.optimizer.get_lr()
                 self.lr.step()
                 self.optimizer.clear_grad()
                 self.status['learning_rate'] = curr_lr
                 if self._nranks < 2 or self._local_rank == 0:
-                    self.status['training_staus'].update(loss_dict)  # outputs
+                    self.status['training_staus'].update(loss_dict)
 
                 self.status['batch_time'].update(time.time() - iter_tic)
                 self._compose_callback.on_step_end(self.status)
@@ -373,15 +362,13 @@ class Trainer_DenseTeacher(Trainer):
                     logger.info("***" * 30)
                     logger.info('EMA starting ...')
                     logger.info("***" * 30)
-                    self.ema.update(self.model, decay=0.)
+                    self.ema.update(self.model, decay=0)
                 elif self.use_ema and curr_iter > self.ema_start_iters:
                     self.ema.update(self.model)
                 iter_tic = time.time()
 
             is_snapshot = (self._nranks < 2 or self._local_rank == 0) \
                        and ((epoch_id + 1) % self.cfg.snapshot_epoch == 0 or epoch_id == self.end_epoch - 1)
-            # is_snapshot = (self._nranks < 2 or self._local_rank == 0) \
-            #            and ((iter_id + 1) % self.cfg.eval_interval == 0 or epoch_id == self.end_epoch - 1)
             if is_snapshot and self.use_ema:
                 # apply ema weight on model
                 weight = copy.deepcopy(self.ema.model.state_dict())
@@ -444,10 +431,10 @@ class Trainer_DenseTeacher(Trainer):
 
         test_cfg = self.cfg.DenseTeacher['test_cfg']
         if test_cfg['inference_on'] == 'teacher':
-            print("***** teacher evaluate *****")
+            logger.info("***** teacher model evaluating *****")
             eval_model = self.ema.model
         else:
-            print("***** student evaluate *****")
+            logger.info("***** student model evaluating *****")
             eval_model = self.model
 
         eval_model.eval()
