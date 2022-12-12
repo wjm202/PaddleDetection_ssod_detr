@@ -55,6 +55,7 @@ def align_weak_strong_shape(data_weak, data_strong):
                     gt_bboxes[i][:, 0::2] = gt_bboxes[i][:, 0::2] * scale_x_w
                     gt_bboxes[i][:, 1::2] = gt_bboxes[i][:, 1::2] * scale_y_w
             data_weak['gt_bbox'] = gt_bboxes
+            
     return data_weak, data_strong
 
 

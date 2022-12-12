@@ -317,17 +317,29 @@ class Trainer_DenseTeacher(Trainer):
                         teacher_preds = self.ema.model(data_unsup_w)
 
                     if self._nranks > 1:
-                        loss_dict_unsup = self.model._layers.get_distill_loss(
+                        gt_meta = self.get_distill_loss(
                             student_preds,
                             teacher_preds
                             )
+                        gt_meta['gt_class'] = paddle.to_tensor(gt_meta['gt_class'],dtype="int32")
+                        gt_meta['gt_bbox'] = paddle.to_tensor(gt_meta['gt_bbox'],dtype="float32")
+                        gt_meta['pad_gt_mask']=paddle.to_tensor( gt_meta['pad_gt_mask'],dtype="int32")
+                        loss_dict_unsup = self.model._layers.yolo_head.get_loss(student_preds,gt_meta)
                     else:
-                        loss_dict_unsup = self.model.get_distill_loss(
+                        gt_meta = self.get_distill_loss(
                             student_preds,
                             teacher_preds)
-
+                        gt_meta['gt_class'] = paddle.to_tensor(gt_meta['gt_class'],dtype="int32")
+                        gt_meta['gt_bbox'] = paddle.to_tensor(gt_meta['gt_bbox'],dtype="float32")
+                        gt_meta['pad_gt_mask']=paddle.to_tensor( gt_meta['pad_gt_mask'],dtype="int32")
+                        loss_dict_unsup = self.model.yolo_head.get_loss(student_preds,gt_meta)
                     # fg_num = loss_dict_unsup["fg_sum"]
                     # del loss_dict_unsup["fg_sum"]
+                    loss_dict_unsup["distill_loss_cls"] = loss_dict_unsup.pop("loss_cls")
+                    loss_dict_unsup["distill_loss_iou"] = loss_dict_unsup.pop("loss_iou")
+                    loss_dict_unsup["distill_loss_dfl"] = loss_dict_unsup.pop("loss_dfl")
+                    del loss_dict_unsup["loss"]
+                    del loss_dict_unsup["loss_l1"]
                     distill_weights = train_cfg['loss_weight']
                     loss_dict_unsup = {
                         k: v * distill_weights[k]
@@ -476,3 +488,39 @@ class Trainer_DenseTeacher(Trainer):
         self._compose_callback.on_epoch_end(self.status)
         # reset metric states for metric may performed multiple times
         self._reset_metrics()
+    def get_distill_loss(self, head_outs, teacher_head_outs):
+        bbox,bbox_num=teacher_head_outs
+        cls_thr=self.cls_thr
+        bbox_num_list=[bbox_num[i].numpy() for i in range(len(bbox_num))]
+        bbox_list=[bbox[i].numpy() for i in range(len(bbox))]
+        gt_meta={}
+        pad_gt_mask=[]
+        gt_bbox=[]
+        for i in range(len(bbox_list)):
+                a=np.ones([300,1])
+                b=np.zeros([300,6])
+                b_mask= [False for _ in range(len(bbox_list[i]))]
+                for j in range(len(bbox_list[i])):
+                        ids=int(bbox_list[i][:,0][j])
+                        if bbox_list[i][:,1][j] >cls_thr[ids]:
+                            b_mask[j] = True
+                if sum(b_mask)==0:
+                    gt_bbox.append(b)
+                else:
+                    b[:len(bbox[i][b_mask])]=bbox[i][b_mask]
+                    gt_bbox.append(b)
+                a[int(sum(b_mask)):]=0
+                pad_gt_mask.append(a)
+        gt_bbox=np.stack( [_ for _ in gt_bbox],axis=0)       
+        pad_gt_mask=np.stack([_ for _ in pad_gt_mask] ,axis=0)
+        gt_meta['gt_class'] = np.expand_dims(gt_bbox[:,:,0],axis=-1)
+        gt_meta['gt_bbox'] = gt_bbox[:,:,2:6]
+        gt_meta['pad_gt_mask']= pad_gt_mask
+        gt_meta['epoch_id'] =100
+        # gt_meta['gt_class'] = paddle.to_tensor(np.expand_dims(gt_bbox[:,:,0],axis=-1),dtype="int32")
+        # gt_meta['gt_bbox'] = paddle.to_tensor(gt_bbox[:,:,2:6],dtype="float32")
+        # gt_meta['pad_gt_mask']=paddle.to_tensor(pad_gt_mask,dtype="int32")
+        # gt_meta['epoch_id'] =100
+
+        # loss=self.yolo_head.get_loss(head_outs,gt_meta)
+        return gt_meta

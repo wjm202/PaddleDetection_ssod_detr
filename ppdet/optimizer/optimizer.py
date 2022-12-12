@@ -286,6 +286,8 @@ class OptimizerBuilder():
 
     def __call__(self, learning_rate, model=None):
         if self.clip_grad_by_norm is not None:
+            # nn.ClipGradByGlobalNorm(
+            #     clip_norm=self.clip_grad_by_norm)
             grad_clip = nn.ClipGradByNorm(
                 clip_norm=self.clip_grad_by_norm)
         elif self.clip_grad_by_value is not None:
