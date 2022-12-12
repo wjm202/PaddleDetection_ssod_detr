@@ -73,11 +73,13 @@ def QFLv2(pred_sigmoid,
           teacher_sigmoid,
           weight=None,
           beta=2.0,
+          weight_neg=1.0,
           reduction='mean'):
     pt = pred_sigmoid
     zerolabel = paddle.zeros_like(pt)
     loss = F.binary_cross_entropy(
         pred_sigmoid, zerolabel, reduction='none') * pt.pow(beta)
+    loss=loss*weight_neg
     pos = weight > 0
 
     pt = teacher_sigmoid[pos] - pred_sigmoid[pos]

@@ -16,7 +16,6 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from numpy import int32
 from sqlalchemy import true
 
 from ppdet.core.workspace import register, create
@@ -46,7 +45,6 @@ class YOLOv3(BaseArch):
                  for_mot=False):
         """
         YOLOv3 network, see https://arxiv.org/abs/1804.02767
-
         Args:
             backbone (nn.Layer): backbone instance
             neck (nn.Layer): neck instance
@@ -63,8 +61,7 @@ class YOLOv3(BaseArch):
         self.post_process = post_process
         self.for_mot = for_mot
         self.return_idx = isinstance(post_process, JDEBBoxPostProcess)
-        self.cls_thr = [0.9] * 80
-        self.cls_thr_ig = [0.2] * 80
+
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
         # backbone
@@ -99,10 +96,7 @@ class YOLOv3(BaseArch):
         is_teacher = self.inputs.get('is_teacher', False)
         if self.training or is_teacher:
             yolo_losses = self.yolo_head(neck_feats, self.inputs)
-            if is_teacher:
-                  bbox, bbox_num = self.yolo_head.post_process(
-                        yolo_losses, paddle.ones_like(self.inputs['scale_factor']),is_teacher=True,)
-                  return bbox, bbox_num  
+
             if self.for_mot:
                 return {'det_losses': yolo_losses, 'emb_feats': emb_feats}
             else:
@@ -131,7 +125,7 @@ class YOLOv3(BaseArch):
                         self.inputs['im_shape'], self.inputs['scale_factor'])
                 else:
                     bbox, bbox_num = self.yolo_head.post_process(
-                        yolo_head_outs, self.inputs['scale_factor'],cls_thr=self.cls_thr)
+                        yolo_head_outs, self.inputs['scale_factor'])
                 output = {'bbox': bbox, 'bbox_num': bbox_num}
 
             return output
@@ -145,36 +139,6 @@ class YOLOv3(BaseArch):
     def get_loss_keys(self):
         return ['loss_cls', 'loss_iou', 'loss_dfl']
 
-    def get_distill_loss(self, head_outs, teacher_head_outs):
-
-        bbox,bbox_num=teacher_head_outs
-        gt_meta={}
-        pad_gt_mask=[]
-        n=300
-        for i in range((head_outs[0].shape[0])):
-            a=paddle.ones([300,1])
-            b=paddle.zeros([300,6])
-            b_mask= bbox[i][:,1]==1
-            for j in range(len(bbox[i])):
-                cls_thr=self.cls_thr[bbox[i][:,0][j]]
-                b_mask[j]=bbox[i][:,1][j]>cls_thr
-            b[:len(bbox[i][b_mask])]=bbox[i][b_mask]
-            bbox[i]=b
-            a[int((b_mask).sum()):]=0
-            pad_gt_mask.append(a)
-        bbox=paddle.stack( [_ for _ in bbox],axis=0)       
-        pad_gt_mask=paddle.stack([_ for _ in pad_gt_mask] ,axis=0)
-        gt_meta['gt_class'] = bbox[:,:,0].unsqueeze(-1).astype(paddle.int32)
-        gt_meta['gt_bbox'] = bbox[:,:,2:6]
-        gt_meta['pad_gt_mask']=pad_gt_mask.astype(paddle.int32)
-        gt_meta['epoch_id'] =100
-        loss=self.yolo_head.get_loss(head_outs,gt_meta)
-        return {
-            "distill_loss_cls": loss['loss_cls'],
-            "distill_loss_iou": loss['loss_iou'],
-            "distill_loss_dfl": loss['loss_dfl']
-        }
-
         
     def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
         # student_probs: already sigmoid
@@ -187,24 +151,20 @@ class YOLOv3(BaseArch):
         teacher_deltas = teacher_deltas.reshape([-1, 4])
         student_dfl = student_dfl.reshape([-1, 4, 17])
         teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
-        b_mask=[[]*nc]
-        for i in range(nc):
-            cls_thr=self.cls_thr[i]
-            b_mask[j]=student_probs[:,i]>cls_thr
-        b_mask=paddle.concat([ _ for _ in b_mask],axis=-1)
-        b_mask=b_mask.transpose([1,0])
-        mask=b_mask.sum(1)
         with paddle.no_grad():
-            # Region Selection
-            count_num = int(teacher_probs.shape[0] * ratio)
-            #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
-            max_vals = paddle.max(teacher_probs, 1)
-            sorted_vals, sorted_inds = paddle.topk(max_vals,
-                                                   teacher_probs.shape[0])
-            mask = paddle.zeros_like(max_vals)
-            mask[sorted_inds[:count_num]] = 1.
-            fg_num = sorted_vals[:count_num].sum()
+            b_mask=[ paddle.zeros_like(student_deltas[:,0])>0 for i in range(nc)]
+            for i in range(nc):
+                for j in range(teacher_probs.shape[0]):
+                    cls_thr=self.cls_thr[i]
+                    if teacher_probs[j,i]>cls_thr:
+                       b_mask[i][j]=True
+            b_mask=paddle.concat([ _ for _ in b_mask],axis=-1).reshape([-1,nc])
+            b_mask=b_mask.transpose([1,0])
+            mask=b_mask.sum(0)
             b_mask = mask > 0.
+            max_vals=paddle.max(teacher_probs[b_mask],1)
+            fg_num=len(teacher_probs[b_mask])
+            # fg_num= max_vals.sum()
 
         loss_logits = QFLv2(
             student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num

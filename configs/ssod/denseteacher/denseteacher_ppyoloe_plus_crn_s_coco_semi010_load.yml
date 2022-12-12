@@ -2,15 +2,15 @@ _BASE_: [
   '../../ppyoloe/ppyoloe_plus_crn_s_80e_coco.yml',
   '../_base_/coco_detection_percent_10.yml',
 ]
-log_iter: 20
+log_iter: 1
 snapshot_epoch: 2
 epochs: &epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
-update_interval: 1
+update_interval: 1000
 ### pretrain and warmup config, choose one and coment another
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/ssod/ppyoloe_plus_crn_s_80e_coco_sup010.pdparams # mAP=35.3
-semi_start_iters: 0
-ema_start_iters: 0
+semi_start_iters: -1
+ema_start_iters: -1
 use_warmup: &use_warmup False
 
 # pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
@@ -27,7 +27,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 1.0, distill_loss_dfl: 1.0}
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 1.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -56,16 +56,14 @@ SemiTrainReader:
       ]}
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   sup_batch_transforms:
-    - BatchRandomResize: {target_size: [320,768],  random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
-    - PadBatch: {pad_to_stride: 32}
     - PadGT: {}
   unsup_batch_transforms:
-    - BatchRandomResize: {target_size: [320,768],  random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
-    - PadBatch: {pad_to_stride: 32}
-  sup_batch_size: 2
-  unsup_batch_size: 2
+  sup_batch_size: 8
+  unsup_batch_size: 8
   shuffle: True
   drop_last: True
   collate_batch: True
@@ -173,10 +171,10 @@ OptimizerBuilder:
 
 TrainDatasetLM:
   !LMCocoDataset
-    image_dir: val2017
-    anno_path: annotations/instances_val2017.json
+    image_dir: train2017
+    anno_path: semi_annotations/instances_train2017.1@10.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class']
-    manual_length: 5000
+    manual_length: 10000
 percent: 0.2
 label_match: True

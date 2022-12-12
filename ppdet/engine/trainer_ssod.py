@@ -15,6 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+from lib2to3.pytree import NodePattern
 
 import os
 import sys
@@ -29,6 +30,7 @@ import paddle.nn as nn
 import paddle.distributed as dist
 from paddle.distributed import fleet
 from ppdet.optimizer import ModelEMA, SimpleModelEMA
+import paddle.nn.functional as F
 
 from ppdet.core.workspace import create
 from ppdet.utils.checkpoint import load_weight, load_pretrain_weight
@@ -37,6 +39,9 @@ from ppdet.utils import profiler
 from ppdet.modeling.ssod_utils import align_weak_strong_shape
 from ppdet.engine.labelmatch_callbacks import LabelMatchCallback
 from .trainer import Trainer
+from ppdet.modeling.ssod_utils import QFLv2
+from ppdet.modeling.losses import GIoULoss
+
 
 from ppdet.utils.logger import setup_logger
 logger = setup_logger('ppdet.engine')
@@ -317,17 +322,17 @@ class Trainer_DenseTeacher(Trainer):
                         teacher_preds = self.ema.model(data_unsup_w)
 
                     if self._nranks > 1:
-                        loss_dict_unsup = self.model._layers.get_distill_loss(
+                        loss_dict_unsup = self.get_distill_loss(
                             student_preds,
                             teacher_preds
                             )
                     else:
-                        loss_dict_unsup = self.model.get_distill_loss(
+                        loss_dict_unsup = self.get_distill_loss(
                             student_preds,
                             teacher_preds)
 
-                    # fg_num = loss_dict_unsup["fg_sum"]
-                    # del loss_dict_unsup["fg_sum"]
+                    fg_num = loss_dict_unsup["fg_sum"]
+                    del loss_dict_unsup["fg_sum"]
                     distill_weights = train_cfg['loss_weight']
                     loss_dict_unsup = {
                         k: v * distill_weights[k]
@@ -343,7 +348,7 @@ class Trainer_DenseTeacher(Trainer):
                     loss_dict.update(loss_dict_unsup)
                     loss_dict.update({'loss_unsup_sum': losses_unsup})
                     losses += losses_unsup.detach()
-                    # loss_dict.update({"fg_sum": fg_num})
+                    loss_dict.update({"fg_sum": fg_num})
                     loss_dict['loss'] = losses
 
                 self.optimizer.step()
@@ -476,3 +481,90 @@ class Trainer_DenseTeacher(Trainer):
         self._compose_callback.on_epoch_end(self.status)
         # reset metric states for metric may performed multiple times
         self._reset_metrics()
+
+
+
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
+        # student_probs: already sigmoid
+        student_probs, student_deltas, student_dfl = head_outs
+        teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
+        nc = student_probs.shape[-1]
+        student_probs = student_probs.reshape([-1, nc])
+        student_deltas = student_deltas.reshape([-1, 4])
+        teacher_probs = teacher_probs.reshape([-1, nc])
+        teacher_deltas = teacher_deltas.reshape([-1, 4])
+        student_dfl = student_dfl.reshape([-1, 4, 17])
+        teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
+        score=teacher_probs.numpy()
+
+        b_mask=[ np.zeros_like(student_deltas[:,0])>0 for i in range(nc)] #[ np.zeros_like(student_deltas[:,0])>0 for i in range(nc)]
+        for i in range(nc):
+            for j in range( score.shape[0]):
+                cls_thr=self.cls_thr[i]
+                if  score[j,i]>cls_thr:
+                    b_mask[i][j]=True
+        b_mask=np.stack([ _ for _ in b_mask],axis=-1)
+        # b_mask=b_mask.transpose([1,0])
+        mask=b_mask.sum(1)
+        b_mask = mask > 0.
+        max_vals=paddle.max(teacher_probs[b_mask],1)
+        # fg_num=len(teacher_probs[b_mask])
+        fg_num= max_vals.sum()
+
+        loss_logits = QFLv2(
+            student_probs, teacher_probs, weight=mask,weight_neg=0.5, reduction="sum") / fg_num
+        # [88872, 80] [88872, 80]
+
+        inputs = paddle.concat(
+            (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
+            axis=-1)
+        targets = paddle.concat(
+            (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
+            axis=-1)
+        iou_loss = GIoULoss(reduction='mean')
+        loss_deltas = iou_loss(inputs, targets)
+
+        #loss_dfl = paddle.to_tensor([0])  # todo
+        student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
+        teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
+
+        loss_dfl = self.distribution_focal_loss(student_dfl_pred,
+                                                teacher_dfl_tar)
+        # todo: weight_targets
+
+        return {
+            "distill_loss_cls": loss_logits,
+            "distill_loss_iou": loss_deltas,
+            "distill_loss_dfl": loss_dfl,
+            "fg_sum": paddle.to_tensor(fg_num),
+        }
+
+    def _df_loss(self, pred_dist, target):  # [810, 4, 17]  [810, 4]
+        target_left = paddle.cast(target, 'int64')
+        target_right = target_left + 1
+        weight_left = target_right.astype('float32') - target
+        weight_right = 1 - weight_left
+        loss_left = F.cross_entropy(
+            pred_dist, target_left, reduction='none') * weight_left
+        loss_right = F.cross_entropy(
+            pred_dist, target_right, reduction='none') * weight_right
+        return (loss_left + loss_right).mean(-1, keepdim=True)
+
+    def distribution_focal_loss(self,
+                                pred_corners,
+                                target_corners,
+                                weight_targets=None):
+        target_corners_label = F.softmax(target_corners, axis=-1)
+        loss_dfl = F.cross_entropy(
+            pred_corners,
+            target_corners_label,
+            soft_label=True,
+            reduction='none')
+        loss_dfl = loss_dfl.sum(1)
+        if weight_targets is not None:
+            loss_dfl = loss_dfl * (weight_targets.expand([-1, 4]).reshape([-1]))
+            loss_dfl = loss_dfl.sum(-1) / weight_targets.sum()
+        else:
+            loss_dfl = loss_dfl.mean(-1)
+        loss_dfl = loss_dfl / 4.  # 4 direction
+        return loss_dfl

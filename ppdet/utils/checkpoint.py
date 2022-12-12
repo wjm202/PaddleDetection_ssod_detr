@@ -138,7 +138,6 @@ def match_state_dict(model_state_dict, weight_state_dict):
     """
     Match between the model state dict and pretrained weight state dict.
     Return the matched state dict.
-
     The method supposes that all the names in pretrained weight state dict are
     subclass of the names in models`, if the prefix 'backbone.' in pretrained weight
     keys is stripped. And we could get the candidates for each model key. Then we
@@ -244,7 +243,6 @@ def save_model(model,
                ema_model=None):
     """
     save model into disk.
-
     Args:
         model (dict): the model state_dict to save parameters.
         optimizer (paddle.optimizer.Optimizer): the Optimizer instance to
