@@ -497,8 +497,8 @@ class Trainer_DenseTeacher(Trainer):
         pad_gt_mask=[]
         gt_bbox=[]
         for i in range(len(bbox_list)):
-                a=np.ones([300,1])
-                b=np.zeros([300,6])
+                a=np.ones([50,1])
+                b=np.zeros([50,6])
                 b_mask= [False for _ in range(len(bbox_list[i]))]
                 for j in range(len(bbox_list[i])):
                         ids=int(bbox_list[i][:,0][j])
@@ -517,10 +517,4 @@ class Trainer_DenseTeacher(Trainer):
         gt_meta['gt_bbox'] = gt_bbox[:,:,2:6]
         gt_meta['pad_gt_mask']= pad_gt_mask
         gt_meta['epoch_id'] =100
-        # gt_meta['gt_class'] = paddle.to_tensor(np.expand_dims(gt_bbox[:,:,0],axis=-1),dtype="int32")
-        # gt_meta['gt_bbox'] = paddle.to_tensor(gt_bbox[:,:,2:6],dtype="float32")
-        # gt_meta['pad_gt_mask']=paddle.to_tensor(pad_gt_mask,dtype="int32")
-        # gt_meta['epoch_id'] =100
-
-        # loss=self.yolo_head.get_loss(head_outs,gt_meta)
         return gt_meta
