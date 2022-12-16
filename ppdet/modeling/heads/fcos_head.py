@@ -313,7 +313,6 @@ class FCOSHead(nn.Layer):
         losses_fcos = self.fcos_loss(cls_logits, bboxes_reg, centerness,
                                      tag_labels, tag_bboxes, tag_centerness)
         return losses_fcos
-
     def _post_process_by_level(self,
                                locations,
                                box_cls,
@@ -322,7 +321,7 @@ class FCOSHead(nn.Layer):
                                sqrt_score=False):
         box_scores = F.sigmoid(box_cls).flatten(2).transpose([0, 2, 1])
         box_centerness = F.sigmoid(box_ctn).flatten(2).transpose([0, 2, 1])
-        pred_scores = box_scores * box_centerness
+        pred_scores = box_scores
         if sqrt_score:
             pred_scores = paddle.sqrt(pred_scores)
 
@@ -339,25 +338,97 @@ class FCOSHead(nn.Layer):
 
         return pred_scores, pred_boxes
 
+    # def post_process(self, fcos_head_outs, scale_factor):
+    #     locations, cls_logits, bboxes_reg, centerness = fcos_head_outs
+    #     pred_bboxes, pred_scores = [], []
+
+    #     for pts, cls, reg, ctn in zip(locations, cls_logits, bboxes_reg,
+    #                                   centerness):
+    #         scores, boxes = self._post_process_by_level(pts, cls, reg, ctn,
+    #                                                     self.sqrt_score)
+    #         pred_scores.append(scores)
+    #         pred_bboxes.append(boxes)
+    #     pred_bboxes = paddle.concat(pred_bboxes, axis=1)
+    #     pred_scores = paddle.concat(pred_scores, axis=1)
+    #     pred_bboxes= pred_bboxes.squeeze(0)
+    #     pred_scores=pred_scores.squeeze(0)
+    #     # pred_scores=pred_scores.transpose([1,0])
+    #     with paddle.no_grad():
+    #     # Region Selection
+    #         count_num = int(pred_scores.shape[0] * 0.01)
+    #         teacher_probs = pred_scores
+    #         max_vals = paddle.max(teacher_probs, 1)
+    #         sorted_vals, sorted_inds = paddle.topk(max_vals,
+    #                                             pred_scores.shape[0])
+    #         mask = paddle.zeros_like(max_vals)
+    #         mask[sorted_inds[:count_num]] = 1.
+    #         fg_num = sorted_vals[:count_num].sum()
+    #         b_mask = mask > 0    
+    #     # scale bbox to origin
+    #     pred_scores=pred_scores[b_mask]
+    #     pred_bboxes=pred_bboxes[b_mask]
+    #     pred_bboxes= pred_bboxes.unsqueeze(0)
+    #     pred_scores=pred_scores.unsqueeze(0)
+    #     scale_y, scale_x = paddle.split(scale_factor, 2, axis=-1)
+    #     scale_factor = paddle.concat(
+    #         [scale_x, scale_y, scale_x, scale_y], axis=-1).reshape([-1, 1, 4])
+    #     pred_bboxes /= scale_factor
+    #     pred_bboxes= pred_bboxes.squeeze(0)
+    #     pred_scores=pred_scores.squeeze(0)
+    #     pre_cls=paddle.argmax(pred_scores,axis=-1)
+    #     pred_sc=paddle.max(pred_scores,axis=-1)
+    #     pre=paddle.stack([pre_cls.astype(float),pred_sc.astype(float)],axis=-1)
+    #     bbox_pred=paddle.zeros([pre.shape[0],6]).astype(float)
+    #     for i in range(pre.shape[0]):
+    #         bbox_pred[i]=paddle.concat([pre[i],pred_bboxes[i].astype(float)])
+    #     # pred_scores = pred_scores.transpose([0, 2, 1])
+
+    #     # bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+
+    #     return bbox_pred, paddle.to_tensor(bbox_pred.shape[0])
+
+
+
+
+
+
     def post_process(self, fcos_head_outs, scale_factor):
-        locations, cls_logits, bboxes_reg, centerness = fcos_head_outs
-        pred_bboxes, pred_scores = [], []
+            locations, cls_logits, bboxes_reg, centerness = fcos_head_outs
+            pred_bboxes, pred_scores = [], []
 
-        for pts, cls, reg, ctn in zip(locations, cls_logits, bboxes_reg,
-                                      centerness):
-            scores, boxes = self._post_process_by_level(pts, cls, reg, ctn,
-                                                        self.sqrt_score)
-            pred_scores.append(scores)
-            pred_bboxes.append(boxes)
-        pred_bboxes = paddle.concat(pred_bboxes, axis=1)
-        pred_scores = paddle.concat(pred_scores, axis=1)
+            for pts, cls, reg, ctn in zip(locations, cls_logits, bboxes_reg,
+                                        centerness):
+                scores, boxes = self._post_process_by_level(pts, cls, reg, ctn,
+                                                            self.sqrt_score)
+                pred_scores.append(scores)
+                pred_bboxes.append(boxes)
+            pred_bboxes = paddle.concat(pred_bboxes, axis=1)
+            pred_scores = paddle.concat(pred_scores, axis=1)
+            pred_bboxes= pred_bboxes.squeeze(0)
+            pred_scores=pred_scores.squeeze(0)
+            # pred_scores=pred_scores.transpose([1,0])
+            with paddle.no_grad():
+            # Region Selection
+                count_num = int(pred_scores.shape[0] * 0.01)
+                teacher_probs = F.sigmoid(pred_scores)
+                max_vals = paddle.max(teacher_probs, 1)
+                sorted_vals, sorted_inds = paddle.topk(max_vals,
+                                                    pred_scores.shape[0])
+                mask = paddle.zeros_like(max_vals)
+                mask[sorted_inds[:count_num]] = 1.
+                fg_num = sorted_vals[:count_num].sum()
+                b_mask = mask > 0    
+            # scale bbox to origin
+            pred_scores=pred_scores[b_mask]
+            pred_bboxes=pred_bboxes[b_mask]
+            pred_scores=paddle.unsqueeze( pred_scores,axis=0)
+            pred_bboxes=paddle.unsqueeze( pred_bboxes,axis=0)
+            scale_y, scale_x = paddle.split(scale_factor, 2, axis=-1)
+            scale_factor = paddle.concat(
+                [scale_x, scale_y, scale_x, scale_y], axis=-1).reshape([-1, 1, 4])
+            pred_bboxes /= scale_factor
 
-        # scale bbox to origin
-        scale_y, scale_x = paddle.split(scale_factor, 2, axis=-1)
-        scale_factor = paddle.concat(
-            [scale_x, scale_y, scale_x, scale_y], axis=-1).reshape([-1, 1, 4])
-        pred_bboxes /= scale_factor
-
-        pred_scores = pred_scores.transpose([0, 2, 1])
-        bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
-        return bbox_pred, bbox_num
+            pred_scores = pred_scores.transpose([0, 2, 1])
+            # bbox_pred, bbox_num, _ = self.nms(paddle.unsqueeze(pred_bboxes[b_mask],axis=0), pred_scores[b_mask].transpose([1,0]).unsqueeze(0))
+            bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+            return bbox_pred, bbox_num

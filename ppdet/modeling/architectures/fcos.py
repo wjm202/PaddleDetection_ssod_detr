@@ -76,6 +76,7 @@ class FCOS(BaseArch):
                 fcos_head_outs, self.inputs['scale_factor'])
             return {'bbox': bbox_pred, 'bbox_num': bbox_num}
 
+
     def get_loss(self):
         return self._forward()
 

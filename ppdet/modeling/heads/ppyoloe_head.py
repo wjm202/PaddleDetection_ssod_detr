@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+from matplotlib.transforms import BboxBase
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
@@ -24,6 +26,7 @@ from ..assigners.utils import generate_anchors_for_grid_cell
 from ppdet.modeling.backbones.cspresnet import ConvBNLayer
 from ppdet.modeling.ops import get_static_shape, get_act_fn
 from ppdet.modeling.layers import MultiClassNMS
+from IPython import embed
 
 __all__ = ['PPYOLOEHead']
 
@@ -104,6 +107,7 @@ class PPYOLOEHead(nn.Layer):
         self.exclude_nms = exclude_nms
         self.exclude_post_process = exclude_post_process
         self.use_shared_conv = use_shared_conv
+        self.is_teacher = False
 
         # stem
         self.stem_cls = nn.LayerList()
@@ -169,6 +173,18 @@ class PPYOLOEHead(nn.Layer):
             reg_distri_list.append(reg_distri.flatten(2).transpose([0, 2, 1]))
         cls_score_list = paddle.concat(cls_score_list, axis=1)
         reg_distri_list = paddle.concat(reg_distri_list, axis=1)
+
+        if targets.get('is_teacher', False):
+            anchor_points_s = anchor_points / stride_tensor
+            pred_bboxes, new_reg_distri_list = self._bbox_decode(
+                anchor_points_s, reg_distri_list)
+            return cls_score_list, pred_bboxes, new_reg_distri_list
+
+        if targets.get('get_data', False):
+            anchor_points_s = anchor_points / stride_tensor
+            pred_bboxes, new_reg_distri_list = self._bbox_decode(
+                anchor_points_s, reg_distri_list)
+            return cls_score_list, pred_bboxes, new_reg_distri_list
 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
@@ -238,6 +254,13 @@ class PPYOLOEHead(nn.Layer):
         if self.training:
             return self.forward_train(feats, targets)
         else:
+            if targets is not None:
+                self.is_teacher = targets.get('is_teacher', False)
+                if self.is_teacher:
+                    return self.forward_train(feats, targets)
+                else:
+                    return self.forward_eval(feats)
+
             return self.forward_eval(feats)
 
     @staticmethod
@@ -259,9 +282,10 @@ class PPYOLOEHead(nn.Layer):
 
     def _bbox_decode(self, anchor_points, pred_dist):
         _, l, _ = get_static_shape(pred_dist)
-        pred_dist = F.softmax(pred_dist.reshape([-1, l, 4, self.reg_channels]))
+        tmp_pred_dist = pred_dist.reshape([-1, l, 4, self.reg_channels])
+        pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
         pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
-        return batch_distance2bbox(anchor_points, pred_dist)
+        return batch_distance2bbox(anchor_points, pred_dist), tmp_pred_dist
 
     def _bbox2distance(self, points, bbox):
         x1y1, x2y2 = paddle.split(bbox, 2, -1)
@@ -326,7 +350,7 @@ class PPYOLOEHead(nn.Layer):
         anchor_points, num_anchors_list, stride_tensor = head_outs
 
         anchor_points_s = anchor_points / stride_tensor
-        pred_bboxes = self._bbox_decode(anchor_points_s, pred_distri)
+        pred_bboxes, _ = self._bbox_decode(anchor_points_s, pred_distri)
 
         gt_labels = gt_meta['gt_class']
         gt_bboxes = gt_meta['gt_bbox']
@@ -415,9 +439,66 @@ class PPYOLOEHead(nn.Layer):
                 [scale_x, scale_y, scale_x, scale_y],
                 axis=-1).reshape([-1, 1, 4])
             pred_bboxes /= scale_factor
+            bboxes,scores=[],[]
             if self.exclude_nms:
                 # `exclude_nms=True` just use in benchmark
                 return pred_bboxes, pred_scores
             else:
-                bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
-                return bbox_pred, bbox_num
+                if 1: # 1 or 0
+                    bs = pred_scores.shape[0]
+                    bbox_preds, bbox_nums = [], []
+                    # pred_scores_old = copy.deepcopy(pred_scores)
+                    # pred_bboxes_old = copy.deepcopy(pred_bboxes)
+                    # for i in range(bs):
+                    #     pred_bboxes = pred_bboxes_old[i:i + 1]
+                    #     pred_scores = pred_scores_old[i:i + 1]
+
+                    pred_scores = pred_scores.transpose([0, 2, 1]).reshape([-1, 80])
+                    # pred_scores [1, 8400 80]
+                    # pred_bboxes [1, 8400, 4]
+                    pred_bboxes = pred_bboxes.reshape([-1, 4])
+                    with paddle.no_grad():
+                        # Region Selection
+                        count_num = int(pred_scores.shape[0] * 0.01)
+                        max_vals = paddle.max(pred_scores, 1)
+                        sorted_vals, sorted_inds = paddle.topk(max_vals,
+                                                            pred_scores.shape[0])
+                        mask = paddle.zeros_like(max_vals)
+                        mask[sorted_inds[:count_num]] = 1.
+                        fg_num = sorted_vals[:count_num].sum()
+                        b_mask = mask > 0
+                    # scale bbox to origin
+                    pred_scores_old = copy.deepcopy(pred_scores)
+                    pred_bboxes_old = copy.deepcopy(pred_bboxes)
+                    # pred_scores = pred_scores[b_mask]
+                    # pred_bboxes = pred_bboxes[b_mask]
+                    
+                    bboxes.append(paddle.shape(pred_bboxes[:8400][b_mask[:8400]])[0])
+                    bboxes.append(paddle.shape(pred_bboxes[8401:16800][b_mask[8401:16800]])[0])
+                    bboxes.append(paddle.shape(pred_bboxes[16800:25200][b_mask[16800:25200]])[0])
+                    bboxes.append(paddle.shape(pred_bboxes[25201:33600][b_mask[25201:33600]])[0])
+                    bboxes.append(paddle.shape(pred_bboxes[33601:42000][b_mask[33601:42000]])[0])
+                    bboxes.append(paddle.shape(pred_bboxes[42001:50400][b_mask[42001:50400]])[0])
+                    bboxes.append(paddle.shape(pred_bboxes[50401:58800][b_mask[50401:58800]])[0])
+                    bboxes.append(paddle.shape(pred_bboxes[58801:67200][b_mask[58801:67200]])[0])
+                    bbox_nums=paddle.concat([_ for _ in bboxes],axis=-1)
+                    cat = pred_scores[b_mask].argmax(1).reshape([-1, 1]).astype('float32')
+                    sc = pred_scores[b_mask].max(1).reshape([-1, 1])
+                    bbox_preds = paddle.concat([cat, sc, pred_bboxes[b_mask]], 1)
+                    # bbox_num = paddle.shape(bbox_pred)[0:1]
+
+                    # bbox_preds.append(bbox_pred)
+                    #bbox_nums.append(bbox_num)
+
+                    # bbox_preds = paddle.concat(bbox_preds, 0)
+                    # bbox_nums = paddle.to_tensor([84 for _ in range(bs)], 'int32')
+                    # bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+                    return bbox_preds, bbox_nums
+                else:
+                    bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+                    return bbox_pred, bbox_num
+
+# pred_bboxes.shape
+# [8, 8400, 4]
+# pred_scores.shape
+# [8, 80, 8400]

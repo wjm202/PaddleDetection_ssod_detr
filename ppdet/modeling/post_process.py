@@ -68,7 +68,22 @@ class BBoxPostProcess(object):
         """
         if self.nms is not None:
             bboxes, score = self.decode(head_out, rois, im_shape, scale_factor)
-            bbox_pred, bbox_num, _ = self.nms(bboxes, score, self.num_classes)
+            bboxes=bboxes.squeeze(0)
+            score=score.squeeze(0)
+            score=score.transpose([1,0])
+            with paddle.no_grad():
+            # Region Selection
+                count_num = int(score.shape[0] * 0.01)
+                teacher_probs = F.sigmoid(score)
+                max_vals = paddle.max(teacher_probs, 1)
+                sorted_vals, sorted_inds = paddle.topk(max_vals,
+                                                    score.shape[0])
+                mask = paddle.zeros_like(max_vals)
+                mask[sorted_inds[:count_num]] = 1.
+                fg_num = sorted_vals[:count_num].sum()
+                b_mask = mask > 0    
+
+            bbox_pred, bbox_num, _ = self.nms(paddle.unsqueeze(bboxes[b_mask],axis=0),score[b_mask].transpose([1,0]).unsqueeze(0), self.num_classes)
 
         else:
             bbox_pred, bbox_num = self.decode(head_out, rois, im_shape,
