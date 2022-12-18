@@ -24,7 +24,7 @@ import paddle.nn.functional as F
 from ..ssod_utils import QFLv2
 from ..losses import GIoULoss
 from IPython import embed
-
+import copy
 __all__ = ['YOLOv3']
 
 
@@ -142,52 +142,63 @@ class YOLOv3(BaseArch):
         # student_probs: already sigmoid
         student_probs, student_deltas, student_dfl = head_outs
         teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
+        loss_logits=paddle.to_tensor([0],'float32')
+        loss_deltas=paddle.to_tensor([0],'float32')
+        fg_sum=paddle.to_tensor([0],'float32')
+
         nc = student_probs.shape[-1]
-        student_probs = student_probs.reshape([-1, nc])
-        student_deltas = student_deltas.reshape([-1, 4])
-        teacher_probs = teacher_probs.reshape([-1, nc])
-        teacher_deltas = teacher_deltas.reshape([-1, 4])
-        student_dfl = student_dfl.reshape([-1, 4, 17])
-        teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
-
-        with paddle.no_grad():
-            # Region Selection
-            count_num = int(teacher_probs.shape[0] * ratio)
-            #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
-            max_vals = paddle.max(teacher_probs, 1)
-            sorted_vals, sorted_inds = paddle.topk(max_vals,
-                                                   teacher_probs.shape[0])
-            mask = paddle.zeros_like(max_vals)
-            mask[sorted_inds[:count_num]] = 1.
-            fg_num = sorted_vals[:count_num].sum()
-            b_mask = mask > 0.
-
-        loss_logits = QFLv2(
-            student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
-        # [88872, 80] [88872, 80]
-
-        inputs = paddle.concat(
-            (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
-            axis=-1)
-        targets = paddle.concat(
-            (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
-            axis=-1)
         iou_loss = GIoULoss(reduction='mean')
-        loss_deltas = iou_loss(inputs, targets)
+        fg_num=[]
+        b_mask=[]
+        m_mask=[]
+        bs = teacher_probs.shape[0]
+        teacher_probs_old = copy.deepcopy(teacher_probs)
+        teacher_deltas_old = copy.deepcopy(teacher_deltas)
+        student_probs_old = student_probs
+        student_deltas_old = student_deltas
+        for i in range(bs):
+            teacher_deltas_bs = teacher_deltas_old[i:i + 1]
+            teacher_probs_bs = teacher_probs_old[i:i + 1]
+            student_deltas_bs = student_deltas_old[i:i + 1]
+            student_probs_bs = student_probs_old[i:i + 1]
 
-        #loss_dfl = paddle.to_tensor([0])  # todo
-        student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
-        teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
-
-        loss_dfl = self.distribution_focal_loss(student_dfl_pred,
-                                                teacher_dfl_tar)
-        # todo: weight_targets
-
+            teacher_probs_bs = teacher_probs_bs.transpose([0, 2, 1]).reshape([-1, 80])
+            # pred_scores [1, 8400 80]
+            # pred_bboxes [1, 8400, 4]
+            teacher_deltas_bs = teacher_deltas_bs.reshape([-1, 4])
+            student_probs_bs =student_probs_bs.transpose([0, 2, 1]).reshape([-1, 80])
+            # pred_scores [1, 8400 80]
+            # pred_bboxes [1, 8400, 4]
+            student_deltas_bs =student_deltas_bs.reshape([-1, 4])
+            with paddle.no_grad():
+                # Region Selection
+                count_num = int(teacher_probs_bs.shape[0] * 0.01)
+                max_vals = paddle.max(teacher_probs_bs, 1)
+                sorted_vals, sorted_inds = paddle.topk(max_vals,
+                                                    teacher_probs_bs.shape[0])
+                mask = paddle.zeros_like(max_vals)
+                mask[sorted_inds[:count_num]] = 1.
+                fg_num=sorted_vals[:count_num].sum()
+                b_mask=mask > 0
+            teacher_deltas_bs =teacher_deltas_bs.squeeze(0)
+            teacher_probs_bs =  teacher_probs_bs.squeeze(0)
+            student_deltas_bs =  student_deltas_bs.squeeze(0)
+            student_probs_bs =  student_probs_bs.squeeze(0)
+            loss_logits += QFLv2(
+                 student_probs_bs, teacher_probs_bs, weight=mask, reduction="sum") / fg_num
+            inputs = paddle.concat(
+                (-student_deltas_bs[b_mask][..., :2], student_deltas_bs[b_mask][..., 2:]),
+                axis=-1)
+            targets = paddle.concat(
+                (-teacher_deltas_bs[b_mask][..., :2], teacher_deltas_bs[b_mask][..., 2:]),
+                axis=-1)
+            loss_deltas += iou_loss(inputs, targets)
+            fg_sum +=fg_num
         return {
-            "distill_loss_cls": loss_logits,
-            "distill_loss_iou": loss_deltas,
-            "distill_loss_dfl": loss_dfl,
-            "fg_sum": fg_num,
+            "distill_loss_cls": loss_logits/8.0,
+            "distill_loss_iou": loss_deltas/8.0,
+            "distill_loss_dfl": paddle.to_tensor([0],'float32'),
+            "fg_sum": fg_sum,
         }
 
     def _df_loss(self, pred_dist, target):  # [810, 4, 17]  [810, 4]
