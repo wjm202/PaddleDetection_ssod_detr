@@ -139,14 +139,14 @@ class YOLOv3(BaseArch):
     def get_loss_keys(self):
         return ['loss_cls', 'loss_iou', 'loss_dfl']
 
-    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.1):
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.01):
         # student_probs: already sigmoid
         student_probs, student_deltas, student_dfl = head_outs
         teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
         nc = student_probs.shape[-1]
         student_probs = student_probs.reshape([-1, nc])
-        student_deltas = student_deltas.reshape([-1, 4])
         teacher_probs = teacher_probs.reshape([-1, nc])
+        student_deltas = student_deltas.reshape([-1, 4])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
         student_dfl = student_dfl.reshape([-1, 4, 17])
         teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
@@ -177,11 +177,15 @@ class YOLOv3(BaseArch):
         loss_deltas = iou_loss(inputs, targets)
 
         #loss_dfl = paddle.to_tensor([0])  # todo
-        student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
-        teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
-
-        loss_dfl = self.distribution_focal_loss(student_dfl_pred,
-                                                teacher_dfl_tar)
+        loss_dfl = F.cross_entropy(
+            F.softmax(student_dfl[b_mask].reshape([-1, 17])),
+            F.softmax(teacher_dfl[b_mask].reshape([-1, 17])),
+            soft_label=True,
+            reduction='mean')
+        # student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
+        # teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
+        # loss_dfl = self.distribution_focal_loss(student_dfl_pred,
+        #                                         teacher_dfl_tar)
         # todo: weight_targets
 
         return {

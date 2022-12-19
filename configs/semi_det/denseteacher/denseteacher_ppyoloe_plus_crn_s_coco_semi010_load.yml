@@ -4,7 +4,8 @@ _BASE_: [
 ]
 log_iter: 20
 snapshot_epoch: 2
-epochs: &epochs 240
+epochs: &epochs 200
+cosine_epochs: &cosine_epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
 
 
@@ -28,7 +29,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.5}
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -58,11 +59,13 @@ SemiTrainReader:
       ]}
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   sup_batch_transforms:
-    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    # - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
     - PadGT: {}
   unsup_batch_transforms:
-    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    # - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
   sup_batch_size: *batch_size
   unsup_batch_size: *batch_size
@@ -133,7 +136,7 @@ LearningRate:
   base_lr: 0.01
   schedulers:
   - !CosineDecay
-    max_epochs: *epochs
+    max_epochs: *cosine_epochs
     use_warmup: *use_warmup
   - !LinearWarmup
     start_factor: 0.001

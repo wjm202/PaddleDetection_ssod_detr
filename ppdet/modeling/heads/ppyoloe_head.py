@@ -174,15 +174,15 @@ class PPYOLOEHead(nn.Layer):
 
         if targets.get('is_teacher', False):
             anchor_points_s = anchor_points / stride_tensor
-            pred_bboxes, new_reg_distri_list = self._bbox_decode(
+            pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
                 anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes, new_reg_distri_list
+            return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list
 
         if targets.get('get_data', False):
             anchor_points_s = anchor_points / stride_tensor
-            pred_bboxes, new_reg_distri_list = self._bbox_decode(
+            pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
                 anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes, new_reg_distri_list
+            return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list
 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
@@ -284,6 +284,13 @@ class PPYOLOEHead(nn.Layer):
         pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
         pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
         return batch_distance2bbox(anchor_points, pred_dist), tmp_pred_dist
+
+    def _bbox_decode_fake(self, anchor_points, pred_dist):
+        _, l, _ = get_static_shape(pred_dist)
+        tmp_pred_dist = pred_dist.reshape([-1, l, 4, self.reg_channels])
+        pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
+        pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+        return pred_dist, tmp_pred_dist  # no need anchor_points
 
     def _bbox2distance(self, points, bbox):
         x1y1, x2y2 = paddle.split(bbox, 2, -1)
