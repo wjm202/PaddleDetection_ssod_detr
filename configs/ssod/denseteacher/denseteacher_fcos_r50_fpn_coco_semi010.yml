@@ -9,9 +9,9 @@ weights: output/denseteacher_fcos_r50_fpn_coco_semi010/model_final
 
 
 ### pretrain and warmup config, choose one and coment another
-pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-semi_start_iters: 5000
-ema_start_iters: 3000
+pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_2x_coco_sup010.pdparams
+semi_start_iters: -1
+ema_start_iters: -1
 use_warmup: &use_warmup True
 
 
@@ -57,7 +57,7 @@ SemiTrainReader:
         center_sampling_radius: 1.5
         downsample_ratios: [8, 16, 32, 64, 128]
         num_shift: 0. # default 0.5
-        multiply_strides_reg_targets: False
+        multiply_strides_reg_targets: True
         norm_reg_targets: True
   unsup_batch_transforms:
     - Permute: {}
@@ -124,7 +124,7 @@ FCOSHead:
   norm_reg_targets: True
   centerness_on_reg: True
   num_shift: 0. # default 0.5
-  multiply_strides_reg_targets: False
+  multiply_strides_reg_targets: True
   sqrt_score: False
   fcos_loss:
     name: FCOSLoss
