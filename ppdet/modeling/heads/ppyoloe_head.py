@@ -176,7 +176,7 @@ class PPYOLOEHead(nn.Layer):
             anchor_points_s = anchor_points / stride_tensor
             pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
                 anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list
+            return cls_score_list, pred_bboxes * stride_tensor, pred_bboxes#pred_bboxes lrtb形式
 
         if targets.get('get_data', False):
             anchor_points_s = anchor_points / stride_tensor

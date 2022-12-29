@@ -224,8 +224,8 @@ class Checkpointer(Callback):
                         # save model(student model) and ema_model(teacher model)
                         # in DenseTeacher SSOD, the teacher model will be higher,
                         # so exchange when saving pdparams
-                        student_model = status['weight']  # model
-                        teacher_model = weight  # ema_model
+                        student_model = status['weight']  # ema_model
+                        teacher_model = weight  # model
                         save_model(
                             teacher_model,
                             self.model.optimizer,

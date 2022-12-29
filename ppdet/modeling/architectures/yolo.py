@@ -149,7 +149,7 @@ class YOLOv3(BaseArch):
         student_deltas = student_deltas.reshape([-1, 4])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
         student_dfl = student_dfl.reshape([-1, 4, 17])
-        teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
+        teacher_dfl = teacher_dfl.reshape([-1, 4])
 
         with paddle.no_grad():
             # Region Selection
@@ -175,19 +175,11 @@ class YOLOv3(BaseArch):
             axis=-1)
         iou_loss = GIoULoss(reduction='mean')
         loss_deltas = iou_loss(inputs, targets)
-
+        teacher_dfl[b_mask]=teacher_dfl[b_mask].clip(0,17 - 1 - 0.01)
         #loss_dfl = paddle.to_tensor([0])  # todo
-        loss_dfl = F.cross_entropy(
-            F.softmax(student_dfl[b_mask].reshape([-1, 17])),
-            F.softmax(teacher_dfl[b_mask].reshape([-1, 17])),
-            soft_label=True,
-            reduction='mean')
-        # student_dfl_pred = student_dfl[b_mask].reshape([-1, 17])
-        # teacher_dfl_tar = teacher_dfl[b_mask].reshape([-1, 17])
-        # loss_dfl = self.distribution_focal_loss(student_dfl_pred,
-        #                                         teacher_dfl_tar)
-        # todo: weight_targets
-
+        # loss_dfl = (self._df_loss(student_dfl[b_mask], teacher_dfl[b_mask])*teacher_probs[b_mask].max(-1).unsqueeze(1)).mean()#todo
+        loss_dfl = self._df_loss(student_dfl[b_mask], teacher_dfl[b_mask]).mean()
+    
         return {
             "distill_loss_cls": loss_logits,
             "distill_loss_iou": loss_deltas,
@@ -206,21 +198,3 @@ class YOLOv3(BaseArch):
             pred_dist, target_right, reduction='none') * weight_right
         return (loss_left + loss_right).mean(-1, keepdim=True)
 
-    def distribution_focal_loss(self,
-                                pred_corners,
-                                target_corners,
-                                weight_targets=None):
-        target_corners_label = F.softmax(target_corners, axis=-1)
-        loss_dfl = F.cross_entropy(
-            pred_corners,
-            target_corners_label,
-            soft_label=True,
-            reduction='none')
-        loss_dfl = loss_dfl.sum(1)
-        if weight_targets is not None:
-            loss_dfl = loss_dfl * (weight_targets.expand([-1, 4]).reshape([-1]))
-            loss_dfl = loss_dfl.sum(-1) / weight_targets.sum()
-        else:
-            loss_dfl = loss_dfl.mean(-1)
-        loss_dfl = loss_dfl / 4.  # 4 direction
-        return loss_dfl

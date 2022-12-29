@@ -5,7 +5,7 @@ _BASE_: [
   './_base_/ppyoloe_plus_crn.yml',
   './_base_/ppyoloe_plus_reader.yml',
 ]
-
+use_ema: False
 log_iter: 100
 snapshot_epoch: 5
 weights: output/ppyoloe_plus_crn_s_80e_coco/model_final
