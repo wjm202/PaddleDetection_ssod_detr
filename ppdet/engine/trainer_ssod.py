@@ -221,7 +221,7 @@ class Trainer_DenseTeacher(Trainer):
             self.status['epoch_id'] = epoch_id
             self._compose_callback.on_epoch_begin(self.status)
             self.loader.dataset_label.set_epoch(epoch_id)
-            self.loader.dataset_unlabel.set_epoch(epoch_id)
+            # self.loader.dataset_unlabel.set_epoch(epoch_id)
             iter_tic = time.time()
             loss_dict = {
                 'loss': paddle.to_tensor([0]),
@@ -246,7 +246,7 @@ class Trainer_DenseTeacher(Trainer):
 
                 self.model.train()
                 self.ema.model.eval()
-                data_sup_w, data_sup_s, data_unsup_w, data_unsup_s = data
+                data_sup_w, data_sup_s = data
 
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id

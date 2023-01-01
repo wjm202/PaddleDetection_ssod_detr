@@ -3,16 +3,16 @@ _BASE_: [
   '../_base_/coco_detection_percent_10.yml',
 ]
 log_iter: 20
-snapshot_epoch: 4
-epochs: &epochs 80
-cosine_epochs: &cosine_epochs 96
+snapshot_epoch: 2
+epochs: &epochs 200
+cosine_epochs: &cosine_epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
 
 
 ### pretrain and warmup config, choose one and coment another
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/semi_det/ppyoloe_plus_crn_s_80e_coco_sup010.pdparams # mAP=35.3
-semi_start_iters: -1
-ema_start_iters: -1
+semi_start_iters: 0
+ema_start_iters: 0
 use_warmup: &use_warmup False
 
 # pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
@@ -29,7 +29,8 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 3.0, distill_loss_iou: 1.0, distill_loss_dfl: 1.0}
+    # loss_weight: {distill_loss_cls: 3.5, distill_loss_iou: 0.6, distill_loss_dfl: 0.8}#10epoch36.1 #80epochcfg 10epo35.5
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 1.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -40,7 +41,7 @@ DenseTeacher:
 
 ### reader config
 batch_size: &batch_size 8
-worker_num: 4 # set 0 for single gpu debug
+worker_num: 2 # set 0 for single gpu debug
 SemiTrainReader:
   sample_transforms:
     - Decode: {}
@@ -59,11 +60,13 @@ SemiTrainReader:
       ]}
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   sup_batch_transforms:
-    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    # - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
     - PadGT: {}
   unsup_batch_transforms:
-    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    # - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
   sup_batch_size: *batch_size
   unsup_batch_size: *batch_size
@@ -127,17 +130,18 @@ PPYOLOEHead:
     score_threshold: 0.01
     nms_threshold: 0.7
 
+
 ### other config
 epoch: *epochs
 LearningRate:
-  base_lr: 0.001
+  base_lr: 0.01
   schedulers:
   - !CosineDecay
     max_epochs: *cosine_epochs
     use_warmup: *use_warmup
   - !LinearWarmup
-      start_factor: 0.
-      epochs: 5
+    start_factor: 0.001
+    epochs: 3
 
 OptimizerBuilder:
   optimizer:
@@ -148,32 +152,3 @@ OptimizerBuilder:
     type: L2
   clip_grad_by_norm: 1.0 # dt-fcos clip_grad_by_value
 
-
-# partial labeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
-TrainDataset:
-  !SemiCOCODataSet
-    image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@10.json
-    dataset_dir: dataset/coco
-    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
-
-# partial unlabeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
-UnsupTrainDataset:
-  !SemiCOCODataSet
-    image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@10-unlabeled.json
-    dataset_dir: dataset/coco
-    data_fields: ['image']
-    supervised: False
-
-EvalDataset:
-  !COCODataSet
-    image_dir: val2017
-    anno_path: annotations/instances_val2017.json
-    dataset_dir: dataset/coco
-    allow_empty: true
-
-TestDataset:
-  !ImageFolder
-    anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
-    dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'

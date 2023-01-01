@@ -10,9 +10,9 @@ weights: output/denseteacher_ppyoloe_plus_crn_s_coco_full/model_final
 
 ### pretrain and warmup config, choose one and coment another
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/ppyoloe_plus_crn_s_80e_coco.pdparams # mAP=43.7
-semi_start_iters: -1
-ema_start_iters: -1
-use_warmup: &use_warmup False
+semi_start_iters: 1000000000000000
+ema_start_iters: 100000000000000
+use_warmup: &use_warmup true
 
 # pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
 # semi_start_iters: 5000
@@ -43,10 +43,10 @@ worker_num: 2 # set 0 for single gpu debug
 SemiTrainReader:
   sample_transforms:
     - Decode: {}
-    # - RandomDistort: {}
-    # - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
-    # - RandomFlip: {}
-    # - RandomCrop: {} # unsup will be fake gt_boxes
+    - RandomDistort: {}
+    - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
+    - RandomFlip: {}
+    - RandomCrop: {} # unsup will be fake gt_boxes
   weak_aug:
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   strong_aug:
@@ -58,11 +58,11 @@ SemiTrainReader:
       ]}
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   sup_batch_transforms:
-    - BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
     - PadGT: {}
   unsup_batch_transforms:
-    - BatchRandomResize: {target_size: [640], random_size: True, random_interp: True, keep_ratio: False}
+    - BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
     - Permute: {}
   sup_batch_size: *batch_size
   unsup_batch_size: *batch_size
@@ -108,7 +108,7 @@ PPYOLOEHead:
   fpn_strides: [32, 16, 8]
   grid_cell_scale: 5.0
   grid_cell_offset: 0.5
-  static_assigner_epoch: -1 # 30
+  static_assigner_epoch: 30
   use_varifocal_loss: True
   loss_weight: {class: 1.0, iou: 2.5, dfl: 0.5}
   static_assigner:

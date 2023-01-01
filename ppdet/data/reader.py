@@ -439,9 +439,9 @@ class BatchCompose_SSOD(Compose):
 
 
 class CombineSSODLoader(object):
-    def __init__(self, label_loader, unlabel_loader):
+    def __init__(self, label_loader):
         self.label_loader = label_loader
-        self.unlabel_loader = unlabel_loader
+        # self.unlabel_loader = unlabel_loader
 
     def __iter__(self):
         while True:
@@ -451,16 +451,16 @@ class CombineSSODLoader(object):
                 self.label_loader_iter = iter(self.label_loader)
                 label_samples = next(self.label_loader_iter)
 
-            try:
-                unlabel_samples = next(self.unlabel_loader_iter)
-            except:
-                self.unlabel_loader_iter = iter(self.unlabel_loader)
-                unlabel_samples = next(self.unlabel_loader_iter)
+            # try:
+            #     unlabel_samples = next(self.unlabel_loader_iter)
+            # except:
+            #     self.unlabel_loader_iter = iter(self.unlabel_loader)
+            #     unlabel_samples = next(self.unlabel_loader_iter)
             yield (
                 label_samples[0],  # sup weak
                 label_samples[1],  # sup strong
-                unlabel_samples[0],  # unsup weak
-                unlabel_samples[1]  # unsup strong
+                # unlabel_samples[0],  # unsup weak
+                # unlabel_samples[1]  # unsup strong
             )
 
     def __call__(self):
@@ -490,11 +490,11 @@ class BaseSemiDataLoader(object):
         self.batch_size_label = sup_batch_size
 
         # unsup transforms
-        self._sample_transforms_unlabel = Compose_SSOD(
-            sample_transforms, weak_aug, strong_aug, num_classes=num_classes)
-        self._batch_transforms_unlabel = BatchCompose_SSOD(
-            unsup_batch_transforms, num_classes, collate_batch)
-        self.batch_size_unlabel = unsup_batch_size
+        # self._sample_transforms_unlabel = Compose_SSOD(
+        #     sample_transforms, weak_aug, strong_aug, num_classes=num_classes)
+        # self._batch_transforms_unlabel = BatchCompose_SSOD(
+        #     unsup_batch_transforms, num_classes, collate_batch)
+        # self.batch_size_unlabel = unsup_batch_size
 
         # common
         self.shuffle = shuffle
@@ -525,20 +525,20 @@ class BaseSemiDataLoader(object):
             self._batch_sampler_label = batch_sampler_label
 
         # unsup dataset
-        self.dataset_unlabel = dataset_unlabel
-        self.dataset_unlabel.length = self.dataset_label.__len__()
-        self.dataset_unlabel.check_or_download_dataset()
-        self.dataset_unlabel.parse_dataset()
-        self.dataset_unlabel.set_transform(self._sample_transforms_unlabel)
-        self.dataset_unlabel.set_kwargs(**self.kwargs)
-        if batch_sampler_unlabel is None:
-            self._batch_sampler_unlabel = DistributedBatchSampler(
-                self.dataset_unlabel,
-                batch_size=self.batch_size_unlabel,
-                shuffle=self.shuffle,
-                drop_last=self.drop_last)
-        else:
-            self._batch_sampler_unlabel = batch_sampler_unlabel
+        # self.dataset_unlabel = dataset_unlabel
+        # self.dataset_unlabel.length = self.dataset_label.__len__()
+        # self.dataset_unlabel.check_or_download_dataset()
+        # self.dataset_unlabel.parse_dataset()
+        # self.dataset_unlabel.set_transform(self._sample_transforms_unlabel)
+        # self.dataset_unlabel.set_kwargs(**self.kwargs)
+        # if batch_sampler_unlabel is None:
+        #     self._batch_sampler_unlabel = DistributedBatchSampler(
+        #         self.dataset_unlabel,
+        #         batch_size=self.batch_size_unlabel,
+        #         shuffle=self.shuffle,
+        #         drop_last=self.drop_last)
+        # else:
+        #     self._batch_sampler_unlabel = batch_sampler_unlabel
 
         # DataLoader do not start sub-process in Windows and Mac
         # system, do not need to use shared memory
@@ -560,16 +560,18 @@ class BaseSemiDataLoader(object):
             return_list=return_list,
             use_shared_memory=use_shared_memory)
 
-        self.dataloader_unlabel = DataLoader(
-            dataset=self.dataset_unlabel,
-            batch_sampler=self._batch_sampler_unlabel,
-            collate_fn=self._batch_transforms_unlabel,
-            num_workers=worker_num,
-            return_list=return_list,
-            use_shared_memory=use_shared_memory)
+        # self.dataloader_unlabel = DataLoader(
+        #     dataset=self.dataset_unlabel,
+        #     batch_sampler=self._batch_sampler_unlabel,
+        #     collate_fn=self._batch_transforms_unlabel,
+        #     num_workers=worker_num,
+        #     return_list=return_list,
+        #     use_shared_memory=use_shared_memory)
 
-        self.dataloader = CombineSSODLoader(self.dataloader_label,
-                                            self.dataloader_unlabel)
+        # self.dataloader = CombineSSODLoader(self.dataloader_label,
+        #                                     self.dataloader_unlabel)
+        self.dataloader = CombineSSODLoader(self.dataloader_label
+                                             )
         self.loader = iter(self.dataloader)
         return self
 
