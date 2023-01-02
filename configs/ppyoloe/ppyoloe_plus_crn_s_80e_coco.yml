@@ -13,3 +13,98 @@ weights: output/ppyoloe_plus_crn_s_80e_coco/model_final
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
 depth_mult: 0.33
 width_mult: 0.50
+
+
+architecture: YOLOv3
+norm_type: sync_bn
+use_ema: true
+ema_decay: 0.9998
+ema_black_list: ['proj_conv.weight']
+custom_black_list: ['reduce_mean']
+
+YOLOv3:
+  backbone: CSPResNet
+  neck: CustomCSPPAN
+  yolo_head: PPYOLOEHead
+  post_process: ~
+
+CSPResNet:
+  layers: [3, 6, 6, 3]
+  channels: [64, 128, 256, 512, 1024]
+  return_idx: [1, 2, 3]
+  use_large_stem: True
+  use_alpha: True
+
+CustomCSPPAN:
+  out_channels: [768, 384, 192]
+  stage_num: 1
+  block_num: 3
+  act: 'swish'
+  spp: true
+
+PPYOLOEHead:
+  fpn_strides: [32, 16, 8]
+  grid_cell_scale: 5.0
+  grid_cell_offset: 0.5
+  static_assigner_epoch: 30
+  use_varifocal_loss: True
+  loss_weight: {class: 1.0, iou: 2.5, dfl: 0.5}
+  static_assigner:
+    name: ATSSAssigner
+    topk: 9
+  assigner:
+    name: TaskAlignedAssigner
+    topk: 13
+    alpha: 1.0
+    beta: 6.0
+  nms:
+    name: MultiClassNMS
+    nms_top_k: 1000
+    keep_top_k: 300
+    score_threshold: 0.01
+    nms_threshold: 0.7
+
+### other config
+epoch: 240
+LearningRate:
+  base_lr: 0.01
+  schedulers:
+  - !PiecewiseDecay
+    gamma: 0.1
+    milestones: [50, 240]
+  - !LinearWarmup
+    start_factor: 0.001
+    epochs: 3
+
+OptimizerBuilder:
+  optimizer:
+    momentum: 0.9
+    type: Momentum
+  regularizer:
+    factor: 0.0005 # dt-fcos 0.0001
+    type: L2
+  clip_grad_by_norm: 1.0 # dt-fcos clip_grad_by_value
+
+metric: COCO
+num_classes: 80
+
+TrainDataset:
+  !COCODataSet
+    image_dir: train2017
+    anno_path: annotations/instances_train2017.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+
+
+EvalDataset:
+  !COCODataSet
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    allow_empty: true
+
+TestDataset:
+  !ImageFolder
+    anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
+    dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'
+

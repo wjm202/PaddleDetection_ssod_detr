@@ -13,7 +13,7 @@ TrainDataset:
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: unlabeled2017
-    anno_path: annotations/instances_unlabeled2017.json
+    anno_path: annotations/image_info_unlabeled2017.json
     dataset_dir: dataset/coco
     data_fields: ['image']
     supervised: False

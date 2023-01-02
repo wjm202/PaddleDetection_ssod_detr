@@ -150,7 +150,7 @@ class SimpleModelEMA(object):
     GPU assignment and distributed training wrappers.
     """
 
-    def __init__(self, model=None, decay=0.9996):
+    def __init__(self, model=None, decay=0.9996,ema_black_list=None):
         """
         Args:
             model (nn.Module): model to apply EMA.
@@ -158,20 +158,35 @@ class SimpleModelEMA(object):
         """
         self.model = deepcopy(model)
         self.decay = decay
+        self.ema_black_list = self._match_ema_black_list(
+            model.state_dict().keys(), ema_black_list)
+        self._decay=0.9998
+        self.step=0
 
     def update(self, model, decay=None):
+        if self.step==0:
+            self.state_dict= deepcopy(self.model.state_dict())
         if decay is None:
             decay = self.decay
-
+        #yoloema
+        self._decay = min(self._decay, (1 + 10000+self.step) / (10 +10000+ self.step))
+        model_dict = model.state_dict()
+        for k, v in self.state_dict.items():
+            if k not in self.ema_black_list:
+                v = self._decay * v + (1 - self._decay) * model_dict[k]
+                v.stop_gradient = True
+                self.state_dict[k] = v
+        #ssod_ema
         with paddle.no_grad():
             state = {}
-            msd = model.state_dict()
+            msd = self.state_dict
             for k, v in self.model.state_dict().items():
                 if paddle.is_floating_point(v):
                     v *= decay
                     v += (1.0 - decay) * msd[k].detach()
                 state[k] = v
             self.model.set_state_dict(state)
+        self.step+=1
 
     def resume(self, state_dict, step=0):
         state = {}
@@ -182,3 +197,13 @@ class SimpleModelEMA(object):
             state[k] = v
         self.model.set_state_dict(state)
         self.step = step
+    
+
+    def _match_ema_black_list(self, weight_name, ema_black_list=None):
+        out_list = set()
+        if ema_black_list:
+            for name in weight_name:
+                for key in ema_black_list:
+                    if key in name:
+                        out_list.add(name)
+        return out_list

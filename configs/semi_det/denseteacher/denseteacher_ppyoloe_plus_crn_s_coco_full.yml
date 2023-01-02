@@ -10,14 +10,14 @@ weights: output/denseteacher_ppyoloe_plus_crn_s_coco_full/model_final
 
 ### pretrain and warmup config, choose one and coment another
 # pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/ppyoloe_plus_crn_s_80e_coco.pdparams # mAP=43.7
-# semi_start_iters: 0
-# ema_start_iters: 0
-# use_warmup: &use_warmup False
+semi_start_iters: 2000
+ema_start_iters: -1
+use_warmup: &use_warmup False
 
-pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
-semi_start_iters: 5000
-ema_start_iters: 3000
-use_warmup: &use_warmup True
+pretrain_weights: 149_150epoch_43.6.pdparams
+# semi_start_iters: 64120
+# ema_start_iters: 64120
+# use_warmup: &use_warmup True
 
 
 ### global config
@@ -28,7 +28,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.5}
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -128,13 +128,13 @@ PPYOLOEHead:
 
 
 ### other config
-epoch: *epochs
+epoch: 240
 LearningRate:
   base_lr: 0.01
   schedulers:
-  - !CosineDecay
-    max_epochs: *epochs
-    use_warmup: *use_warmup
+  - !PiecewiseDecay
+    gamma: 0.1
+    milestones: [200, 240]
   - !LinearWarmup
     start_factor: 0.001
     epochs: 3
@@ -147,3 +147,39 @@ OptimizerBuilder:
     factor: 0.0005 # dt-fcos 0.0001
     type: L2
   clip_grad_by_norm: 1.0 # dt-fcos clip_grad_by_value
+
+
+
+
+metric: COCO
+num_classes: 80
+
+# partial labeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
+TrainDataset:
+  !SemiCOCODataSet
+    image_dir: train2017
+    anno_path: semi_annotations/instances_train2017.1@10.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+
+# partial unlabeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
+UnsupTrainDataset:
+  !SemiCOCODataSet
+    image_dir: unlabeled2017
+    anno_path: annotations/image_info_unlabeled2017.json
+    dataset_dir: dataset/coco
+    data_fields: ['image']
+    supervised: False
+
+EvalDataset:
+  !COCODataSet
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    allow_empty: true
+
+TestDataset:
+  !ImageFolder
+    anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
+    dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'
+
