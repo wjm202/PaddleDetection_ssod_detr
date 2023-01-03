@@ -3,18 +3,18 @@ _BASE_: [
   '../_base_/coco_detection_full.yml',
 ]
 log_iter: 20
-snapshot_epoch: 2
+snapshot_epoch: 1
 epochs: &epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_full/model_final
 
 
 ### pretrain and warmup config, choose one and coment another
-# pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/ppyoloe_plus_crn_s_80e_coco.pdparams # mAP=43.7
-semi_start_iters: 2000
-ema_start_iters: -1
+pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/ppyoloe_plus_crn_s_80e_coco.pdparams # mAP=43.7
+semi_start_iters: 10
+ema_start_iters: 10
 use_warmup: &use_warmup False
 
-pretrain_weights: 149_150epoch_43.6.pdparams
+# pretrain_weights: output/ppyoloe_s_pisedecay_lr0.01_clip_grad_by_norm/114.pdparams
 # semi_start_iters: 64120
 # ema_start_iters: 64120
 # use_warmup: &use_warmup True
@@ -27,7 +27,7 @@ ssod_method: DenseTeacher
 DenseTeacher:
   train_cfg:
     sup_weight: 1.0
-    unsup_weight: 1.0
+    unsup_weight: 0.5
     loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.0}
     concat_sup_data: True
     suppress: linear
@@ -39,7 +39,7 @@ DenseTeacher:
 
 ### reader config
 batch_size: &batch_size 8
-worker_num: 2 # set 0 for single gpu debug
+worker_num: 4 # set 0 for single gpu debug
 SemiTrainReader:
   sample_transforms:
     - Decode: {}
@@ -128,17 +128,27 @@ PPYOLOEHead:
 
 
 ### other config
-epoch: 240
+# epoch: 240
+# LearningRate:
+#   base_lr: 0.001
+#   schedulers:
+#   - !PiecewiseDecay
+#     gamma: 0.1
+#     milestones: [200, 240]
+#     use_warmup: *use_warmup
+#   - !LinearWarmup
+#     start_factor: 0.001
+#     epochs: 3
+epoch: *epochs
 LearningRate:
-  base_lr: 0.01
+  base_lr: 0.0002
   schedulers:
-  - !PiecewiseDecay
-    gamma: 0.1
-    milestones: [200, 240]
+  - !CosineDecay
+    max_epochs: 240
+    use_warmup: *use_warmup
   - !LinearWarmup
     start_factor: 0.001
     epochs: 3
-
 OptimizerBuilder:
   optimizer:
     momentum: 0.9
@@ -158,7 +168,7 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@10.json
+    anno_path: annotations/instances_train2017.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 

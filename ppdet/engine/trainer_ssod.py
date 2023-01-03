@@ -126,8 +126,7 @@ class Trainer_DenseTeacher(Trainer):
         if self.use_simple_ema:
             self.use_ema = True
             ema_decay = self.cfg.get('ema_decay', 0.9996)
-            ema_black_list = self.cfg.get('ema_black_list', None)
-            self.ema = SimpleModelEMA(self.model, decay=ema_decay,ema_black_list=ema_black_list)
+            self.ema = SimpleModelEMA(self.model, decay=ema_decay)
             self.ema_start_iters = self.cfg.get('ema_start_iters', 0)
 
         self._nranks = dist.get_world_size()
@@ -287,21 +286,22 @@ class Trainer_DenseTeacher(Trainer):
                     logger.info("***" * 30)
                 if curr_iter > st_iter:
                     unsup_weight = train_cfg['unsup_weight']
-                    # if train_cfg['suppress'] == 'linear':
-                    #     tar_iter = st_iter * 2
-                    #     if curr_iter <= tar_iter:
-                    #         unsup_weight *= (curr_iter - st_iter) / st_iter
-                    # elif train_cfg['suppress'] == 'exp':
-                    #     tar_iter = st_iter + 2000
-                    #     if curr_iter <= tar_iter:
-                    #         scale = np.exp((curr_iter - tar_iter) / 1000)
-                    #         unsup_weight *= scale
-                    # elif train_cfg['suppress'] == 'step':
-                    #     tar_iter = st_iter * 2
-                    #     if curr_iter <= tar_iter:
-                    #         unsup_weight *= 0.25
-                    # else:
-                    #     raise ValueError
+                    if train_cfg['suppress'] == 'linear':
+                        tar_iter = 2000
+                        if curr_iter <= tar_iter:
+                            unsup_weight *= (curr_iter - st_iter) / (st_iter+2000)
+                            sup_weight *= (curr_iter - st_iter) / (st_iter+2000)
+                    elif train_cfg['suppress'] == 'exp':
+                        tar_iter = st_iter + 2000
+                        if curr_iter <= tar_iter:
+                            scale = np.exp((curr_iter - tar_iter) / 1000)
+                            unsup_weight *= scale
+                    elif train_cfg['suppress'] == 'step':
+                        tar_iter = st_iter * 2
+                        if curr_iter <= tar_iter:
+                            unsup_weight *= 0.25
+                    else:
+                        raise ValueError
 
                     if data_unsup_w['image'].shape != data_unsup_s[
                             'image'].shape:
@@ -359,7 +359,6 @@ class Trainer_DenseTeacher(Trainer):
                 self.status['batch_time'].update(time.time() - iter_tic)
                 self._compose_callback.on_step_end(self.status)
                 # Note: ema_start_iters
-                # print("curr_iter:%s" %(curr_iter))
                 if self.use_ema and curr_iter == self.ema_start_iters:
                     logger.info("***" * 30)
                     logger.info('EMA starting ...')
