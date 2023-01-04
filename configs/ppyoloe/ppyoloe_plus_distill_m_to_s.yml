@@ -59,4 +59,6 @@ distill_loss: DistillPPYOLOELoss
 DistillPPYOLOELoss: # M -> S
   teacher_width_mult: 0.75
   student_width_mult: 0.5
-  gkd: False
+  loss_weight: {'class': 1.0, 'iou': 2.5, 'dfl': 0.5}
+  kd_neck: True
+  kd_type: 'pkd' # default 'fgd'

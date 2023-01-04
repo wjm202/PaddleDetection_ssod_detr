@@ -9,7 +9,7 @@ log_dir=log_dir/${job_name}
 weights=output/${job_name_tea}/4.pdparams
 
 # 1. training
-#CUDA_VISIBLE_DEVICES=3 python3.7 tools/train.py -c ${config} #-r ${weights}
+#CUDA_VISIBLE_DEVICES=3 python3.7 tools/train.py -c ${config} --slim_config ${slim_config} #--eval --amp
 python3.7 -m paddle.distributed.launch --log_dir=${log_dir} --gpus 0,1,2,3,4,5,6,7 tools/train.py -c ${config} --slim_config ${slim_config} --eval 
 #-r output/ppyoloe_plus_distill_m_to_s/14 # --amp
 

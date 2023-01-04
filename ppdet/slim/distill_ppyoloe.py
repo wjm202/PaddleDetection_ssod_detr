@@ -19,7 +19,6 @@ from __future__ import print_function
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
-from paddle import ParamAttr
 
 from ppdet.core.workspace import register, create, load_config
 from ppdet.utils.checkpoint import load_pretrain_weight
@@ -87,18 +86,25 @@ class DistillPPYOLOELoss(nn.Layer):
     def __init__(self,
                  teacher_width_mult=1.0,
                  student_width_mult=0.75,
-                 gkd=False):
+                 loss_weight={
+                     'class': 1.0,
+                     'iou': 2.5,
+                     'dfl': 0.5,
+                 },
+                 kd_neck=True,
+                 kd_type='fgd'):
         super(DistillPPYOLOELoss, self).__init__()
-        self.loss_bbox = GIoULoss(loss_weight=1.0)
-        self.bbox_loss_weight = 1.25
-        self.dfl_loss_weight = 0.25
-        self.qfl_loss_weight = 0.5
+        self.loss_bbox = GIoULoss()
+        self.bbox_loss_weight = loss_weight['iou']
+        self.dfl_loss_weight = loss_weight['dfl']
+        self.qfl_loss_weight = loss_weight['class']
         self.loss_num = 3
         neck_out_channels = [768, 384, 192]  # default as L model
-        self.gkd = gkd
+        self.kd_neck = kd_neck
+        self.kd_type = kd_type
 
-        if self.gkd:
-            # fgd neck
+        if self.kd_neck:
+            # Knowledge Distillation for Detectors in necks
             distill_loss_module_list = []
             self.t_channel_list = [
                 int(c * teacher_width_mult) for c in neck_out_channels
@@ -107,9 +113,17 @@ class DistillPPYOLOELoss(nn.Layer):
                 int(c * student_width_mult) for c in neck_out_channels
             ]
             for i in range(self.loss_num):
-                distill_loss_module = FGDFeatureLoss_norm(
-                    student_channels=self.s_channel_list[i],
-                    teacher_channels=self.t_channel_list[i])
+                if self.kd_type == 'fgd':
+                    distill_loss_module = FGDFeatureLoss_norm(
+                        student_channels=self.s_channel_list[i],
+                        teacher_channels=self.t_channel_list[i])
+                elif self.kd_type == 'pkd':
+                    distill_loss_module = PKDLoss(
+                        student_channels=self.s_channel_list[i],
+                        teacher_channels=self.t_channel_list[i],
+                        resize_stu=False)
+                else:
+                    raise ValueError
                 distill_loss_module_list.append(distill_loss_module)
             self.distill_loss_module_list = nn.LayerList(
                 distill_loss_module_list)
@@ -210,8 +224,8 @@ class DistillPPYOLOELoss(nn.Layer):
         distill_cls_loss = paddle.add_n(distill_cls_loss)
         distill_dfl_loss = paddle.add_n(distill_dfl_loss)
 
-        if self.gkd:
-            # Global Knowledge Distillation for Detectors in necks
+        if self.kd_neck:
+            # Knowledge Distillation for Detectors in necks
             distill_neck_global_loss = []
             inputs = student_model.inputs
             teacher_fpn_feats = teacher_distill_pairs['emb_feats']
@@ -279,6 +293,7 @@ class FGDFeatureLoss_norm(nn.Layer):
                 stride=1,
                 padding=0,
                 weight_attr=kaiming_init)
+            # self.align = ESEAttn(student_channels, teacher_channels)
             student_channels = teacher_channels
         else:
             self.align = None
@@ -497,3 +512,75 @@ class FGDFeatureLoss_norm(nn.Layer):
             rela_loss = self.relation_loss(stu_feature, tea_feature)
             loss = self.lambda_fgd * rela_loss
         return loss
+
+
+@register
+class PKDLoss(nn.Layer):
+    """PyTorch version of `PKD: General Distillation Framework for Object
+    Detectors via Pearson Correlation Coefficient.
+    <https://arxiv.org/abs/2207.02039>`_.
+    Args:
+        loss_weight (float): Weight of loss. Defaults to 1.0.
+        resize_stu (bool): If True, we'll down/up sample the features of the
+            student model to the spatial size of those of the teacher model if
+            their spatial sizes are different. And vice versa. Defaults to
+            True.
+    """
+
+    def __init__(self,
+                 student_channels=256,
+                 teacher_channels=256,
+                 loss_weight=1.0,
+                 resize_stu=True):
+        super(PKDLoss, self).__init__()
+        self.loss_weight = loss_weight
+        self.resize_stu = resize_stu
+
+        kaiming_init = parameter_init("kaiming")
+        if student_channels != teacher_channels:
+            self.align = nn.Conv2D(
+                student_channels,
+                teacher_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init)
+        else:
+            self.align = None
+
+    def norm(self, feat):
+        """Normalize the feature maps to have zero mean and unit variances.
+        Args:
+            feat (torch.Tensor): The original feature map with shape
+                (N, C, H, W).
+        """
+        assert len(feat.shape) == 4
+        N, C, H, W = feat.shape
+        feat = feat.transpose([1, 0, 2, 3]).reshape([C, -1])
+        mean = feat.mean(axis=-1, keepdim=True)
+        std = feat.std(axis=-1, keepdim=True)
+        feat = (feat - mean) / (std + 1e-6)
+        return feat.reshape([C, N, H, W]).transpose([1, 0, 2, 3])
+
+    def forward(self, pred_S, pred_T, input):
+        if self.align is not None:
+            pred_S = self.align(pred_S)
+
+        loss = 0.
+        size_S, size_T = pred_S.shape[2:], pred_T.shape[2:]
+        if size_S[0] != size_T[0]:
+            if self.resize_stu:
+                pred_S = F.interpolate(pred_S, size_T, mode='bilinear')
+            else:
+                pred_T = F.interpolate(pred_T, size_S, mode='bilinear')
+        assert pred_S.shape == pred_T.shape
+
+        norm_S, norm_T = self.norm(pred_S), self.norm(pred_T)
+
+        # First conduct feature normalization and then calculate the
+        # MSE loss. Methematically, it is equivalent to firstly calculate
+        # the Pearson Correlation Coefficient (r) between two feature
+        # vectors, and then use 1-r as the new feature imitation loss.
+        loss += F.mse_loss(norm_S, norm_T) / 2
+
+        return loss * self.loss_weight
