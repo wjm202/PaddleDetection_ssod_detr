@@ -44,6 +44,9 @@ def build_slim_model(cfg, slim_cfg, mode='train'):
                 'slim_method'] == "LD":
             model = LDDistillModel(cfg, slim_cfg)
         elif "slim_method" in slim_load_cfg and slim_load_cfg[
+                'slim_method'] == "CWD":
+            model = CWDDistillModel(cfg, slim_cfg)
+        elif "slim_method" in slim_load_cfg and slim_load_cfg[
                 'slim_method'] == "PPYOLOE":
             model = PPYOLOEDistillModel(cfg, slim_cfg)
         else:
