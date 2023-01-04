@@ -87,8 +87,7 @@ class DistillPPYOLOELoss(nn.Layer):
     def __init__(self,
                  teacher_width_mult=1.0,
                  student_width_mult=0.75,
-                 gkd=True,
-                 pfi=False):
+                 gkd=False):
         super(DistillPPYOLOELoss, self).__init__()
         self.loss_bbox = GIoULoss(loss_weight=1.0)
         self.bbox_loss_weight = 1.25
@@ -97,7 +96,6 @@ class DistillPPYOLOELoss(nn.Layer):
         self.loss_num = 3
         neck_out_channels = [768, 384, 192]  # default as L model
         self.gkd = gkd
-        self.pfi = pfi
 
         if self.gkd:
             # fgd neck
@@ -115,9 +113,6 @@ class DistillPPYOLOELoss(nn.Layer):
                 distill_loss_module_list.append(distill_loss_module)
             self.distill_loss_module_list = nn.LayerList(
                 distill_loss_module_list)
-
-        if self.pfi:
-            self.pfi_loss = DistillPFILoss()
 
     def bbox_loss(self, s_bbox, t_bbox, weight_targets=None):
         # sx, sy, sw, sh 
@@ -161,73 +156,6 @@ class DistillPPYOLOELoss(nn.Layer):
         else:
             loss = loss.mean()
         return loss
-
-    def js_div(self, p_output, q_output, get_softmax=False):
-        """
-        Function that measures JS divergence between target and output logits:
-        """
-        KLDivLoss = nn.KLDivLoss(reduction='batchmean')
-        if get_softmax:
-            p_output = F.softmax(p_output)
-            q_output = F.softmax(q_output)
-        log_mean_output = ((p_output + q_output) / 2).log()
-        return (KLDivLoss(log_mean_output, p_output) + KLDivLoss(
-            log_mean_output, q_output)) / 2
-
-    def kl_div(self, p_output, q_output, get_softmax=False):
-        """
-        Function that measures JS divergence between target and output logits:
-        """
-        KLDivLoss = nn.KLDivLoss(reduction='sum')
-        log_p_output = p_output.log()
-        return KLDivLoss(log_p_output, q_output)
-
-    def decoupled_kl_loss(self, l_stu, l_tea, t_label, alpha=1.0, beta=8.0, temperature=1, \
-            use_sigmoid=True, label_weights=None, num_total_pos=None, pos_mask=None):
-        label_int64_tensor = paddle.cast(t_label, dtype='int64')  # [105840, 13]
-        # POSITIVE
-        t_label_numpy = t_label.numpy().sum(1).astype(int)  # [instance_num, ]
-        postive_num = t_label_numpy.sum()
-        if postive_num != 0:
-            label_int64_tensor_pos = paddle.to_tensor(label_int64_tensor.numpy()
-                                                      [t_label_numpy != 0])
-            l_stu = paddle.to_tensor(l_stu.numpy()[t_label_numpy != 0])
-            l_tea = paddle.to_tensor(l_tea.numpy()[t_label_numpy != 0])
-
-            if use_sigmoid == True:
-                p_stu = F.softmax(l_stu / temperature)
-                p_tea = F.softmax(l_tea / temperature)
-            else:
-                p_stu = l_stu
-                p_tea = l_tea
-
-            pt_stu, pnt_stu = p_stu[label_int64_tensor_pos], p_stu[
-                1 - label_int64_tensor_pos].sum(1)
-            pt_tea, pnt_tea = p_tea[label_int64_tensor_pos], p_tea[
-                1 - label_int64_tensor_pos].sum(1)
-
-            pnct_stu = F.softmax(l_stu[1 - label_int64_tensor_pos] /
-                                 temperature)
-            pnct_tea = F.softmax(l_tea[1 - label_int64_tensor_pos] /
-                                 temperature)
-            tckd = self.js_div(pt_stu, pt_tea) + self.js_div(pnt_stu, pnt_tea)
-            nckd = self.js_div(pnct_stu, pnct_tea)
-            loss = (alpha * tckd + beta * nckd) * temperature * temperature
-            loss = loss
-            if pos_mask is not None:
-                loss *= pos_mask
-
-            loss = loss.sum() * 1. / postive_num  # (N, )
-
-            if label_weights is not None:
-                loss = loss * label_weights
-            if num_total_pos is not None:
-                loss = loss.sum() / num_total_pos
-            else:
-                loss = loss.mean()
-            return loss
-        else:
-            return paddle.to_tensor([0.])
 
     def distribution_focal_loss(self, pred_corners, target_corners,
                                 weight_targets):
@@ -569,82 +497,3 @@ class FGDFeatureLoss_norm(nn.Layer):
             rela_loss = self.relation_loss(stu_feature, tea_feature)
             loss = self.lambda_fgd * rela_loss
         return loss
-
-
-@register
-class DistillPFILoss(nn.Layer):
-    def __init__(self):
-        super(DistillPFILoss, self).__init__()
-
-    def rm(self, t_score, s_score, assigned_scores, mask_positive_):
-        if mask_positive_.sum() <= 0:
-            return paddle.zeros([1])
-
-        assigned_scores_ind = paddle.argmax(assigned_scores, -1).unsqueeze(-1)
-        batch_ind = paddle.arange(end=assigned_scores.shape[0])
-        len_ind = paddle.arange(end=assigned_scores.shape[1])
-        batch_ind = batch_ind.unsqueeze(-1).tile(
-            [1, assigned_scores_ind.shape[1]]).unsqueeze(-1)
-        len_ind = len_ind.unsqueeze(0).tile(
-            [assigned_scores_ind.shape[0], 1]).unsqueeze(-1)
-        assigned_scores_ind = paddle.concat(
-            [batch_ind, len_ind, assigned_scores_ind], -1)
-
-        t_score_ = paddle.gather_nd(t_score, assigned_scores_ind).unsqueeze(1)
-        t_score_ *= mask_positive_
-        s_score_ = paddle.gather_nd(s_score, assigned_scores_ind).unsqueeze(1)
-        s_score_ *= mask_positive_
-
-        pad_gt_mask = (mask_positive_ > 0).cast("float32")
-        pad_gt_mask = (1 - pad_gt_mask) * 1e-3
-        mask_positive = (mask_positive_ - 1) * 1e9
-
-        t_score_ = F.softmax(t_score_ + mask_positive, axis=-1)
-        t_score_ += pad_gt_mask
-
-        s_score_ = F.softmax(s_score_ + mask_positive, axis=-1)
-        s_score_ += pad_gt_mask
-
-        loss = F.kl_div(paddle.log(s_score_), t_score_, reduction='none')
-        pos = paddle.masked_select(loss, mask_positive_ == 1)
-
-        ###negative##
-        t_score = F.softmax(t_score, axis=-1)
-        s_score = F.softmax(s_score, axis=-1)
-        loss_neg = F.kl_div(
-            paddle.log(s_score), t_score, reduction='none').sum(-1)
-        neg = paddle.masked_select(loss_neg, assigned_scores.sum(-1) == 0)
-
-        return pos.mean() + neg.mean()
-
-    def pfi(self, t_fpn, s_fpn, t_score, s_score):
-        p_dif = paddle.abs(t_score - s_score).pow(2).mean(-1).flatten(-1)
-
-        t_score, s_score = t_score.flatten(2), s_score.flatten(2)
-        B, C, HW = t_score.shape
-        f_dif = [
-            paddle.abs(t - s).pow(2).mean(1).flatten(1)
-            for t, s in zip(t_fpn, s_fpn)
-        ]
-        f_dif = paddle.concat(f_dif, axis=-1)
-
-        loss = paddle.linalg.norm(p_dif * f_dif, p=2, axis=-1) / HW
-        return loss.mean()
-
-    def forward(self, teacher_model, student_model):
-        teacher_distill_pairs = teacher_model.yolo_head.distill_pairs
-        student_distill_pairs = student_model.yolo_head.distill_pairs
-
-        t_fpn = teacher_distill_pairs['emb_feats']
-        s_fpn = student_distill_pairs['emb_feats']
-
-        t_cls = teacher_distill_pairs['pred_cls_scores']
-        s_cls = student_distill_pairs['pred_cls_scores']
-
-        mask_positive = student_distill_pairs['mask_positive']
-        assigned_scores = student_distill_pairs['assigned_scores']
-
-        l_pfi = self.pfi(t_fpn, s_fpn, t_cls, s_cls)
-        l_rm = self.rm(t_cls, s_cls, assigned_scores, mask_positive)
-
-        return l_pfi + 1.25 * l_rm
