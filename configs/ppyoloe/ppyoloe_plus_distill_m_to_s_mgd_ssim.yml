@@ -1,0 +1,11 @@
+_BASE_: [
+  'ppyoloe_plus_crn_m_80e_coco.yml',
+]
+# teacher pretrain model
+pretrain_weights: https://paddledet.bj.bcebos.com/models/ppyoloe_plus_crn_m_80e_coco.pdparams
+
+slim: Distill
+slim_method: MGD
+
+max_alpha: 1.0
+min_alpha: 0.2

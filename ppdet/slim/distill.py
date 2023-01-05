@@ -882,3 +882,283 @@ class KnowledgeDistillationKLDivLoss(nn.Layer):
         loss_kd = self.loss_weight * loss
 
         return loss_kd
+
+
+from math import exp
+class SSIM(nn.Layer):
+    def __init__(self, window_size=11, size_average=True):
+        super(SSIM, self).__init__()
+        self.window_size = window_size
+        self.size_average = size_average
+        self.channel = 1
+        self.window = self.create_window(window_size, self.channel)
+
+    def gaussian(self, window_size, sigma):
+        gauss = paddle.to_tensor([
+            exp(-(x - window_size // 2)**2 / float(2 * sigma**2))
+            for x in range(window_size)
+        ])
+        return gauss / gauss.sum()
+
+    def create_window(self, window_size, channel):
+        _1D_window = self.gaussian(window_size, 1.5).unsqueeze(1)
+        _2D_window = _1D_window.mm(_1D_window.t()).unsqueeze(0).unsqueeze(0)
+        window = _2D_window.expand([channel, 1, window_size, window_size])
+        return window
+
+    def _ssim(self, img1, img2, window, window_size, channel,
+              size_average=True):
+        mu1 = F.conv2d(img1, window, padding=window_size // 2, groups=channel)
+        mu2 = F.conv2d(img2, window, padding=window_size // 2, groups=channel)
+
+        mu1_sq = mu1.pow(2)
+        mu2_sq = mu2.pow(2)
+        mu1_mu2 = mu1 * mu2
+
+        sigma1_sq = F.conv2d(
+            img1 * img1, window, padding=window_size // 2,
+            groups=channel) - mu1_sq
+        sigma2_sq = F.conv2d(
+            img2 * img2, window, padding=window_size // 2,
+            groups=channel) - mu2_sq
+        sigma12 = F.conv2d(
+            img1 * img2, window, padding=window_size // 2,
+            groups=channel) - mu1_mu2
+
+        C1 = 0.01**2
+        C2 = 0.03**2
+
+        ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
+            1e-12 + (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2))
+
+        if size_average:
+            return ssim_map.mean()
+        else:
+            return ssim_map.mean([1, 2, 3])
+
+    def ssim(self, img1, img2, window_size=11, size_average=True):
+        (_, channel, _, _) = img1.shape
+        window = self.create_window(window_size, channel)
+
+        return self._ssim(img1, img2, window, window_size, channel,
+                          size_average)
+
+    def forward(self, img1, img2):
+        (_, channel, _, _) = img1.shape
+
+        if channel == self.channel and self.window.dtype == img1.dtype:
+            window = self.window
+        else:
+            window = self.create_window(self.window_size, channel)
+
+            self.window = window
+            self.channel = channel
+
+        return self._ssim(img1, img2, window, self.window_size, channel,
+                          self.size_average)
+
+
+class MGDDistillModel(nn.Layer):
+    """
+    Build MGD distill model.
+    Args:
+        cfg: The student config.
+        slim_cfg: The teacher and distill config.
+    """
+
+    def __init__(self, cfg, slim_cfg):
+        super(MGDDistillModel, self).__init__()
+
+        self.is_inherit = False
+        # build student model before load slim config
+        self.student_model = create(cfg.architecture)
+        self.arch = cfg.architecture
+        stu_pretrain = cfg['pretrain_weights']
+        slim_cfg = load_config(slim_cfg)
+        self.teacher_cfg = slim_cfg
+        self.loss_cfg = slim_cfg
+        tea_pretrain = cfg['pretrain_weights']
+
+        self.teacher_model = create(self.teacher_cfg.architecture)
+        self.teacher_model.eval()
+
+        for param in self.teacher_model.parameters():
+            param.trainable = False
+
+        if 'pretrain_weights' in cfg and stu_pretrain:
+            if self.is_inherit and 'pretrain_weights' in self.teacher_cfg and self.teacher_cfg.pretrain_weights:
+                load_pretrain_weight(self.student_model,
+                                     self.teacher_cfg.pretrain_weights)
+                logger.debug(
+                    "Inheriting! loading teacher weights to student model!")
+
+            load_pretrain_weight(self.student_model, stu_pretrain)
+
+        if 'pretrain_weights' in self.teacher_cfg and self.teacher_cfg.pretrain_weights:
+            load_pretrain_weight(self.teacher_model,
+                                 self.teacher_cfg.pretrain_weights)
+
+        # self.alpha_mgd = self.loss_cfg['alpha_mgd']
+        # self.lambda_mgd = self.loss_cfg['lambda_mgd']
+        self.max_alpha = self.loss_cfg['max_alpha']
+        self.min_alpha = self.loss_cfg['min_alpha']
+        self.mse_loss = paddle.nn.MSELoss(reduction='sum')
+        self.ssim_loss = SSIM(11)
+
+        _channels = [768, 384, 192]
+        _m, _s, _l = 0.75, 0.5, 1.0
+        num_level = 3
+        if _m != _s:  # m distill s
+            self.align_layer = nn.LayerList([
+                nn.Conv2D(
+                    int(_channels[i] * _s),
+                    int(_channels[i] * _m),
+                    1,
+                    bias_attr=False) for i in range(num_level)
+            ])
+        else:
+            self.align_layer = None
+
+        self.generations = nn.LayerList([])
+        for c in range(len(_channels)):
+            teacher_channels = int(_channels[c] * _m)  # m as teacher
+            self.generations.append(
+                nn.Sequential(
+                    nn.Conv2D(
+                        teacher_channels,
+                        teacher_channels,
+                        kernel_size=3,
+                        padding=1),
+                    nn.ReLU(),
+                    nn.Conv2D(
+                        teacher_channels,
+                        teacher_channels,
+                        kernel_size=3,
+                        padding=1)))
+        # self.generation = nn.Sequential(
+        #     nn.Conv2D(teacher_channels, teacher_channels, kernel_size=3, padding=1),
+        #     nn.ReLU(), 
+        #     nn.Conv2D(teacher_channels, teacher_channels, kernel_size=3, padding=1))
+
+    def get_ppyoloe_mgd_loss(self, idx, stu_feature, tea_feature, ssim=False):
+        N, C, H, W = stu_feature.shape
+        masked_fea = stu_feature
+        masked_fea = self.align_layer[idx](masked_fea)
+        new_fea = self.generations[idx](masked_fea)
+        if ssim is False:
+            dis_loss = self.mse_loss(new_fea, tea_feature) / N
+        else:
+            ssim = self.ssim_loss(new_fea, tea_feature)
+            dis_loss = paddle.clip((1 - ssim) / 2, 0, 1)
+        return dis_loss
+
+    # def get_mgd_loss(self, stu_feature, tea_feature, ssim=False):
+    #     N, C, H, W = stu_feature.shape
+    #     #mat = paddle.rand((N,1,H,W))
+    #     #mat = paddle.where(mat > 1-self.lambda_mgd, 0, 1)
+    #     #masked_fea = stu_feature * mat
+    #     masked_fea = stu_feature
+    #     new_fea = self.generation(masked_fea)
+    #     if ssim is False:
+    #         dis_loss = self.mse_loss(new_fea, tea_feature)/N
+    #     else:
+    #         ssim = self.ssim_loss(new_fea, tea_feature)
+    #         dis_loss = paddle.clip((1 - ssim)/2, 0, 1)
+    #     return dis_loss
+
+    def cosine_decayv2(self, epoch):
+        # ep, sp = 300, 100
+        ma, mi = 2.0, 0.2
+        ep, sp = 80, 30  # max epoch and atss assigner epoch
+        ma, mi = self.max_alpha, self.min_alpha
+        if epoch < sp:
+            return ma
+
+        def func(epoch):
+            scale = np.cos(np.pi / 2 * ((ep - epoch) / (ep - sp)))
+            return scale
+
+        scale = [ma - (ma - mi) * func(i) for i in range(sp, ep, 1)]
+        return scale[epoch - sp]
+
+    def forward(self, inputs):
+        if self.training:
+            dw = self.cosine_decayv2(inputs['epoch_id'])
+            s_body_feats = self.student_model.backbone(inputs)
+            s_neck_feats = self.student_model.neck(s_body_feats)
+            with paddle.no_grad():
+                t_body_feats = self.teacher_model.backbone(inputs)
+                t_neck_feats = self.teacher_model.neck(t_body_feats)
+            if self.arch == "PicoDet":
+                head_outs = self.student_model.head(
+                    s_neck_feats, self.student_model.export_post_process)
+                loss_gfl = self.student_model.head.get_loss(head_outs, inputs)
+                total_loss = paddle.add_n(list(loss_gfl.values()))
+                loss = {}
+                loss.update(loss_gfl)
+                loss.update({'loss': total_loss})
+                # MGD distill loss
+                mgd_loss = {}
+                for i, (s_fpn_feat, t_fpn_feat, stride) in enumerate(
+                        zip(s_neck_feats, t_neck_feats,
+                            self.student_model.head.fpn_stride)):
+                    # loss[f'n_f_{i}'] = dw * self.get_mgd_loss(s_fpn_feat, t_fpn_feat, ssim=True)
+                    loss[f'n_f_{i}'] = dw * self.get_ppyoloe_mgd_loss(
+                        i, s_fpn_feat, t_fpn_feat, ssim=True)
+                    loss['loss'] = loss['loss'] + loss[f'n_f_{i}']
+                    loss['dw'] = paddle.to_tensor(dw)
+            elif self.arch == "YOLOv3":
+                loss = self.student_model.yolo_head.forward_train(s_neck_feats,
+                                                                  inputs)
+                # MGD distill loss
+                for i, (s_fpn_feat, t_fpn_feat, stride) in enumerate(
+                        zip(s_neck_feats, t_neck_feats,
+                            self.student_model.yolo_head.fpn_strides)):
+                    # loss[f'n_f_{i}'] = dw * self.get_mgd_loss(s_fpn_feat, t_fpn_feat, ssim=True)
+                    loss[f'n_f_{i}'] = dw * self.get_ppyoloe_mgd_loss(
+                        i, s_fpn_feat, t_fpn_feat, ssim=True)
+                    loss['loss'] = loss['loss'] + loss[f'n_f_{i}']
+                loss['dw'] = paddle.to_tensor(dw)
+            else:
+                raise ValueError(f"not support arch: {self.arch}")
+
+            return loss
+        else:
+            body_feats = self.student_model.backbone(inputs)
+            neck_feats = self.student_model.neck(body_feats)
+            #head_outs = self.student_model.head(neck_feats)                                                                                                
+            if self.arch == "RetinaNet":
+                bbox, bbox_num = self.student_model.head.post_process(
+                    head_outs, inputs['im_shape'], inputs['scale_factor'])
+                return {'bbox': bbox, 'bbox_num': bbox_num}
+            elif self.arch == "PicoDet":
+                head_outs = self.student_model.head(
+                    neck_feats, self.student_model.export_post_process)
+                scale_factor = inputs['scale_factor']
+                bboxes, bbox_num = self.student_model.head.post_process(
+                    head_outs,
+                    scale_factor,
+                    export_nms=self.student_model.export_nms)
+                return {'bbox': bboxes, 'bbox_num': bbox_num}
+            elif self.arch == "YOLOv3":
+                yolo_head_outs = self.student_model.yolo_head(neck_feats)
+                if self.student_model.return_idx:
+                    _, bbox, bbox_num, _ = self.student_model.post_process(
+                        yolo_head_outs,
+                        self.student_model.yolo_head.mask_anchors)
+                elif self.student_model.post_process is not None:
+                    bbox, bbox_num = self.student_model.post_process(
+                        yolo_head_outs,
+                        self.student_model.yolo_head.mask_anchors,
+                        inputs['im_shape'], inputs['scale_factor'])
+                else:
+                    bbox, bbox_num = self.student_model.yolo_head.post_process(
+                        yolo_head_outs, inputs['scale_factor'])
+                output = {'bbox': bbox, 'bbox_num': bbox_num}
+                return output
+            elif self.arch == "GFL":
+                bbox_pred, bbox_num = head_outs
+                output = {'bbox': bbox_pred, 'bbox_num': bbox_num}
+                return output
+            else:
+                raise ValueError(f"unsupported arch {self.arch}")

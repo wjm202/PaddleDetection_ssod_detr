@@ -1,0 +1,29 @@
+_BASE_: [
+  'ppyoloe_plus_crn_m_80e_coco.yml',
+]
+# teacher pretrain model
+pretrain_weights: https://paddledet.bj.bcebos.com/models/ppyoloe_plus_crn_m_80e_coco.pdparams
+
+slim: Distill
+slim_method: PGDYOLO
+distill_loss: 
+  loss_cls: PGDClsLoss
+  loss_weight: [0.001, 0.001, 0.001]
+  loss_reg: PGDRegLoss
+  cls_topk: 15  #the same as student.head.assigner
+  reg_topk: 15  #the same as student.head.assigner
+  cls_alpha: 0.8
+  reg_alpha: 0.6
+
+PGDClsLoss:
+  temp_s: 0.8
+  temp_c: 0.8
+  loss_weight: 
+  alpha: 0.008  # 0.08
+  beta: 0.004   # 0.04
+  delta: 0.0008
+
+PGDRegLoss:
+  temp: 0.8
+  gamma: 0.0128  # 0.128
+  delta: 0.0008

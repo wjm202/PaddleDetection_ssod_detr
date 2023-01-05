@@ -23,6 +23,8 @@ from .distill import *
 from .distill_ppyoloe import *
 from .unstructured_prune import *
 from .ofa import *
+from .pgd_ppyoloe_distill import * 
+from .pgd_distill import *
 
 import yaml
 from ppdet.core.workspace import load_config
@@ -52,6 +54,12 @@ def build_slim_model(cfg, slim_cfg, mode='train'):
         elif "slim_method" in slim_load_cfg and slim_load_cfg[
                 'slim_method'] == "PPYOLOE":
             model = PPYOLOEDistillModel(cfg, slim_cfg)
+        elif "slim_method" in slim_load_cfg and slim_load_cfg[
+                'slim_method'] == "MGD":
+            model = MGDDistillModel(cfg, slim_cfg)
+        elif "slim_method" in slim_load_cfg  and slim_load_cfg[
+            'slim_method'] == "PGDYOLO":
+            model = PPYOLOEPGDDistill(cfg, slim_cfg)
         else:
             model = DistillModel(cfg, slim_cfg)
         cfg['model'] = model
