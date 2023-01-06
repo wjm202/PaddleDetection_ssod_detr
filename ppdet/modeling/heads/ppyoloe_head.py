@@ -409,7 +409,7 @@ class PPYOLOEHead(nn.Layer):
             self._bbox_loss(pred_distri, pred_bboxes, anchor_points_s,
                             assigned_labels, assigned_bboxes, assigned_scores,
                             assigned_scores_sum)
-        # loss_kd
+        # loss_ld
         if soft_cls is not None:
             mask_positive = (assigned_labels != self.num_classes)
             num_pos = mask_positive.sum()
@@ -419,17 +419,18 @@ class PPYOLOEHead(nn.Layer):
                 pred_scores_pos = paddle.masked_select(pred_scores, cls_mask).reshape([-1, self.num_classes])
                 soft_cls_pos = paddle.masked_select(soft_cls, cls_mask).reshape([-1, self.num_classes])
 
-                loss_kd = self.loss_kd(
+                loss_ld = self.loss_kd(
                     pred_scores_pos,
                     soft_cls_pos,
                     avg_factor=num_pos)
             else:
-                loss_kd = paddle.zeros([1])
+                loss_ld = paddle.zeros([1])
 
         loss = self.loss_weight['class'] * loss_cls + \
                self.loss_weight['iou'] * loss_iou + \
-               self.loss_weight['dfl'] * loss_dfl + \
-               loss_kd
+               self.loss_weight['dfl'] * loss_dfl
+        if soft_cls is not None:
+            loss = loss + loss_ld
 
         out_dict = {
             'loss': loss,
@@ -437,8 +438,10 @@ class PPYOLOEHead(nn.Layer):
             'loss_iou': loss_iou,
             'loss_dfl': loss_dfl,
             'loss_l1': loss_l1,
-            'loss_kd': loss_kd,
         }
+        if soft_cls is not None:
+            out_dict.update({'loss_ld': loss_ld})
+
         return out_dict
 
     def post_process(self, head_outs, scale_factor):
