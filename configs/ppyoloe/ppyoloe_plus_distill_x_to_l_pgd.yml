@@ -1,15 +1,15 @@
 _BASE_: [
-  'ppyoloe_plus_crn_m_80e_coco.yml',
+  'ppyoloe_plus_crn_x_80e_coco.yml',
 ]
 # teacher pretrain model
-pretrain_weights: https://paddledet.bj.bcebos.com/models/ppyoloe_plus_crn_m_80e_coco.pdparams
+pretrain_weights: https://paddledet.bj.bcebos.com/models/ppyoloe_plus_crn_x_80e_coco.pdparams
 
 slim: Distill
 slim_method: PGDYOLO
 
-# M -> S
-teacher_width_mult: 0.75
-student_width_mult: 0.5
+# X -> L
+teacher_width_mult: 1.25
+student_width_mult: 1.0
 
 distill_loss: 
   loss_cls: PGDClsLoss

@@ -1006,13 +1006,15 @@ class MGDDistillModel(nn.Layer):
         self.ssim_loss = SSIM(11)
 
         _channels = [768, 384, 192]
-        _m, _s, _l = 0.75, 0.5, 1.0
+        # _s, _m, _l, _x = 0.5, 0.75, 1.0, 1.25
+        teacher_width_mult = self.loss_cfg['teacher_width_mult']
+        student_width_mult = self.loss_cfg['student_width_mult']
         num_level = 3
-        if _m != _s:  # m distill s
+        if student_width_mult != teacher_width_mult:
             self.align_layer = nn.LayerList([
                 nn.Conv2D(
-                    int(_channels[i] * _s),
-                    int(_channels[i] * _m),
+                    int(_channels[i] * student_width_mult),
+                    int(_channels[i] * teacher_width_mult),
                     1,
                     bias_attr=False) for i in range(num_level)
             ])
@@ -1021,7 +1023,7 @@ class MGDDistillModel(nn.Layer):
 
         self.generations = nn.LayerList([])
         for c in range(len(_channels)):
-            teacher_channels = int(_channels[c] * _m)  # m as teacher
+            teacher_channels = int(_channels[c] * teacher_width_mult)
             self.generations.append(
                 nn.Sequential(
                     nn.Conv2D(

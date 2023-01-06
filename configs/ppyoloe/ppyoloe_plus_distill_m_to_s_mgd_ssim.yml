@@ -9,3 +9,7 @@ slim_method: MGD
 
 max_alpha: 1.0
 min_alpha: 0.2
+
+# M -> S
+teacher_width_mult: 0.75
+student_width_mult: 0.5

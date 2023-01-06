@@ -178,12 +178,15 @@ class PPYOLOEPGDDistill(nn.Layer):
 
         # build align layer
         _channels = [768, 384, 192]
-        _m, _s, _l = 0.75, 0.5, 1.0
-
+        # _s, _m, _l, _x = 0.5, 0.75, 1.0, 1.25
+        teacher_width_mult = self.loss_cfg['teacher_width_mult']
+        student_width_mult = self.loss_cfg['student_width_mult']
         num_level = 3
-        if _m != _s: # m distill s
-            self.cls_align_layer = nn.LayerList([nn.Conv2D(int(_channels[i]*_s), int(_channels[i]*_m), 1) for i in range(num_level)])
-            self.reg_align_layer = nn.LayerList([nn.Conv2D(int(_channels[i]*_s), int(_channels[i]*_m), 1) for i in range(num_level)])
+        if student_width_mult != teacher_width_mult:
+            self.cls_align_layer = nn.LayerList([
+                nn.Conv2D(int(_channels[i] * student_width_mult), int(_channels[i] * teacher_width_mult), 1) for i in range(num_level)])
+            self.reg_align_layer = nn.LayerList([
+                nn.Conv2D(int(_channels[i] * student_width_mult), int(_channels[i] * teacher_width_mult), 1) for i in range(num_level)])
         else:
             self.cls_align_layer = None
             self.reg_align_layer = None
