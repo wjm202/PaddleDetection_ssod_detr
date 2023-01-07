@@ -215,7 +215,7 @@ class Trainer_DenseTeacher(Trainer):
 
         for param in self.ema.model.parameters():
             param.stop_gradient = True
-
+        self.topk=TOPk()
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -311,21 +311,23 @@ class Trainer_DenseTeacher(Trainer):
                     data_unsup_s['epoch_id'] = epoch_id
 
                     data_unsup_s['get_data'] = True
-                    student_preds = self.model(data_unsup_s)
-
+                    student_preds= self.model(data_unsup_s)
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
                         teacher_preds = self.ema.model(data_unsup_w)
+                    out=self.topk(teacher_preds)
                     if self._nranks > 1:
                         loss_dict_unsup = self.model._layers.get_distill_loss(
-                            student_preds,
-                            teacher_preds,
-                            ratio=train_cfg['ratio'])
+                            student_preds[:3],
+                            teacher_preds[:3],
+                            ratio=train_cfg['ratio'],
+                            conf=out)
                     else:
                         loss_dict_unsup = self.model.get_distill_loss(
-                            student_preds,
-                            teacher_preds,
-                            ratio=train_cfg['ratio'])
+                            student_preds[:3],
+                            teacher_preds[:3],
+                            ratio=train_cfg['ratio'],
+                            conf=out)
 
                     fg_num = loss_dict_unsup["fg_sum"]
                     del loss_dict_unsup["fg_sum"]
@@ -477,3 +479,67 @@ class Trainer_DenseTeacher(Trainer):
         self._compose_callback.on_epoch_end(self.status)
         # reset metric states for metric may performed multiple times
         self._reset_metrics()
+
+
+
+from paddle import ParamAttr
+
+def parameter_init(mode="kaiming", value=0.):
+    if mode == "kaiming":
+        weight_attr = paddle.nn.initializer.KaimingUniform()
+    elif mode == "constant":
+        weight_attr = paddle.nn.initializer.Constant(value=value)
+    else:
+        weight_attr = paddle.nn.initializer.KaimingUniform()
+
+    weight_init = ParamAttr(initializer=weight_attr)
+    return weight_init
+
+kaiming_init = parameter_init("kaiming")
+zeros_init = parameter_init("constant", 0.0)
+import paddle.nn.functional as F
+class TOPk(nn.Layer):
+
+
+    def __init__(self):
+        super(TOPk, self).__init__()
+        student_channels=[384,192,96]
+
+        self.distill_loss_module_list=nn.LayerList()
+        for i in range(3):
+            self.distill_loss_module_list.append(nn.Conv2D(
+                student_channels[i],
+                64,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init))
+        self.cls_moudle=nn.Conv2D(
+                80,
+                64,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init)
+  
+        self.con_estimator = nn.Sequential(nn.Linear(64, 32), 
+                                            nn.ReLU(), 
+                                            nn.Linear(32,16),
+                                            nn.ReLU()) # sigmoid
+        self.last_layer = nn.Linear(16, 1)
+    def forward(self,teacher_preds):
+        feats=teacher_preds[-2]
+        cls_feats=teacher_preds[-1]
+        feats=F.relu(self.distill_loss_module_list[2](feats[2])).detach()
+        feats= F.adaptive_avg_pool2d(feats, (1, 1))
+        cls_feats=self.cls_moudle(cls_feats[-1])
+        cls_feats=F.adaptive_avg_pool2d(cls_feats, (1, 1))
+        feats=F.relu(feats)
+        cls_feats=F.relu(cls_feats)
+        feats_top=feats+cls_feats
+        feats_top=paddle.squeeze(feats_top)
+        topk=self.con_estimator(feats_top)
+        topk=self.last_layer(topk)
+        topk=F.sigmoid(topk)
+        topk=paddle.clip(topk,min=0.2,max=1.0)
+        return topk.mean()

@@ -25,7 +25,7 @@ import paddle.nn.functional as F
 from ..ssod_utils import QFLv2
 from ..losses import GIoULoss
 from IPython import embed
-
+import paddle.nn as nn
 __all__ = ['YOLOv3']
 
 
@@ -67,6 +67,38 @@ class YOLOv3(BaseArch):
         self.queue_feats = paddle.zeros([self.queue_size, 80]).cuda()
         self.queue_probs = paddle.zeros([self.queue_size, 80]).cuda()
         self.it=0
+
+
+
+
+
+
+
+        student_channels=[384,192,96]
+
+        self.distill_loss_module_list=nn.LayerList()
+        for i in range(3):
+            self.distill_loss_module_list.append(nn.Conv2D(
+                student_channels[i],
+                64,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init))
+        self.cls_moudle=nn.Conv2D(
+                80,
+                64,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init)
+  
+        self.con_estimator = nn.Sequential(nn.Linear(64, 32), 
+                                            nn.ReLU(), 
+                                            nn.Linear(32,16),
+                                            nn.ReLU()) # sigmoid
+        self.last_layer = nn.Linear(16, 1)
+        self.topk=TOPk()
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
         # backbone
@@ -144,11 +176,15 @@ class YOLOv3(BaseArch):
     def get_loss_keys(self):
         return ['loss_cls', 'loss_iou', 'loss_dfl','loss_contrast']
 
-    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.01):
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=None,conf=None):
         # student_probs: already sigmoid
-        student_probs, student_deltas, student_dfl = head_outs
-        teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
+
+        student_probs, student_deltas, student_dfl= head_outs
+        teacher_probs, teacher_deltas, teacher_dfl= teacher_head_outs
+
         nc = student_probs.shape[-1]
+        # student_avg_feats=paddle.concat(student_avg_feats,axis=1).squeeze(2).reshape([-1,1])
+        # teacher_avg_feats=paddle.concat(teacher_avg_feats,axis=1).squeeze(2).reshape([-1,1])
         student_probs = student_probs.reshape([-1, nc])
         teacher_probs = teacher_probs.reshape([-1, nc])
         student_deltas = student_deltas.reshape([-1, 4])
@@ -162,44 +198,14 @@ class YOLOv3(BaseArch):
             #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
             max_vals = paddle.max(teacher_probs, 1)
             sorted_vals, sorted_inds = paddle.topk(max_vals,
-                                                   teacher_probs.shape[0])
+                                                    teacher_probs.shape[0])
             mask = paddle.zeros_like(max_vals)
             mask[sorted_inds[:count_num]] = 1.
             fg_num = sorted_vals[:count_num].sum()
             b_mask = mask > 0.
-        #comatch 
-            probs=teacher_probs[b_mask].detach()
-            temperature=0.2
-            alpha=0.9
-            if self.it>100: # memory-smoothing 
-                
-                    A = paddle.exp(paddle.mm(teacher_probs[b_mask], self.queue_probs.t())/temperature)       
-                    A = A/A.sum(1,keepdim=True)                    
-                    probs = alpha*probs + (1-alpha)*paddle.mm(A, self.queue_probs) 
-                # queue_ptr= student_probs.shape[0]
-            n = student_probs[b_mask].shape[0]   
-        sim = paddle.exp(paddle.mm(student_probs[b_mask], teacher_probs[b_mask].t())/0.2) #feats_u_s0.shape 448,64 sim.shape 448,448
-        sim_probs = sim / sim.sum(1, keepdim=True)
-        Q = paddle.mm(probs, probs.t())
-        # Q2 = paddle.mm(probs,  self.queue_probs.t())    
-        # paddle.cat([Q,Q2],dim=1)
-        Q.fill_diagonal_(1)    
-        pos_mask = (Q>=0.5).astype("float")
-            
-        Q = Q * pos_mask
-        Q = Q / Q.sum(1, keepdim=True)
-        # paddle.zeros([672,672]).fill_diagonal_(1)
-        # contrastive loss
-        #如果是多尺度的话建议直接建立一个list每间隔100个迭代pop(0),并且self.queue_=paddle.concat list
-        self.queue_feats[self.queue_ptr:self.queue_ptr + n,:] = teacher_probs[b_mask].detach()
-        self.queue_probs[self.queue_ptr:self.queue_ptr + n,:] = teacher_probs[b_mask].detach()
-        self.queue_ptr = (self.queue_ptr+n)%self.queue_size
-        self.it+=1
-        loss_contrast = - (paddle.log(sim_probs + 1e-7) * Q).sum(1)
-        loss_contrast = loss_contrast.mean()   
         
         
-        loss_logits = QFLv2(
+        loss_logits =conf*QFLv2(
             student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
         # [88872, 80] [88872, 80]
         
@@ -211,7 +217,7 @@ class YOLOv3(BaseArch):
             (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
             axis=-1)
         iou_loss = GIoULoss(reduction='mean')
-        loss_deltas = iou_loss(inputs, targets)
+        loss_deltas = conf*iou_loss(inputs, targets)
 
         loss_dfl = F.cross_entropy(
             F.softmax(student_dfl[b_mask].reshape([-1, 17])),
@@ -223,7 +229,7 @@ class YOLOv3(BaseArch):
             "distill_loss_cls": loss_logits,
             "distill_loss_iou": loss_deltas,
             "distill_loss_dfl": loss_dfl,
-            "distill_loss_contrast": loss_contrast,
+            "distill_loss_contrast": paddle.to_tensor(0),
             "fg_sum": fg_num,
         }
 
@@ -256,3 +262,87 @@ class YOLOv3(BaseArch):
             loss_dfl = loss_dfl.mean(-1)
         loss_dfl = loss_dfl / 4.  # 4 direction
         return loss_dfl
+
+
+
+
+
+
+
+
+
+
+
+        
+
+
+
+
+
+
+
+
+from paddle import ParamAttr
+import paddle.nn as nn
+def parameter_init(mode="kaiming", value=0.):
+    if mode == "kaiming":
+        weight_attr = paddle.nn.initializer.KaimingUniform()
+    elif mode == "constant":
+        weight_attr = paddle.nn.initializer.Constant(value=value)
+    else:
+        weight_attr = paddle.nn.initializer.KaimingUniform()
+
+    weight_init = ParamAttr(initializer=weight_attr)
+    return weight_init
+
+kaiming_init = parameter_init("kaiming")
+zeros_init = parameter_init("constant", 0.0)
+import paddle.nn.functional as F
+class TOPk(nn.Layer):
+
+
+    def __init__(self):
+        super(TOPk, self).__init__()
+        student_channels=[384,192,96]
+
+        self.distill_loss_module_list=nn.LayerList()
+        for i in range(3):
+            self.distill_loss_module_list.append(nn.Conv2D(
+                student_channels[i],
+                64,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init))
+        self.cls_moudle=nn.Conv2D(
+                80,
+                64,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init)
+  
+        self.con_estimator = nn.Sequential(nn.Linear(64, 32), 
+                                            nn.ReLU(), 
+                                            nn.Linear(32,16),
+                                            nn.ReLU()) # sigmoid
+        self.last_layer = nn.Linear(16, 1)
+    def forward(self,teacher_preds):
+        feats=[]
+        cls_feats=[]
+        for i in range(3):
+            feats.append(teacher_preds[-2][i].clone().detach())
+            cls_feats.append(teacher_preds[-1][i].clone().detach())
+        feats=F.relu(self.distill_loss_module_list[2](feats[2]))
+        feats= F.adaptive_avg_pool2d(feats, (1, 1))
+        cls_feats=self.cls_moudle(cls_feats[-1])
+        cls_feats=F.adaptive_avg_pool2d(cls_feats, (1, 1))
+        feats=F.relu(feats)
+        cls_feats=F.relu(cls_feats)
+        feats_top=feats+cls_feats
+        feats_top=paddle.squeeze(feats_top)
+        topk=self.con_estimator(feats_top)
+        topk=self.last_layer(topk)
+        topk=F.sigmoid(topk)
+        topk=paddle.clip(topk,min=0.2,max=1.0)
+        return topk.mean()

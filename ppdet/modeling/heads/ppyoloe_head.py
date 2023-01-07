@@ -159,7 +159,8 @@ class PPYOLOEHead(nn.Layer):
                 feats, self.fpn_strides, self.grid_cell_scale,
                 self.grid_cell_offset)
 
-        cls_score_list, reg_distri_list = [], []
+        cls_score_list, reg_distri_list,avg_feat_list = [], [],[]
+        cls_score_list_ssod=[]
         for i, feat in enumerate(feats):
             avg_feat = F.adaptive_avg_pool2d(feat, (1, 1))
             cls_logit = self.pred_cls[i](self.stem_cls[i](feat, avg_feat) +
@@ -167,8 +168,10 @@ class PPYOLOEHead(nn.Layer):
             reg_distri = self.pred_reg[i](self.stem_reg[i](feat, avg_feat))
             # cls and reg
             cls_score = F.sigmoid(cls_logit)
+            cls_score_list_ssod.append(cls_logit)
             cls_score_list.append(cls_score.flatten(2).transpose([0, 2, 1]))
             reg_distri_list.append(reg_distri.flatten(2).transpose([0, 2, 1]))
+            avg_feat_list.append(avg_feat.detach())
         cls_score_list = paddle.concat(cls_score_list, axis=1)
         reg_distri_list = paddle.concat(reg_distri_list, axis=1)
 
@@ -176,13 +179,13 @@ class PPYOLOEHead(nn.Layer):
             anchor_points_s = anchor_points / stride_tensor
             pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
                 anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list
+            return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list,avg_feat_list,feats,cls_score_list_ssod
 
         if targets.get('get_data', False):
             anchor_points_s = anchor_points / stride_tensor
             pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
                 anchor_points_s, reg_distri_list)
-            return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list
+            return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list,avg_feat_list,feats,cls_score_list_ssod
 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
@@ -450,3 +453,8 @@ class PPYOLOEHead(nn.Layer):
             else:
                 bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
                 return bbox_pred, bbox_num
+
+
+
+
+
