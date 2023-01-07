@@ -16,11 +16,13 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import copy
+import paddle
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 from ..post_process import JDEBBoxPostProcess
 
-__all__ = ['YOLOv3']
+__all__ = ['YOLOv3', 'PPYOLOEWithAuxHead']
 
 
 @register
@@ -121,6 +123,90 @@ class YOLOv3(BaseArch):
                         yolo_head_outs, self.inputs['scale_factor'])
                 output = {'bbox': bbox, 'bbox_num': bbox_num}
 
+            return output
+
+    def get_loss(self):
+        return self._forward()
+
+    def get_pred(self):
+        return self._forward()
+
+
+@register
+class PPYOLOEWithAuxHead(BaseArch):
+    __category__ = 'architecture'
+    __shared__ = ['data_format']
+    __inject__ = ['post_process']
+
+    def __init__(self,
+                 backbone='DarkNet',
+                 neck='YOLOv3FPN',
+                 yolo_head='YOLOv3Head',
+                 yolo_head_aux='SimpleConvHead',
+                 post_process=None,
+                 data_format='NCHW',
+                 for_mot=False,
+                 detach_epoch=5):
+        super(PPYOLOEWithAuxHead, self).__init__(data_format=data_format)
+        self.backbone = backbone
+        self.neck = neck
+        self.neck_aux = copy.deepcopy(self.neck)
+
+        self.yolo_head = yolo_head
+        self.yolo_head_aux = yolo_head_aux
+        self.post_process = post_process
+        self.for_mot = for_mot
+        self.detach_epoch = detach_epoch
+
+    @classmethod
+    def from_config(cls, cfg, *args, **kwargs):
+        # backbone
+        backbone = create(cfg['backbone'])
+
+        # fpn
+        kwargs = {'input_shape': backbone.out_shape}
+        neck = create(cfg['neck'], **kwargs)
+        neck_aux = copy.deepcopy(neck)
+
+        # head
+        kwargs = {'input_shape': neck.out_shape}
+        yolo_head = create(cfg['yolo_head'], **kwargs)  # PPYOLOEHead
+        yolo_head_aux = create(cfg['yolo_head_aux'], **kwargs)
+
+        return {
+            'backbone': backbone,
+            'neck': neck,
+            "yolo_head": yolo_head,
+            'yolo_head_aux': yolo_head_aux,
+        }
+
+    def _forward(self):
+        body_feats = self.backbone(self.inputs)
+        neck_feats = self.neck(body_feats, self.for_mot)
+
+        if self.training:
+            if self.inputs['epoch_id'] >= self.detach_epoch:
+                aux_neck_feats = self.neck_aux([f.detach() for f in body_feats])
+                dual_neck_feats = (paddle.concat(
+                    [f.detach(), aux_f], axis=1) for f, aux_f in
+                                   zip(neck_feats, aux_neck_feats))
+            else:
+                aux_neck_feats = self.neck_aux(body_feats)
+                dual_neck_feats = (paddle.concat(
+                    [f, aux_f], axis=1) for f, aux_f in
+                                   zip(neck_feats, aux_neck_feats))
+            aux_cls_scores, aux_bbox_preds = self.yolo_head_aux(dual_neck_feats)
+
+            loss = self.yolo_head(
+                neck_feats,
+                self.inputs,
+                aux_preds=(aux_cls_scores, aux_bbox_preds))
+            return loss
+        else:
+            yolo_head_outs = self.yolo_head(neck_feats)
+            bbox, bbox_num = self.yolo_head.post_process(
+                yolo_head_outs, self.inputs['scale_factor'])
+            output = {'bbox': bbox, 'bbox_num': bbox_num}
             return output
 
     def get_loss(self):
