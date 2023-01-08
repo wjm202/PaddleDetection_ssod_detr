@@ -521,25 +521,36 @@ class TOPk(nn.Layer):
                 stride=1,
                 padding=0,
                 weight_attr=kaiming_init)
-  
-        self.con_estimator = nn.Sequential(nn.Linear(64, 32), 
+      #  weight_attr = paddle.ParamAttr(
+      #               name="weight",
+      #              initializer=paddle.nn.initializer.Constant(value=0.5))
+      #   bias_attr = paddle.ParamAttr(
+      #                name="bias",
+      #                initializer=paddle.nn.initializer.Constant(value=1.0))
+      
+        self.con_estimator = nn.Sequential(nn.Linear(64, 64), 
                                             nn.ReLU(), 
-                                            nn.Linear(32,16),
+                                            nn.Linear(64,32),
                                             nn.ReLU()) # sigmoid
-        self.last_layer = nn.Linear(16, 1)
+        self.it=0
+        self.last_layer = nn.Linear(32, 1)
     def forward(self,teacher_preds):
         feats=teacher_preds[-2]
         cls_feats=teacher_preds[-1]
-        feats=F.relu(self.distill_loss_module_list[2](feats[2])).detach()
+        feats=F.sigmoid(self.distill_loss_module_list[2](feats[2])).detach()
         feats= F.adaptive_avg_pool2d(feats, (1, 1))
         cls_feats=self.cls_moudle(cls_feats[-1])
         cls_feats=F.adaptive_avg_pool2d(cls_feats, (1, 1))
         feats=F.relu(feats)
-        cls_feats=F.relu(cls_feats)
+        #cls_feats=F.relu(cls_feats)
         feats_top=feats+cls_feats
         feats_top=paddle.squeeze(feats_top)
         topk=self.con_estimator(feats_top)
         topk=self.last_layer(topk)
         topk=F.sigmoid(topk)
         topk=paddle.clip(topk,min=0.2,max=1.0)
-        return topk.mean()
+        if self.it%10==0:
+            print(topk)
+            print(topk.max())
+        self.it+=1
+        return topk.max()+0.2

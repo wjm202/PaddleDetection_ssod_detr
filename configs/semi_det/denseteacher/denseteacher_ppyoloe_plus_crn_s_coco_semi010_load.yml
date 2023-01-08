@@ -2,8 +2,8 @@ _BASE_: [
   '../../ppyoloe/ppyoloe_plus_crn_s_80e_coco.yml',
   '../_base_/coco_detection_percent_10.yml',
 ]
-log_iter: 10
-snapshot_epoch: 2
+log_iter: 100
+snapshot_epoch: 4
 epochs: &epochs 200
 cosine_epochs: &cosine_epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final

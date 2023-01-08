@@ -178,10 +178,11 @@ class YOLOv3(BaseArch):
 
     def get_distill_loss(self, head_outs, teacher_head_outs, ratio=None,conf=None):
         # student_probs: already sigmoid
-
+        
+        #print(conf)      
         student_probs, student_deltas, student_dfl= head_outs
         teacher_probs, teacher_deltas, teacher_dfl= teacher_head_outs
-
+        
         nc = student_probs.shape[-1]
         # student_avg_feats=paddle.concat(student_avg_feats,axis=1).squeeze(2).reshape([-1,1])
         # teacher_avg_feats=paddle.concat(teacher_avg_feats,axis=1).squeeze(2).reshape([-1,1])
