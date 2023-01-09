@@ -15,9 +15,9 @@ width_mult: 0.375
 en_attn: &en_attn True
 is_close_gt: &is_close_gt True
 epoch: 60
-max_epochs: &max_epochs 72
-warmup_epochs: &warmup_epochs 3
-static_assigner_epoch: &static_assigner_epoch 20
+max_epochs: &max_epochs 80 #72
+warmup_epochs: &warmup_epochs 2 #
+static_assigner_epoch: &static_assigner_epoch 10 #20
 LearningRate:
   base_lr: 0.01
   schedulers:
@@ -56,7 +56,7 @@ CSPResNet:
   channels: [64, 128, 256, 512, 1024]
   return_idx: [0, 1, 2, 3] # default [1, 2, 3]
   use_large_stem: True
-  use_alpha: True
+  # use_alpha: True
 
 CustomCSPPAN:
   out_channels: [768, 384, 192, 96] #[384, 384, 384, 384] # default [768, 384, 192]
@@ -101,7 +101,8 @@ eval_width: &eval_width 320
 eval_size: &eval_size [*eval_height, *eval_width]
 TrainReader:
   sample_transforms:
-    - Decode: {}
+    #- Decode: {}
+    - DecodeCache: {cache_root: 'dataset/coco/cache/buffer'}
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
     - RandomCrop: {}
@@ -110,8 +111,8 @@ TrainReader:
     #- BatchRandomResize: {target_size: [320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704, 736, 768], random_size: True, random_interp: True, keep_ratio: False}
     #- BatchRandomResize: {target_size: [160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 480], random_size: True, random_interp: True, keep_ratio: False}
     - BatchRandomResize: {target_size: [160, 192, 224, 256, 288, 320, 352, 384], random_size: True, random_interp: True, keep_ratio: False}
-    #- NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
-    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
+    #- NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
     - PadGT: {}
   batch_size: 8
@@ -124,8 +125,8 @@ EvalReader:
   sample_transforms:
     - Decode: {}
     - Resize: {target_size: *eval_size, keep_ratio: False, interp: 2}
-    # - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
-    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
+    #- NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
   batch_size: 2
 
@@ -135,7 +136,7 @@ TestReader:
   sample_transforms:
     - Decode: {}
     - Resize: {target_size: *eval_size, keep_ratio: False, interp: 2}
-    # - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
-    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
+    #- NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
     - Permute: {}
   batch_size: 1
