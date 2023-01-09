@@ -215,7 +215,7 @@ class Trainer_DenseTeacher(Trainer):
 
         for param in self.ema.model.parameters():
             param.stop_gradient = True
-        self.topk=TOPk()
+        # self.topk=TOPk()
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -234,11 +234,13 @@ class Trainer_DenseTeacher(Trainer):
                     loss_dict.update({k: paddle.to_tensor([0.])})
                 for k in self.model._layers.get_loss_keys():
                     loss_dict.update({'distill_' + k: paddle.to_tensor([0.])})
+                    
             else:
                 for k in self.model.get_loss_keys():
                     loss_dict.update({k: paddle.to_tensor([0.])})
                 for k in self.model.get_loss_keys():
                     loss_dict.update({'distill_' + k: paddle.to_tensor([0.])})
+                loss_dict.update({'distill_loss_contrast': paddle.to_tensor([0.])})
 
             # Note: for step_id, data in enumerate(self.loader): # enumerate bug
             for step_id in range(len(self.loader)):
@@ -315,19 +317,19 @@ class Trainer_DenseTeacher(Trainer):
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
                         teacher_preds = self.ema.model(data_unsup_w)
-                    out=self.topk(teacher_preds)
+                    # out=self.topk(teacher_preds)
                     if self._nranks > 1:
                         loss_dict_unsup = self.model._layers.get_distill_loss(
                             student_preds[:3],
                             teacher_preds[:3],
                             ratio=train_cfg['ratio'],
-                            conf=out)
+                            )
                     else:
                         loss_dict_unsup = self.model.get_distill_loss(
                             student_preds[:3],
                             teacher_preds[:3],
                             ratio=train_cfg['ratio'],
-                            conf=out)
+                            )
 
                     fg_num = loss_dict_unsup["fg_sum"]
                     del loss_dict_unsup["fg_sum"]
@@ -521,19 +523,13 @@ class TOPk(nn.Layer):
                 stride=1,
                 padding=0,
                 weight_attr=kaiming_init)
-      #  weight_attr = paddle.ParamAttr(
-      #               name="weight",
-      #              initializer=paddle.nn.initializer.Constant(value=0.5))
-      #   bias_attr = paddle.ParamAttr(
-      #                name="bias",
-      #                initializer=paddle.nn.initializer.Constant(value=1.0))
       
-        self.con_estimator = nn.Sequential(nn.Linear(64, 64), 
+        self.con_estimator = nn.Sequential(nn.Linear(64, 64,weight_attr=kaiming_init), 
                                             nn.ReLU(), 
-                                            nn.Linear(64,32),
+                                            nn.Linear(64,32,weight_attr=kaiming_init),
                                             nn.ReLU()) # sigmoid
         self.it=0
-        self.last_layer = nn.Linear(32, 1)
+        self.last_layer = nn.Linear(32, 1,weight_attr=kaiming_init)
     def forward(self,teacher_preds):
         feats=teacher_preds[-2]
         cls_feats=teacher_preds[-1]
@@ -549,8 +545,8 @@ class TOPk(nn.Layer):
         topk=self.last_layer(topk)
         topk=F.sigmoid(topk)
         topk=paddle.clip(topk,min=0.2,max=1.0)
-        if self.it%10==0:
-            print(topk)
+        if self.it%20==0:
+            # print(topk)
             print(topk.max())
         self.it+=1
         return topk.max()+0.2

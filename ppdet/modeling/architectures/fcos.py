@@ -46,6 +46,13 @@ class FCOS(BaseArch):
         self.fcos_head = fcos_head
         self.is_teacher = False
 
+        self.queue_ptr=0
+        self.queue_size = 100*672
+        # self.queue_feats = paddle.zeros([self.queue_size, 80]).cuda()
+        # self.queue_probs = paddle.zeros([self.queue_size, 80]).cuda()
+        self.queue_probs=[]
+        self.queue_feats=[]
+        self.it=0
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
         backbone = create(cfg['backbone'])
@@ -132,21 +139,57 @@ class FCOS(BaseArch):
             ],
             axis=0)
 
+        student_probs=F.sigmoid(student_logits)
+
         with paddle.no_grad():
             # Region Selection
             count_num = int(teacher_logits.shape[0] * ratio)
-            teacher_probs = F.sigmoid(teacher_logits)
+            teacher_probs = F.sigmoid(teacher_logits) # already sigmoid
             max_vals = paddle.max(teacher_probs, 1)
             sorted_vals, sorted_inds = paddle.topk(max_vals,
-                                                   teacher_logits.shape[0])
+                                                   teacher_probs.shape[0])
             mask = paddle.zeros_like(max_vals)
             mask[sorted_inds[:count_num]] = 1.
             fg_num = sorted_vals[:count_num].sum()
-            b_mask = mask > 0
+            b_mask = mask > 0.
+        #comatch 
+            probs=teacher_logits[b_mask].detach()
+            temperature=0.2
+            alpha=0.9
+            if self.it>100: # memory-smoothing 
+                
+                    A = paddle.exp(paddle.mm(teacher_probs[b_mask], self.queue_probs_tensor.t())/temperature)       
+                    A = A/A.sum(1,keepdim=True)                    
+                    probs = alpha*probs + (1-alpha)*paddle.mm(A, self.queue_probs) 
+                # queue_ptr= student_probs.shape[0]
+            n = teacher_logits[b_mask].shape[0]   
+        sim = paddle.exp(paddle.mm(student_probs[b_mask], teacher_probs[b_mask].t())/0.2) #feats_u_s0.shape 448,64 sim.shape 448,448
+        sim_probs = sim / sim.sum(1, keepdim=True)
+        Q = paddle.mm(probs, probs.t())
+        # Q2 = paddle.mm(probs,  self.queue_probs.t())    
+        # paddle.cat([Q,Q2],dim=1)
+        Q.fill_diagonal_(1)    
+        pos_mask = (Q>=0.5).astype("float")
+            
+        Q = Q * pos_mask
+        Q = Q / Q.sum(1, keepdim=True)
+        # paddle.zeros([672,672]).fill_diagonal_(1)
+        # contrastive loss
+        #如果是多尺度的话建议直接建立一个list每间隔100个迭代pop(0),并且self.queue_=paddle.concat list
+        self.queue_feats.append(teacher_probs[b_mask].detach())
+        self.queue_probs.append(teacher_probs[b_mask].detach())
+        if len( self.queue_feats)>100:
+            self.queue_probs.pop(0)
+            self.queue_feats.pop(0)
+        self.queue_probs_tensor=paddle.concat([_ for _ in self.queue_probs])
+        self.queue_feats_tensor=paddle.concat([_ for _ in self.queue_feats])
+        self.it+=1
+        loss_contrast = - (paddle.log(sim_probs + 1e-7) * Q).sum(1)
+        loss_contrast = loss_contrast.mean()  
 
         # distill_loss_cls
         loss_logits = QFLv2(
-            F.sigmoid(student_logits),
+            student_probs,
             teacher_probs,
             weight=mask,
             reduction="sum") / fg_num
@@ -171,5 +214,6 @@ class FCOS(BaseArch):
             "distill_loss_cls": loss_logits,
             "distill_loss_box": loss_deltas,
             "distill_loss_quality": loss_quality,
+            "distill_loss_contrast": loss_contrast,
             "fg_sum": fg_num,
         }

@@ -3,15 +3,15 @@ _BASE_: [
   '../_base_/coco_detection_percent_5.yml',
 ]
 log_iter: 20
-snapshot_epoch: 5
-epochs: &epochs 240 # 480 will be better
+snapshot_epoch: 50
+epochs: &epochs 2400 # 480 will be better
 weights: output/denseteacher_fcos_r50_fpn_coco_semi005/model_final
 
 
 ### pretrain and warmup config, choose one and coment another
-pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-semi_start_iters: 5000
-ema_start_iters: 3000
+pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
+semi_start_iters: -1
+ema_start_iters: -1
 use_warmup: &use_warmup True
 
 
@@ -23,7 +23,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0,distill_loss_contrast: 0.1}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01
@@ -157,3 +157,36 @@ OptimizerBuilder:
     factor: 0.0001
     type: L2
   clip_grad_by_value: 1.0
+
+
+metric: COCO
+num_classes: 80
+
+# partial labeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
+TrainDataset:
+  !SemiCOCODataSet
+    image_dir: train2017
+    anno_path: semi_annotations/instances_train2017.1@1.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+
+# partial unlabeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
+UnsupTrainDataset:
+  !SemiCOCODataSet
+    image_dir: train2017
+    anno_path: semi_annotations/instances_train2017.1@1-unlabeled.json
+    dataset_dir: dataset/coco
+    data_fields: ['image']
+    supervised: False
+
+EvalDataset:
+  !COCODataSet
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    allow_empty: true
+
+TestDataset:
+  !ImageFolder
+    anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
+    dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'
