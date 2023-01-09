@@ -9,9 +9,9 @@ weights: output/denseteacher_fcos_r50_fpn_coco_semi005/model_final
 
 
 ### pretrain and warmup config, choose one and coment another
-pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_1x_coco.pdparams
-semi_start_iters: -1
-ema_start_iters: -1
+pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
+semi_start_iters: 5000
+ema_start_iters: 3000
 use_warmup: &use_warmup True
 
 
@@ -23,7 +23,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0,distill_loss_contrast: 0.1}
+    loss_weight: {distill_loss_cls: 3.0, distill_loss_box: 1.0, distill_loss_quality: 1.0,distill_loss_contrast: 0.08}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01
@@ -33,7 +33,7 @@ DenseTeacher:
 
 
 ### reader config
-worker_num: 2
+worker_num: 4
 SemiTrainReader:
   sample_transforms:
     - Decode: {}

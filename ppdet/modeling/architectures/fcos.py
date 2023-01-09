@@ -160,7 +160,7 @@ class FCOS(BaseArch):
                 
                     A = paddle.exp(paddle.mm(teacher_probs[b_mask], self.queue_probs_tensor.t())/temperature)       
                     A = A/A.sum(1,keepdim=True)                    
-                    probs = alpha*probs + (1-alpha)*paddle.mm(A, self.queue_probs) 
+                    probs = alpha*probs + (1-alpha)*paddle.mm(A, self.queue_probs_tensor) 
                 # queue_ptr= student_probs.shape[0]
             n = teacher_logits[b_mask].shape[0]   
         sim = paddle.exp(paddle.mm(student_probs[b_mask], teacher_probs[b_mask].t())/0.2) #feats_u_s0.shape 448,64 sim.shape 448,448
