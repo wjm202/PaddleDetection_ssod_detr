@@ -16,9 +16,11 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import numpy as np
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
+from .distill import SSIM
 
 from ppdet.core.workspace import register, create, load_config
 from ppdet.utils.checkpoint import load_pretrain_weight
@@ -65,7 +67,7 @@ class PPYOLOEDistillModel(nn.Layer):
             student_out = self.student_model(inputs)
 
             # head loss concerned
-            soft_loss, fgdloss, distill_loss_dict = self.distill_loss(
+            soft_loss, feat_loss, distill_loss_dict = self.distill_loss(
                 self.teacher_model, self.student_model)
             # print(distill_loss_dict)
             # base loss
@@ -73,8 +75,8 @@ class PPYOLOEDistillModel(nn.Layer):
             oriloss = stu_loss['loss']
 
             # conbined distill
-            stu_loss['loss'] = soft_loss + alpha * fgdloss + alpha * oriloss
-            stu_loss['fgd_loss'] = fgdloss
+            stu_loss['loss'] = soft_loss + alpha * feat_loss + alpha * oriloss
+            stu_loss['feat_loss'] = feat_loss
             stu_loss['soft_loss'] = soft_loss
             return stu_loss
         else:
@@ -122,6 +124,10 @@ class DistillPPYOLOELoss(nn.Layer):
                         student_channels=self.s_channel_list[i],
                         teacher_channels=self.t_channel_list[i],
                         resize_stu=False)
+                elif self.kd_type == 'mgd':
+                    distill_loss_module = MGDSSIMLoss(
+                        student_channels=self.s_channel_list[i],
+                        teacher_channels=self.t_channel_list[i]) 
                 else:
                     raise ValueError
                 distill_loss_module_list.append(distill_loss_module)
@@ -240,11 +246,11 @@ class DistillPPYOLOELoss(nn.Layer):
         else:
             distill_neck_global_loss = paddle.to_tensor([0])
 
-        loss = (distill_bbox_loss * self.bbox_loss_weight + distill_cls_loss *
+        soft_loss = (distill_bbox_loss * self.bbox_loss_weight + distill_cls_loss *
                 self.qfl_loss_weight + distill_dfl_loss * self.dfl_loss_weight)
         student_model.yolo_head.distill_pairs.clear()
         teacher_model.yolo_head.distill_pairs.clear()
-        return loss, \
+        return soft_loss, \
             distill_neck_global_loss, \
             {'dfl_loss': distill_dfl_loss, 'qfl_loss': distill_cls_loss, 'bbox_loss': distill_bbox_loss}
 
@@ -583,4 +589,84 @@ class PKDLoss(nn.Layer):
         # vectors, and then use 1-r as the new feature imitation loss.
         loss += F.mse_loss(norm_S, norm_T) / 2
 
+        return loss * self.loss_weight
+
+
+@register
+class MGDSSIMLoss(nn.Layer):
+
+    def __init__(self,
+                 student_channels=256,
+                 teacher_channels=256,
+                 loss_weight=1.0,
+                 max_alpha=1.0,
+                 min_alpha=0.2):
+        super(MGDSSIMLoss, self).__init__()
+        self.loss_weight = loss_weight
+        self.max_alpha = max_alpha
+        self.min_alpha = min_alpha
+        self.mse_loss = nn.MSELoss(reduction='sum')
+        self.ssim_loss = SSIM(11)
+
+        kaiming_init = parameter_init("kaiming")
+        if student_channels != teacher_channels:
+            self.align_layer = nn.Conv2D(
+                student_channels,
+                teacher_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                weight_attr=kaiming_init,
+                bias_attr=False)
+        else:
+            self.align_layer = None
+
+        self.generations= nn.Sequential(
+                nn.Conv2D(
+                    teacher_channels,
+                    teacher_channels,
+                    kernel_size=3,
+                    padding=1),
+                nn.ReLU(),
+                nn.Conv2D(
+                    teacher_channels,
+                    teacher_channels,
+                    kernel_size=3,
+                    padding=1))
+        self.use_norm = False
+
+    def norm(self, feat):
+        """Normalize the feature maps to have zero mean and unit variances.
+        Args:
+            feat (torch.Tensor): The original feature map with shape
+                (N, C, H, W).
+        """
+        assert len(feat.shape) == 4
+        N, C, H, W = feat.shape
+        feat = feat.transpose([1, 0, 2, 3]).reshape([C, -1])
+        mean = feat.mean(axis=-1, keepdim=True)
+        std = feat.std(axis=-1, keepdim=True)
+        feat = (feat - mean) / (std + 1e-6)
+        return feat.reshape([C, N, H, W]).transpose([1, 0, 2, 3])
+
+    def get_ppyoloe_mgd_loss(self, stu_feature, tea_feature, ssim=False):
+        N, C, H, W = stu_feature.shape
+        masked_fea = stu_feature
+        masked_fea = self.align_layer(masked_fea)
+        new_fea = self.generations(masked_fea)
+
+        if self.use_norm:
+            new_fea = self.norm(new_fea)
+            tea_feature = self.norm(tea_feature)
+
+        if ssim is False:
+            dis_loss = self.mse_loss(new_fea, tea_feature) / N
+        else:
+            ssim = self.ssim_loss(new_fea, tea_feature)
+            dis_loss = paddle.clip((1 - ssim) / 2, 0, 1)
+        return dis_loss
+
+    def forward(self, stu_fpn_feat, tea_fpn_feat, input):
+        loss = self.get_ppyoloe_mgd_loss(
+            stu_fpn_feat, tea_fpn_feat, ssim=True)
         return loss * self.loss_weight

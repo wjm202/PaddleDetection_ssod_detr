@@ -1,7 +1,7 @@
 export FLAGS_allocator_strategy=auto_growth
 model_type=ppyoloe
 job_name=ppyoloe_plus_crn_l_80e_coco
-job_name_tea=ppyoloe_plus_distill_x_to_l
+job_name_tea=ppyoloe_plus_distill_x_to_l_logits_mgdssim
 
 config=configs/${model_type}/${job_name}.yml
 slim_config=configs/${model_type}/${job_name_tea}.yml
