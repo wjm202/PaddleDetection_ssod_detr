@@ -41,6 +41,7 @@ class YOLOv3(BaseArch):
                  yolo_head='YOLOv3Head',
                  post_process='BBoxPostProcess',
                  data_format='NCHW',
+
                  for_mot=False):
         """
         YOLOv3 network, see https://arxiv.org/abs/1804.02767
@@ -66,6 +67,8 @@ class YOLOv3(BaseArch):
         self.queue_size = 100*672
         self.queue_feats = paddle.zeros([self.queue_size, 80]).cuda()
         self.queue_probs = paddle.zeros([self.queue_size, 80]).cuda()
+        self.temperature=0.2
+        self.alpha=0.9
         self.it=0
     @classmethod
     def from_config(cls, cfg, *args, **kwargs):
@@ -169,28 +172,20 @@ class YOLOv3(BaseArch):
             b_mask = mask > 0.
         #comatch 
             probs=teacher_probs[b_mask].detach()
-            temperature=0.2
-            alpha=0.9
-            if self.it>100: # memory-smoothing 
-                
-                    A = paddle.exp(paddle.mm(teacher_probs[b_mask], self.queue_probs.t())/temperature)       
+            if self.it>100: # memory-smoothing      
+                    A = paddle.exp(paddle.mm(teacher_probs[b_mask], self.queue_probs.t())/self.temperature)       
                     A = A/A.sum(1,keepdim=True)                    
-                    probs = alpha*probs + (1-alpha)*paddle.mm(A, self.queue_probs) 
-                # queue_ptr= student_probs.shape[0]
+                    probs = self.alpha*probs + (1-self.alpha)*paddle.mm(A, self.queue_probs) 
             n = student_probs[b_mask].shape[0]   
-        sim = paddle.exp(paddle.mm(student_probs[b_mask], teacher_probs[b_mask].t())/0.2) #feats_u_s0.shape 448,64 sim.shape 448,448
+        sim = paddle.exp(paddle.mm(student_probs[b_mask], teacher_probs[b_mask].t())/self.temperature)
         sim_probs = sim / sim.sum(1, keepdim=True)
         Q = paddle.mm(probs, probs.t())
-        # Q2 = paddle.mm(probs,  self.queue_probs.t())    
-        # paddle.cat([Q,Q2],dim=1)
         Q.fill_diagonal_(1)    
         pos_mask = (Q>=0.5).astype("float")
             
         Q = Q * pos_mask
         Q = Q / Q.sum(1, keepdim=True)
-        # paddle.zeros([672,672]).fill_diagonal_(1)
-        # contrastive loss
-        #如果是多尺度的话建议直接建立一个list每间隔100个迭代pop(0),并且self.queue_=paddle.concat list
+
         self.queue_feats[self.queue_ptr:self.queue_ptr + n,:] = teacher_probs[b_mask].detach()
         self.queue_probs[self.queue_ptr:self.queue_ptr + n,:] = teacher_probs[b_mask].detach()
         self.queue_ptr = (self.queue_ptr+n)%self.queue_size
