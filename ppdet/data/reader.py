@@ -353,6 +353,7 @@ class Compose_SSOD(object):
 
         weak_data = deepcopy(data)
         strong_data = deepcopy(data)
+            
         for f in self.weak_augs_cls:
             try:
                 weak_data = f(weak_data)
@@ -372,8 +373,18 @@ class Compose_SSOD(object):
                                "with error: {} and stack:\n{}".format(
                                    f, e, str(stack_info)))
                 raise e
-
         weak_data['strong_aug'] = strong_data
+        if 'gt_class' not in data.keys():
+            strong_data1=deepcopy(data)
+            try:
+                strong_data1 = f(strong_data1)
+            except Exception as e:
+                stack_info = traceback.format_exc()
+                logger.warning("fail to map strong aug [{}] "
+                               "with error: {} and stack:\n{}".format(
+                                   f, e, str(stack_info)))
+                raise e
+            weak_data['strong_aug_sim'] = strong_data1
         return weak_data
 
 
@@ -385,14 +396,20 @@ class BatchCompose_SSOD(Compose):
     def __call__(self, data):
         # split strong_data from data(weak_data)
         strong_data = []
+        strong_data_sim = []
         for sample in data:
             strong_data.append(sample['strong_aug'])
+            if 'strong_aug_sim' in sample.keys():
+                strong_data_sim.append(sample['strong_aug_sim'])
+                sample.pop('strong_aug_sim')
             sample.pop('strong_aug')
-
+        
         for f in self.transforms_cls:
             try:
                 data = f(data)
                 strong_data = f(strong_data)
+                if len(strong_data_sim) != 0:
+                   strong_data_sim = f(strong_data_sim)
             except Exception as e:
                 stack_info = traceback.format_exc()
                 logger.warning("fail to map batch transform [{}] "
@@ -409,12 +426,19 @@ class BatchCompose_SSOD(Compose):
             for sample in strong_data:
                 if k in sample:
                     sample.pop(k)
+            if len(strong_data_sim) != 0:
+                for sample in strong_data_sim:
+                    if k in sample:
+                        sample.pop(k)
 
         # batch data, if user-define batch function needed
         # use user-defined here
         if self.collate_batch:
             batch_data = default_collate_fn(data)
             strong_batch_data = default_collate_fn(strong_data)
+            if len(strong_data_sim) != 0:
+                strong_batch_data_sim = default_collate_fn(strong_data_sim)
+                return batch_data, strong_batch_data,  strong_batch_data_sim
             return batch_data, strong_batch_data
         else:
             batch_data = {}
@@ -460,7 +484,8 @@ class CombineSSODLoader(object):
                 label_samples[0],  # sup weak
                 label_samples[1],  # sup strong
                 unlabel_samples[0],  # unsup weak
-                unlabel_samples[1]  # unsup strong
+                unlabel_samples[1],  # unsup strong
+                unlabel_samples[2]
             )
 
     def __call__(self):

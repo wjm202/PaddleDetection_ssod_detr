@@ -215,7 +215,7 @@ class Trainer_DenseTeacher(Trainer):
 
         for param in self.ema.model.parameters():
             param.stop_gradient = True
-        # self.topk=TOPk()
+        self.topk=TOPk()
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -248,7 +248,7 @@ class Trainer_DenseTeacher(Trainer):
 
                 self.model.train()
                 self.ema.model.eval()
-                data_sup_w, data_sup_s, data_unsup_w, data_unsup_s = data
+                data_sup_w, data_sup_s, data_unsup_w, data_unsup_s, data_unsup_s2= data
 
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
@@ -272,7 +272,12 @@ class Trainer_DenseTeacher(Trainer):
                     loss_dict_sup = self.model(data_sup_s)
                     for k, v in loss_dict_sup_w.items():
                         loss_dict_sup[k] = (loss_dict_sup[k] + v) * 0.5
-
+                # data_unsup_s2['simlarity'] = True
+                # preds_simlarity = self.model(data_unsup_s2)
+                # if self._nranks > 1:
+                #     loss_sim = self.model._layers.get_simliarity_loss(preds_simlarity)
+                # else:
+                #     loss_sim=self.model.get_simliarity_loss(preds_simlarity)
                 losses_sup = loss_dict_sup['loss'] * train_cfg['sup_weight']
                 losses_sup.backward()
 
@@ -317,20 +322,34 @@ class Trainer_DenseTeacher(Trainer):
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
                         teacher_preds = self.ema.model(data_unsup_w)
-                    # out=self.topk(teacher_preds)
+                    for k, v in data_unsup_s2.items():
+                        if k in ['epoch_id']:
+                            continue
+                        data_unsup_s2[k] = paddle.concat([v, data_unsup_s[k]])
+                    # data_unsup_s2['simlarity'] = True
+                    # preds_simlarity = self.model(data_unsup_s2)
+                    out=self.topk(teacher_preds,student_preds)
+                    
+                    
+                    
                     if self._nranks > 1:
                         loss_dict_unsup = self.model._layers.get_distill_loss(
-                            student_preds[:3],
-                            teacher_preds[:3],
+                            student_preds,
+                            teacher_preds,
                             ratio=train_cfg['ratio'],
-                            )
+                            conf=None,
+                            pred_loss=out[1])
+                            # sim=preds_simlarity)
+                            
                     else:
                         loss_dict_unsup = self.model.get_distill_loss(
-                            student_preds[:3],
-                            teacher_preds[:3],
+                           student_preds,
+                            teacher_preds,
                             ratio=train_cfg['ratio'],
-                            )
-
+                            conf=None,
+                            pred_loss=None)
+                            # sim=preds_simlarity)
+                            
                     fg_num = loss_dict_unsup["fg_sum"]
                     del loss_dict_unsup["fg_sum"]
                     distill_weights = train_cfg['loss_weight']
@@ -344,7 +363,7 @@ class Trainer_DenseTeacher(Trainer):
                         for metrics_value in loss_dict_unsup.values()
                     ]) * unsup_weight
                     losses_unsup.backward()
-
+          
                     loss_dict.update(loss_dict_unsup)
                     loss_dict.update({'loss_unsup_sum': losses_unsup})
                     losses += losses_unsup.detach()
@@ -499,7 +518,9 @@ def parameter_init(mode="kaiming", value=0.):
 
 kaiming_init = parameter_init("kaiming")
 zeros_init = parameter_init("constant", 0.0)
+from paddle.nn.initializer import KaimingNormal, XavierNormal
 import paddle.nn.functional as F
+from ppdet.modeling.backbones.cspresnet import ConvBNLayer
 class TOPk(nn.Layer):
 
 
@@ -509,44 +530,78 @@ class TOPk(nn.Layer):
 
         self.distill_loss_module_list=nn.LayerList()
         for i in range(3):
-            self.distill_loss_module_list.append(nn.Conv2D(
+            self.distill_loss_module_list.append(ConvBNLayer(
                 student_channels[i],
                 64,
-                kernel_size=1,
+                filter_size=1,
                 stride=1,
                 padding=0,
-                weight_attr=kaiming_init))
-        self.cls_moudle=nn.Conv2D(
+                act=None))
+        self.cls_moudle=ConvBNLayer(
                 80,
                 64,
-                kernel_size=1,
+                filter_size=1,
                 stride=1,
                 padding=0,
-                weight_attr=kaiming_init)
-      
-        self.con_estimator = nn.Sequential(nn.Linear(64, 64,weight_attr=kaiming_init), 
+                act=None)
+        self.con_estimator = nn.Sequential(nn.Linear(128, 64), 
                                             nn.ReLU(), 
-                                            nn.Linear(64,32,weight_attr=kaiming_init),
+                                            nn.Linear(64,32),
                                             nn.ReLU()) # sigmoid
         self.it=0
-        self.last_layer = nn.Linear(32, 1,weight_attr=kaiming_init)
-    def forward(self,teacher_preds):
-        feats=teacher_preds[-2]
-        cls_feats=teacher_preds[-1]
-        feats=F.sigmoid(self.distill_loss_module_list[2](feats[2])).detach()
-        feats= F.adaptive_avg_pool2d(feats, (1, 1))
-        cls_feats=self.cls_moudle(cls_feats[-1])
-        cls_feats=F.adaptive_avg_pool2d(cls_feats, (1, 1))
+        self.last_layer = nn.Linear(32, 1)
+    def forward(self,teacher_head_outs,head_outs):
+        feats=teacher_head_outs[-2][2].clone().detach()
+        cls_feats=teacher_head_outs[-1][-1].clone().detach()
+        
+        feats=self.distill_loss_module_list[2](feats)
         feats=F.relu(feats)
-        #cls_feats=F.relu(cls_feats)
-        feats_top=feats+cls_feats
+        feats=F.adaptive_avg_pool2d(feats, (1, 1))
+        feats=F.relu(feats)
+        
+        cls_feats=self.cls_moudle(cls_feats)
+        cls_feats=F.relu(cls_feats)
+        cls_feats=F.adaptive_avg_pool2d(cls_feats, (1, 1))
+        cls_feats=F.relu(cls_feats)
+        
+        feats_top=paddle.concat([feats,cls_feats],axis=1)
         feats_top=paddle.squeeze(feats_top)
         topk=self.con_estimator(feats_top)
         topk=self.last_layer(topk)
         topk=F.sigmoid(topk)
         topk=paddle.clip(topk,min=0.2,max=1.0)
-        if self.it%20==0:
-            # print(topk)
-            print(topk.max())
+        # print(topk)
+        # if self.it%20==0:
+        #     print(topk)
+        #     print(topk.max())
         self.it+=1
-        return topk.max()+0.2
+        
+        
+        feats_stu=head_outs[-2][2]
+        cls_feats_stu=head_outs[-1][-1]
+        
+        feats_stu=self.distill_loss_module_list[2](feats_stu)
+        feats_stu==F.swish(feats_stu)
+        feats_stu=F.adaptive_avg_pool2d(feats_stu, (1, 1))
+        feats_stu==F.swish(feats_stu)
+        
+        cls_feats_stu=self.cls_moudle(cls_feats_stu)
+        cls_feats_stu=F.swish(cls_feats_stu)
+        cls_feats_stu=F.adaptive_avg_pool2d(cls_feats_stu, (1, 1))
+        cls_feats_stu==F.swish(cls_feats_stu)
+        
+        feats_top_stu=paddle.concat([feats_stu,cls_feats_stu],axis=1)
+        feats_top_stu=paddle.squeeze(feats_top_stu)
+        topk_stu=self.con_estimator(feats_top_stu)
+        topk_stu=self.last_layer(topk_stu)
+        topk_stu=F.sigmoid(topk_stu)
+        topk_stu=paddle.clip(topk_stu,min=0.2,max=1.0)
+
+        pred_loss = (ce_loss(topk_stu,topk)*topk).mean()
+        return topk,pred_loss
+    
+def ce_loss(logits, targets):
+        log_pred = logits.log()
+        nll_loss = paddle.sum(-targets * log_pred, axis=1)
+        return nll_loss
+    

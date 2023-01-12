@@ -47,7 +47,7 @@ SemiTrainReader:
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
     - RandomFlip: {}
-    - RandomCrop: {} # unsup will be fake gt_boxes
+    # - RandomCrop: {} # unsup will be fake gt_boxes
   weak_aug:
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   strong_aug:

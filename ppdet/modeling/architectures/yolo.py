@@ -27,7 +27,23 @@ from ..losses import GIoULoss
 from IPython import embed
 import paddle.nn as nn
 __all__ = ['YOLOv3']
+from ppdet.modeling.backbones.cspresnet import ConvBNLayer
 
+from paddle import ParamAttr
+
+def parameter_init(mode="kaiming", value=0.):
+    if mode == "kaiming":
+        weight_attr = paddle.nn.initializer.KaimingUniform()
+    elif mode == "constant":
+        weight_attr = paddle.nn.initializer.Constant(value=value)
+    else:
+        weight_attr = paddle.nn.initializer.KaimingUniform()
+
+    weight_init = ParamAttr(initializer=weight_attr)
+    return weight_init
+
+kaiming_init = parameter_init("kaiming")
+zeros_init = parameter_init("constant", 0.0)
 
 @register
 class YOLOv3(BaseArch):
@@ -44,7 +60,6 @@ class YOLOv3(BaseArch):
                  for_mot=False):
         """
         YOLOv3 network, see https://arxiv.org/abs/1804.02767
-
         Args:
             backbone (nn.Layer): backbone instance
             neck (nn.Layer): neck instance
@@ -100,14 +115,19 @@ class YOLOv3(BaseArch):
             neck_feats = neck_feats['yolo_feats']
 
         self.is_teacher = self.inputs.get('is_teacher', False)
+        self.simlarity = self.inputs.get('simlarity', False)
+        if self.simlarity:
+            yolo_losses = self.yolo_head(neck_feats, self.inputs)
+            
+            return yolo_losses
         if self.training or self.is_teacher:
             yolo_losses = self.yolo_head(neck_feats, self.inputs)
-
+        
             if self.for_mot:
                 return {'det_losses': yolo_losses, 'emb_feats': emb_feats}
             else:
                 return yolo_losses
-
+        
         else:
             yolo_head_outs = self.yolo_head(neck_feats)
 
@@ -143,26 +163,22 @@ class YOLOv3(BaseArch):
         return self._forward()
 
     def get_loss_keys(self):
-        return ['loss_cls', 'loss_iou', 'loss_dfl','loss_contrast']
+        return ['loss_cls', 'loss_iou', 'loss_dfl','loss_contrast','loss_ce']
 
-    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=None,conf=None):
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.01,conf=None,pred_loss=None,sim=None):
+        # loss_sim=self.get_simliarity_loss(sim)
         # student_probs: already sigmoid
-        
-        #print(conf)      
-        student_probs, student_deltas, student_dfl= head_outs
-        teacher_probs, teacher_deltas, teacher_dfl= teacher_head_outs
-        
+        student_probs, student_deltas, student_dfl,_,_,_= head_outs
+        teacher_probs, teacher_deltas, teacher_dfl,_,_,_ = teacher_head_outs
         nc = student_probs.shape[-1]
-        # student_avg_feats=paddle.concat(student_avg_feats,axis=1).squeeze(2).reshape([-1,1])
-        # teacher_avg_feats=paddle.concat(teacher_avg_feats,axis=1).squeeze(2).reshape([-1,1])
         student_probs = student_probs.reshape([-1, nc])
         teacher_probs = teacher_probs.reshape([-1, nc])
         student_deltas = student_deltas.reshape([-1, 4])
         teacher_deltas = teacher_deltas.reshape([-1, 4])
         student_dfl = student_dfl.reshape([-1, 4, 17])
         teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
-
-
+        
+        
         with paddle.no_grad():
             # Region Selection
             count_num = int(teacher_probs.shape[0] * ratio)
@@ -192,7 +208,7 @@ class YOLOv3(BaseArch):
         # paddle.cat([Q,Q2],dim=1)
         Q.fill_diagonal_(1)    
         pos_mask = (Q>=0.5).astype("float")
-            
+        
         Q = Q * pos_mask
         Q = Q / Q.sum(1, keepdim=True)
         # paddle.zeros([672,672]).fill_diagonal_(1)
@@ -203,14 +219,15 @@ class YOLOv3(BaseArch):
         self.queue_ptr = (self.queue_ptr+n)%self.queue_size
         self.it+=1
         loss_contrast = - (paddle.log(sim_probs + 1e-7) * Q).sum(1)
-        loss_contrast = loss_contrast.mean()   
-        
-        
-        loss_logits =conf*QFLv2(
-            student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
-        # [88872, 80] [88872, 80]
+        loss_contrast = loss_contrast.mean() 
         
 
+        # loss_logits =conf.max()*QFLv2(
+        #     student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num   + paddle.mean(paddle.log(1/conf))*0.2
+        # [88872, 80] [88872, 80]
+       
+        loss_logits =QFLv2(
+            student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num 
         inputs = paddle.concat(
             (-student_deltas[b_mask][..., :2], student_deltas[b_mask][..., 2:]),
             axis=-1)
@@ -218,7 +235,7 @@ class YOLOv3(BaseArch):
             (-teacher_deltas[b_mask][..., :2], teacher_deltas[b_mask][..., 2:]),
             axis=-1)
         iou_loss = GIoULoss(reduction='mean')
-        loss_deltas = conf*iou_loss(inputs, targets)
+        loss_deltas = iou_loss(inputs, targets)
 
         loss_dfl = F.cross_entropy(
             F.softmax(student_dfl[b_mask].reshape([-1, 17])),
@@ -231,9 +248,40 @@ class YOLOv3(BaseArch):
             "distill_loss_iou": loss_deltas,
             "distill_loss_dfl": loss_dfl,
             "distill_loss_contrast": loss_contrast,
+            "distill_loss_ce": pred_loss,
             "fg_sum": fg_num,
         }
-
+        
+    def get_simliarity_loss(self, preds, ratio=0.01):
+        student_probs, student_deltas= preds
+        bs=student_probs.shape[0]
+        
+        student_probs_s1=student_probs[:bs//2]
+        student_probs_s2=student_probs[bs//2:]
+        student_deltas_s1=student_deltas[:bs//2]
+        student_deltas_s2=student_deltas[bs//2:]
+        nc = student_probs.shape[-1]
+        student_probs_s1 = student_probs_s1.reshape([-1, nc])
+        student_probs_s2 = student_probs_s2.reshape([-1, nc])
+        student_deltas_s1 = student_deltas_s1.reshape([-1, 4])
+        student_deltas_s2 = student_deltas_s2.reshape([-1, 4])
+        with paddle.no_grad():
+            # Region Selection
+            count_num = int(student_probs_s1.shape[0] * ratio)
+            #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
+            max_vals = paddle.max(student_probs_s1, 1)
+            sorted_vals, sorted_inds = paddle.topk(max_vals,
+                                                   student_probs_s1.shape[0])
+            mask = paddle.zeros_like(max_vals)
+            mask[sorted_inds[:count_num]] = 1.
+            fg_num = sorted_vals[:count_num].sum()
+            b_mask1 = mask > 0.
+        loss_sim=paddle.nn.functional.cosine_similarity(student_probs_s1[b_mask1],student_probs_s2[b_mask1],axis=0).mean()*0.5
+        # loss_cls=ce_loss(student_probs_s1[b_mask],student_probs_s2[b_mask])
+        # iou_loss = GIoULoss(reduction='mean')
+        # loss_deltas = iou_loss(student_deltas_s1[b_mask1], student_deltas_s2[b_mask1])
+        return loss_sim
+            
     def _df_loss(self, pred_dist, target):  # [810, 4, 17]  [810, 4]
         target_left = paddle.cast(target, 'int64')
         target_right = target_left + 1
@@ -263,15 +311,13 @@ class YOLOv3(BaseArch):
             loss_dfl = loss_dfl.mean(-1)
         loss_dfl = loss_dfl / 4.  # 4 direction
         return loss_dfl
-
-
-
-
-
-
-
-
-
-
-
-        
+    
+    
+def ce_loss(logits, targets):
+        log_pred = logits.log()
+        nll_loss = paddle.sum(-targets * log_pred, axis=1)
+        return nll_loss
+    
+    
+    
+    

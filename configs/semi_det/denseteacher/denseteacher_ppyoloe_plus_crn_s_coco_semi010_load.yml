@@ -8,11 +8,11 @@ epochs: &epochs 200
 cosine_epochs: &cosine_epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
 
-find_unused_parameters: True
+
 ### pretrain and warmup config, choose one and coment another
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/semi_det/ppyoloe_plus_crn_s_80e_coco_sup010.pdparams # mAP=35.3
-semi_start_iters: 0
-ema_start_iters: 0
+semi_start_iters: -1
+ema_start_iters: -1
 use_warmup: &use_warmup False
 
 # pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/pretrained/ppyoloe_crn_s_obj365_pretrained.pdparams
@@ -29,7 +29,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.,distill_loss_contrast: 0.1}
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.,distill_loss_contrast: 0.1,distill_loss_ce: 1.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -47,7 +47,7 @@ SemiTrainReader:
     - RandomDistort: {}
     - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
     - RandomFlip: {}
-    - RandomCrop: {} # unsup will be fake gt_boxes
+    # - RandomCrop: {} # unsup will be fake gt_boxes
   weak_aug:
     - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], is_scale: true, norm_type: none}
   strong_aug:

@@ -180,7 +180,11 @@ class PPYOLOEHead(nn.Layer):
             pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
                 anchor_points_s, reg_distri_list)
             return cls_score_list, pred_bboxes * stride_tensor, new_reg_distri_list,avg_feat_list,feats,cls_score_list_ssod
-
+        if targets.get('simlarity', False):
+            anchor_points_s = anchor_points / stride_tensor
+            pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
+                anchor_points_s, reg_distri_list)
+            return cls_score_list,pred_bboxes * stride_tensor
         if targets.get('get_data', False):
             anchor_points_s = anchor_points / stride_tensor
             pred_bboxes, new_reg_distri_list = self._bbox_decode_fake(
