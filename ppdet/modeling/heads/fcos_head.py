@@ -238,9 +238,11 @@ class FCOSHead(nn.Layer):
         cls_logits_list = []
         bboxes_reg_list = []
         centerness_list = []
+        feat_conmatc_list = [] 
         for scale_reg, fpn_stride, fpn_feat in zip(self.scales_regs,
                                                    self.fpn_stride, fpn_feats):
             fcos_cls_feat, fcos_reg_feat = self.fcos_feat(fpn_feat)
+            feat_conmatc_list.append(fcos_cls_feat)
             cls_logits = self.fcos_head_cls(fcos_cls_feat)
             bbox_reg = scale_reg(self.fcos_head_reg(fcos_reg_feat))
             if self.centerness_on_reg:
@@ -258,6 +260,7 @@ class FCOSHead(nn.Layer):
                         bbox_reg = bbox_reg * fpn_stride
             else:
                 bbox_reg = paddle.exp(bbox_reg)
+            
             cls_logits_list.append(cls_logits)
             bboxes_reg_list.append(bbox_reg)
             centerness_list.append(centerness)
@@ -265,12 +268,12 @@ class FCOSHead(nn.Layer):
         if targets is not None:
             self.is_teacher = targets.get('is_teacher', False)
             if self.is_teacher:
-                return [cls_logits_list, bboxes_reg_list, centerness_list]
+                return [cls_logits_list, bboxes_reg_list, centerness_list,feat_conmatc_list]
 
         if self.training and targets is not None:
             get_data = targets.get('get_data', False)
             if get_data:
-                return [cls_logits_list, bboxes_reg_list, centerness_list]
+                return [cls_logits_list, bboxes_reg_list, centerness_list,feat_conmatc_list]
 
             losses = {}
             fcos_head_outs = [cls_logits_list, bboxes_reg_list, centerness_list]

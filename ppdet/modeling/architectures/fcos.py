@@ -95,7 +95,8 @@ class FCOS(BaseArch):
     def get_distill_loss(self,
                          fcos_head_outs,
                          teacher_fcos_head_outs,
-                         ratio=0.01):
+                         ratio=0.01,
+                         preds_feat=None):
         student_logits, student_deltas, student_quality = fcos_head_outs
         teacher_logits, teacher_deltas, teacher_quality = teacher_fcos_head_outs
         nc = student_logits[0].shape[1]
@@ -153,12 +154,12 @@ class FCOS(BaseArch):
             fg_num = sorted_vals[:count_num].sum()
             b_mask = mask > 0.
         #comatch 
-            probs=teacher_logits[b_mask].detach()
+            probs=teacher_probs[b_mask].detach()
             temperature=0.2
             alpha=0.9
-            if self.it>100: # memory-smoothing 
+            if self.it>2: # memory-smoothing 
                 
-                    A = paddle.exp(paddle.mm(teacher_probs[b_mask], self.queue_probs_tensor.t())/temperature)       
+                    A = paddle.exp(paddle.mm(preds_feat[b_mask], self.queue_feats_tensor.t())/temperature)       
                     A = A/A.sum(1,keepdim=True)                    
                     probs = alpha*probs + (1-alpha)*paddle.mm(A, self.queue_probs_tensor) 
                 # queue_ptr= student_probs.shape[0]
@@ -176,9 +177,9 @@ class FCOS(BaseArch):
         # paddle.zeros([672,672]).fill_diagonal_(1)
         # contrastive loss
         #如果是多尺度的话建议直接建立一个list每间隔100个迭代pop(0),并且self.queue_=paddle.concat list
-        self.queue_feats.append(teacher_probs[b_mask].detach())
+        self.queue_feats.append(preds_feat[b_mask].detach())
         self.queue_probs.append(teacher_probs[b_mask].detach())
-        if len( self.queue_feats)>100:
+        if len( self.queue_feats)>2:
             self.queue_probs.pop(0)
             self.queue_feats.pop(0)
         self.queue_probs_tensor=paddle.concat([_ for _ in self.queue_probs])

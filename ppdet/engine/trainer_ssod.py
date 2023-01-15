@@ -215,7 +215,7 @@ class Trainer_DenseTeacher(Trainer):
 
         for param in self.ema.model.parameters():
             param.stop_gradient = True
-        # self.topk=TOPk()
+        self.comatch=Comatch()
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -317,18 +317,20 @@ class Trainer_DenseTeacher(Trainer):
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
                         teacher_preds = self.ema.model(data_unsup_w)
-                    # out=self.topk(teacher_preds)
+                    out=self.comatch(teacher_preds[-1])
                     if self._nranks > 1:
                         loss_dict_unsup = self.model._layers.get_distill_loss(
                             student_preds[:3],
                             teacher_preds[:3],
                             ratio=train_cfg['ratio'],
+                            preds_feat=out
                             )
                     else:
                         loss_dict_unsup = self.model.get_distill_loss(
                             student_preds[:3],
                             teacher_preds[:3],
                             ratio=train_cfg['ratio'],
+                            preds_feat=out
                             )
 
                     fg_num = loss_dict_unsup["fg_sum"]
@@ -485,68 +487,62 @@ class Trainer_DenseTeacher(Trainer):
 
 
 from paddle import ParamAttr
-
-def parameter_init(mode="kaiming", value=0.):
-    if mode == "kaiming":
-        weight_attr = paddle.nn.initializer.KaimingUniform()
-    elif mode == "constant":
-        weight_attr = paddle.nn.initializer.Constant(value=value)
-    else:
-        weight_attr = paddle.nn.initializer.KaimingUniform()
-
-    weight_init = ParamAttr(initializer=weight_attr)
-    return weight_init
-
-kaiming_init = parameter_init("kaiming")
-zeros_init = parameter_init("constant", 0.0)
+from ppdet.modeling.layers import ConvNormLayer
+from paddle.nn.initializer import Normal, Constant
 import paddle.nn.functional as F
-class TOPk(nn.Layer):
+class Comatch(nn.Layer):
 
 
     def __init__(self):
-        super(TOPk, self).__init__()
-        student_channels=[384,192,96]
+        super(Comatch, self).__init__()
+        student_channels=[256,256,256,256,256]
 
-        self.distill_loss_module_list=nn.LayerList()
-        for i in range(3):
-            self.distill_loss_module_list.append(nn.Conv2D(
-                student_channels[i],
-                64,
-                kernel_size=1,
+        self.distill_loss_module_list1=nn.LayerList()
+        self.distill_loss_module_list2=nn.LayerList()
+        for i in range(5):
+            self.distill_loss_module_list1.append(
+                nn.Conv2D(
+                in_channels=256,
+                out_channels=64,
+                kernel_size=3,
                 stride=1,
-                padding=0,
-                weight_attr=kaiming_init))
-        self.cls_moudle=nn.Conv2D(
-                80,
-                64,
-                kernel_size=1,
-                stride=1,
-                padding=0,
-                weight_attr=kaiming_init)
-      
-        self.con_estimator = nn.Sequential(nn.Linear(64, 64,weight_attr=kaiming_init), 
-                                            nn.ReLU(), 
-                                            nn.Linear(64,32,weight_attr=kaiming_init),
-                                            nn.ReLU()) # sigmoid
-        self.it=0
-        self.last_layer = nn.Linear(32, 1,weight_attr=kaiming_init)
-    def forward(self,teacher_preds):
-        feats=teacher_preds[-2]
-        cls_feats=teacher_preds[-1]
-        feats=F.sigmoid(self.distill_loss_module_list[2](feats[2])).detach()
-        feats= F.adaptive_avg_pool2d(feats, (1, 1))
-        cls_feats=self.cls_moudle(cls_feats[-1])
-        cls_feats=F.adaptive_avg_pool2d(cls_feats, (1, 1))
-        feats=F.relu(feats)
-        #cls_feats=F.relu(cls_feats)
-        feats_top=feats+cls_feats
-        feats_top=paddle.squeeze(feats_top)
-        topk=self.con_estimator(feats_top)
-        topk=self.last_layer(topk)
-        topk=F.sigmoid(topk)
-        topk=paddle.clip(topk,min=0.2,max=1.0)
-        if self.it%20==0:
-            # print(topk)
-            print(topk.max())
-        self.it+=1
-        return topk.max()+0.2
+                padding=1,
+                weight_attr=ParamAttr(initializer=Normal(
+                    mean=0., std=0.01)),
+                bias_attr=ParamAttr(
+                    initializer=Constant(value=-4.59511985013459))))
+            self.distill_loss_module_list2.append(
+                ConvNormLayer(
+                    ch_in=student_channels[i],
+                    ch_out=64,
+                    filter_size=3,
+                    stride=1,
+                    norm_type='gn',
+                    use_dcn=False,
+                    bias_on=True,
+                    lr_scale=2.))
+            self.l2norm = Normalize(2)
+            
+    def forward(self,feats):
+        feats_re=[]
+        for i in range(len(feats)):
+            feat_re=self.distill_loss_module_list1[i](feats[i])
+            # feat_re= F.relu(feat_re)
+            # feat_re=self.distill_loss_module_list2[i](feat_re)
+            feat_re=F.sigmoid(feat_re)
+            feats_re.append(feat_re.flatten(2).transpose([0, 2, 1]))
+        feats_re = paddle.concat(feats_re, axis=1)
+        feats_re=feats_re.reshape([-1,64])
+        return feats_re
+    
+    
+class Normalize(nn.Layer):
+
+    def __init__(self, power=2):
+        super(Normalize, self).__init__()
+        self.power = power
+
+    def forward(self, x):
+        norm = x.pow(self.power).sum(1, keepdim=True).pow(1. / self.power)
+        out = x.div(norm)
+        return out

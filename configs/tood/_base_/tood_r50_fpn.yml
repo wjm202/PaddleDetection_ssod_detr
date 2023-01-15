@@ -24,7 +24,7 @@ FPN:
 TOODHead:
   stacked_convs: 6
   grid_cell_scale: 8
-  static_assigner_epoch: 4
+  static_assigner_epoch: -1
   loss_weight: { class: 1.0, iou: 2.0 }
   static_assigner:
     name: ATSSAssigner

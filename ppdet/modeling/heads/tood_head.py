@@ -257,10 +257,10 @@ class TOODHead(nn.Layer):
             reg_bbox = batch_distance2bbox(
                 anchor_centers.unsqueeze(0), reg_dist)
             if self.use_align_head:
-                reg_offset = F.relu(self.reg_offset_conv1(feat))
-                reg_offset = self.reg_offset_conv2(reg_offset)
-                reg_bbox = reg_bbox.transpose([0, 2, 1]).reshape([b, 4, h, w])
-                anchor_centers = anchor_centers.reshape([1, h, w, 2])
+                reg_offset = F.relu(self.reg_offset_conv1(feat))   #[4, 1536, 136, 136],[4, 64, 136, 136]
+                reg_offset = self.reg_offset_conv2(reg_offset)#[4, 8, 136, 136]
+                reg_bbox = reg_bbox.transpose([0, 2, 1]).reshape([b, 4, h, w]) #[4, 18496, 4]  [4, 4, 136, 136]
+                anchor_centers = anchor_centers.reshape([1, h, w, 2]) #[1, 136, 136, 2]
                 bbox_pred = self._reg_grid_sample(reg_bbox, reg_offset,
                                                   anchor_centers)
                 bbox_pred = bbox_pred.flatten(2).transpose([0, 2, 1])
