@@ -10,7 +10,7 @@ weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
 
 find_unused_parameters: True
 ### pretrain and warmup config, choose one and coment another
-pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/semi_det/ppyoloe_plus_crn_s_80e_coco_sup010.pdparams # mAP=35.3
+pretrain_weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010_load/23.pdparams # mAP=35.3
 semi_start_iters: -1
 ema_start_iters: -1
 use_warmup: &use_warmup False
@@ -29,7 +29,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.,distill_loss_contrast: 0.1}
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #

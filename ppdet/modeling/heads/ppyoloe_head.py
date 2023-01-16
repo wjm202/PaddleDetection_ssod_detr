@@ -145,7 +145,7 @@ class PPYOLOEHead(nn.Layer):
                 self.reg_offset_conv1.append(nn.Conv2D(in_c,
                                                 self.align_channels, 1))
                 self.reg_offset_conv2.append(nn.Conv2D(
-                    self.align_channels, 4 * 2, 3, padding=1))
+                    self.align_channels, 4 *17* 2, 3, padding=1))
         self._init_weights()
         
 
@@ -202,49 +202,42 @@ class PPYOLOEHead(nn.Layer):
             reg_distri_list.append(reg_distri.flatten(2).transpose([0, 2, 1]))
         cls_score_list = paddle.concat(cls_score_list, axis=1)
         reg_distri_list = paddle.concat(reg_distri_list, axis=1)
-
-        if targets.get('is_teacher', False):
-            anchor_points_s =paddle.split(anchor_points / stride_tensor,
-                                            num_anchors_list)    
-            pred_bboxes= self._bbox_decode_fake(
-                anchor_points / stride_tensor, reg_distri_list)
-            pred_bboxes=paddle.split(pred_bboxes,num_anchors_list,axis=1)
-            bbox_preds=[]
-            for i in range(len(pred_bboxes)):
-                b, _, h, w = get_static_shape(reg_offset_list[i])
-                anchor_points_s[i] = anchor_points_s[i].reshape([1, h, w, 2]) #[1, 136, 136, 2]
-                pred_bboxes[i]=pred_bboxes[i].transpose([0, 2, 1]).reshape([b, 4, h, w]) 
-                bbox_pred  = self._reg_grid_sample(pred_bboxes[i], reg_offset_list[i],
-                                                    anchor_points_s[i])
-                bbox_pred = bbox_pred.flatten(2).transpose([0, 2, 1])
-                bbox_preds.append(bbox_pred)
-                
-            bbox_preds=paddle.concat(bbox_preds,axis=1)
-            return cls_score_list, bbox_preds * stride_tensor
-
-        if targets.get('get_data', False):
-            anchor_points_s =paddle.split(anchor_points / stride_tensor,
-                                            num_anchors_list)    
-            pred_bboxes= self._bbox_decode_fake(
-                anchor_points / stride_tensor, reg_distri_list)
-            pred_bboxes=paddle.split(pred_bboxes,num_anchors_list,axis=1)
-            bbox_preds=[]
-            for i in range(len(pred_bboxes)):
-                b, _, h, w = get_static_shape(reg_offset_list[i])
-                anchor_points_s[i] = anchor_points_s[i].reshape([1, h, w, 2]) #[1, 136, 136, 2]
-                pred_bboxes[i]=pred_bboxes[i].transpose([0, 2, 1]).reshape([b, 4, h, w]) 
-                bbox_pred  = self._reg_grid_sample(pred_bboxes[i], reg_offset_list[i],
-                                                    anchor_points_s[i])
-                bbox_pred = bbox_pred.flatten(2).transpose([0, 2, 1])
-                bbox_preds.append(bbox_pred)
-                
-            bbox_preds=paddle.concat(bbox_preds,axis=1)
-            return cls_score_list, bbox_preds * stride_tensor
         
+        #2D Align
+        anchor_points_s =paddle.split(anchor_points / stride_tensor,
+                                        num_anchors_list)    
+        pred_bboxes= self._bbox_decode_fake(
+            anchor_points / stride_tensor, reg_distri_list)
+        pred_bboxes=paddle.split(pred_bboxes,num_anchors_list,axis=1)
+        reg_distri_list = paddle.split(reg_distri_list,num_anchors_list,axis=1)  
+        bbox_preds=[]
+        for i in range(len(pred_bboxes)):
+            b, _, h, w = get_static_shape(reg_offset_list[i])
+            anchor_points_s[i] = anchor_points_s[i].reshape([1, h, w, 2]) #[1, 136, 136, 2]
+            pred_bboxes[i]=pred_bboxes[i].transpose([0, 2, 3,1]).reshape([b, 4*17, h, w]) 
+            bbox_pred  = self._reg_grid_sample(pred_bboxes[i], reg_offset_list[i],
+                                                anchor_points_s[i])
+            bbox_pred = bbox_pred.flatten(2).transpose([0, 2, 1])
+            bbox_preds.append(bbox_pred)
+            
+        reg_distri_list=paddle.concat(bbox_preds,axis=1)
+        if targets.get('is_teacher', False):
+                    # pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
+        # pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+            
+            return cls_score_list, bbox_preds * stride_tensor
+        # pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
+        # pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+        if targets.get('get_data', False):
+                
+
+            return cls_score_list, bbox_preds * stride_tensor
+                            # pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+        
+        # return batch_distance2bbox(anchor_points, pred_dist) 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
-            num_anchors_list, stride_tensor
-        ], targets)
+            num_anchors_list, stride_tensor,reg_offset_list], targets)
         
     def _reg_grid_sample(self, feat, offset, anchor_points):
         b, _, h, w = get_static_shape(feat)
@@ -354,12 +347,12 @@ class PPYOLOEHead(nn.Layer):
 
     def _bbox_decode_fake(self, anchor_points, pred_dist):
         _, l, _ = get_static_shape(pred_dist)
-        tmp_pred_dist = pred_dist.reshape([-1, l, 4, self.reg_channels])
-        pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
-        pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+        tmp_pred_dist = pred_dist.reshape([-1, l, 4*self.reg_channels])
+        # pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
+        # pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
         
-        return batch_distance2bbox(anchor_points, pred_dist) 
-
+        # return batch_distance2bbox(anchor_points, pred_dist) 
+        return tmp_pred_dist
     def _bbox2distance(self, points, bbox):
         x1y1, x2y2 = paddle.split(bbox, 2, -1)
         lt = points - x1y1
