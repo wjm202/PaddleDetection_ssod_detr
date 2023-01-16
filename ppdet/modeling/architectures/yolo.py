@@ -166,18 +166,6 @@ class YOLOv3(BaseArch):
             student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
         # [88872, 80] [88872, 80]
         iou_loss = GIoULoss(reduction='mean')
-        loss_cost_cls=[]
-        loss_cost_reg=[]
-        for i in range(count_num):
-            for j in range(count_num):
-                pt = student_probs[b_mask][i] - teacher_probs[b_mask][j]
-                loss_cls = F.binary_cross_entropy(
-                        student_probs[b_mask][i], teacher_probs[b_mask][j],
-                        reduction='none') * pt.pow(2.0)
-                loss_reg=iou_loss(student_deltas[b_mask][i], teacher_deltas[b_mask][j])
-                loss_cost_cls.append(loss_cls.mean())
-                loss_cost_reg.append(loss_reg)
-        iou_loss = GIoULoss(reduction='mean')
         loss_deltas = iou_loss(student_deltas[b_mask], teacher_deltas[b_mask])
 
 

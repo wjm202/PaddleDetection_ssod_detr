@@ -214,7 +214,7 @@ class PPYOLOEHead(nn.Layer):
         for i in range(len(pred_bboxes)):
             b, _, h, w = get_static_shape(reg_offset_list[i])
             anchor_points_s[i] = anchor_points_s[i].reshape([1, h, w, 2]) #[1, 136, 136, 2]
-            pred_bboxes[i]=pred_bboxes[i].transpose([0, 2, 3,1]).reshape([b, 4*17, h, w]) 
+            pred_bboxes[i]=pred_bboxes[i].transpose([0, 2, 1]).reshape([b, 4*17, h, w]) 
             bbox_pred  = self._reg_grid_sample(pred_bboxes[i], reg_offset_list[i],
                                                 anchor_points_s[i])
             bbox_pred = bbox_pred.flatten(2).transpose([0, 2, 1])
@@ -222,22 +222,18 @@ class PPYOLOEHead(nn.Layer):
             
         reg_distri_list=paddle.concat(bbox_preds,axis=1)
         if targets.get('is_teacher', False):
-                    # pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
-        # pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+            pred_dist = F.softmax(reg_distri_list.reshape([b,-1,4,17]))  # [16, 6069, 4, 17]
+            pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+            return cls_score_list,  batch_distance2bbox(anchor_points / stride_tensor, pred_dist) * stride_tensor
             
-            return cls_score_list, bbox_preds * stride_tensor
-        # pred_dist = F.softmax(tmp_pred_dist)  # [16, 6069, 4, 17]
-        # pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
         if targets.get('get_data', False):
-                
+            pred_dist = F.softmax(reg_distri_list.reshape([b,-1,4,17]))  # [16, 6069, 4, 17]
+            pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
+            return cls_score_list,  batch_distance2bbox(anchor_points / stride_tensor, pred_dist) * stride_tensor
 
-            return cls_score_list, bbox_preds * stride_tensor
-                            # pred_dist = self.proj_conv(pred_dist.transpose([0, 3, 1, 2])).squeeze(1)
-        
-        # return batch_distance2bbox(anchor_points, pred_dist) 
         return self.get_loss([
             cls_score_list, reg_distri_list, anchors, anchor_points,
-            num_anchors_list, stride_tensor,reg_offset_list], targets)
+            num_anchors_list, stride_tensor], targets)
         
     def _reg_grid_sample(self, feat, offset, anchor_points):
         b, _, h, w = get_static_shape(feat)
