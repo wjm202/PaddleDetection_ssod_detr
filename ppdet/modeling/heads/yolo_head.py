@@ -19,6 +19,9 @@ from paddle import ParamAttr
 from paddle.regularizer import L2Decay
 from ppdet.core.workspace import register
 
+from ppdet.modeling.bbox_utils import bbox_overlaps
+from ppdet.modeling.losses import IouLoss
+
 import math
 import numpy as np
 from ..initializer import bias_init_with_prob, constant_
@@ -291,7 +294,7 @@ class YOLOXHead(nn.Layer):
         reg_xy += (anchor_points / stride_tensor)
         reg_wh = paddle.exp(reg_wh) * 0.5
         bbox_pred_list = paddle.concat(
-            [reg_xy - reg_wh, reg_xy + reg_wh], axis=-1)
+            [reg_xy - reg_wh, reg_xy + reg_wh], axis=-1)#x1,y1,x2,y2
 
         if self.training:
             anchor_points, stride_tensor, num_anchors_list =\
@@ -414,3 +417,4 @@ class YOLOXHead(nn.Layer):
         else:
             bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
             return bbox_pred, bbox_num
+

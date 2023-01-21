@@ -29,7 +29,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.,distill_loss_contrast: 0.1 }
+    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.,distill_loss_asa_cls: 0.0,distill_loss_asa_iou: 0.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -122,6 +122,10 @@ PPYOLOEHead:
     topk: 13
     alpha: 1.0
     beta: 6.0
+  assigner_ssod:
+    name: SimOTAAssigner
+    candidate_topk: 10
+    use_vfl: False
   nms:
     name: MultiClassNMS
     nms_top_k: 1000

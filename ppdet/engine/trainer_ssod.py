@@ -212,10 +212,12 @@ class Trainer_DenseTeacher(Trainer):
 
         train_cfg = self.cfg.DenseTeacher['train_cfg']
         concat_sup_data = train_cfg.get('concat_sup_data', True)
-
+        # if self._nranks > 1:
+        #     self.model=self.model._layers
+        #     self.ema.model=self.model._layers
         for param in self.ema.model.parameters():
             param.stop_gradient = True
-
+       
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -311,11 +313,33 @@ class Trainer_DenseTeacher(Trainer):
                     data_unsup_s['epoch_id'] = epoch_id
 
                     data_unsup_s['get_data'] = True
-                    student_preds = self.model(data_unsup_s)
-
+                    student_preds= self.model(data_unsup_s)
+       
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
-                        teacher_preds = self.ema.model(data_unsup_w)
+                        teacher_preds,anchor_points,stride_tensor = self.ema.model(data_unsup_w)
+
+                        teacher_labels=teacher_preds[0].detach()
+                        teacher_bboxes=batch_distance2bbox(anchor_points,teacher_preds[1].detach())
+                    pred_bboxes=batch_distance2bbox(anchor_points,student_preds[1])
+                    pred_scores=student_preds[0]
+                    bbox_pred, bbox_num=self.ema.model._layers.yolo_head.post_process([teacher_labels,\
+                        teacher_bboxes],paddle.ones_like(data_unsup_w['scale_factor']))
+                    pseudo_labels,pseudo_bboxes=pseduo_transform(bbox_pred, bbox_num)
+                    
+                    center_and_strides = paddle.concat(
+                        [anchor_points, stride_tensor, stride_tensor], axis=-1)
+                    
+                    pos_num_list, label_list, bbox_target_list = [], [], []
+                    for pred_score, pred_bbox, pseudo_bbox,  pseudo_label in zip(
+                            pred_scores.detach(), pred_bboxes.detach(),pseudo_bboxes,  pseudo_labels):
+                        pos_num, label, _, bbox_target = self.model._layers.yolo_head.assigner_ssod(pred_score,\
+                                center_and_strides, pred_bbox,pseudo_bbox, pseudo_label)
+                        pos_num_list.append(pos_num)
+                        label_list.append(label)
+                        bbox_target_list.append(bbox_target)
+                    loss_asa_cls,loss_asa_iou =self.model._layers.semi_loss(pred_scores, pred_bboxes,label_list,bbox_target_list,pos_num_list)
+                                            
                     if self._nranks > 1:
                         loss_dict_unsup = self.model._layers.get_distill_loss(
                             student_preds,
@@ -326,7 +350,9 @@ class Trainer_DenseTeacher(Trainer):
                             student_preds,
                             teacher_preds,
                             ratio=train_cfg['ratio'])
-
+                    
+                    loss_dict_unsup["distill_loss_asa_cls"]=loss_asa_cls
+                    loss_dict_unsup["distill_loss_asa_iou"]=loss_asa_iou
                     fg_num = loss_dict_unsup["fg_sum"]
                     del loss_dict_unsup["fg_sum"]
                     distill_weights = train_cfg['loss_weight']
@@ -477,3 +503,46 @@ class Trainer_DenseTeacher(Trainer):
         self._compose_callback.on_epoch_end(self.status)
         # reset metric states for metric may performed multiple times
         self._reset_metrics()
+
+
+def pseduo_transform(teacher_bbox,bbox_num,thr=0.5):
+        teacher_bbox=paddle.split(teacher_bbox,bbox_num.tolist())
+        gt_class=[]
+        gt_bbox=[]
+        for i in range (len(teacher_bbox)):
+            pseudo_bbox=teacher_bbox[i]
+            vaild=pseudo_bbox[:,1]>thr
+            if vaild.sum()==0:
+                vaild=paddle.argmax(pseudo_bbox[:,1])
+                gt_class.append(paddle.to_tensor(np.expand_dims(pseudo_bbox[:,:1][vaild].numpy(),axis=0)))
+                gt_bbox.append(paddle.to_tensor(np.expand_dims(pseudo_bbox[:,2:][vaild].numpy(),axis=0)))
+            else:
+                gt_class.append(paddle.to_tensor(pseudo_bbox[:,:1][vaild].numpy()))
+                gt_bbox.append(paddle.to_tensor(pseudo_bbox[:,2:][vaild].numpy()))
+        return gt_class,gt_bbox
+
+
+def batch_distance2bbox(points, distance, max_shapes=None):
+    """Decode distance prediction to bounding box for batch.
+    Args:
+        points (Tensor): [B, ..., 2], "xy" format
+        distance (Tensor): [B, ..., 4], "ltrb" format
+        max_shapes (Tensor): [B, 2], "h,w" format, Shape of the image.
+    Returns:
+        Tensor: Decoded bboxes, "x1y1x2y2" format.
+    """
+    lt, rb = paddle.split(distance, 2, -1)
+    # while tensor add parameters, parameters should be better placed on the second place
+    x1y1 = -lt + points
+    x2y2 = rb + points
+    out_bbox = paddle.concat([x1y1, x2y2], -1)
+    if max_shapes is not None:
+        max_shapes = max_shapes.flip(-1).tile([1, 2])
+        delta_dim = out_bbox.ndim - max_shapes.ndim
+        for _ in range(delta_dim):
+            max_shapes.unsqueeze_(1)
+        out_bbox = paddle.where(out_bbox < max_shapes, out_bbox, max_shapes)
+        out_bbox = paddle.where(out_bbox > 0, out_bbox,
+                                paddle.zeros_like(out_bbox))
+    return out_bbox
+

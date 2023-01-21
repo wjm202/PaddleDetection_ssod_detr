@@ -120,7 +120,7 @@ class SimOTAAssigner(object):
             min(self.candidate_topk, pairwise_ious.shape[0]),
             axis=0)
         # calculate dynamic k for each gt
-        dynamic_ks = paddle.clip(topk_ious.sum(0).cast('int'), min=1)
+        dynamic_ks = paddle.clip(topk_ious.sum(0).cast('int'), min=1)#defalut=10
         for gt_idx in range(num_gt):
             _, pos_idx = paddle.topk(
                 cost_matrix[:, gt_idx], k=dynamic_ks[gt_idx], largest=False)
@@ -158,11 +158,11 @@ class SimOTAAssigner(object):
         return pos_inds, neg_inds, pos_gt_bboxes, pos_assigned_gt_inds
 
     def __call__(self,
-                 flatten_cls_pred_scores,
-                 flatten_center_and_stride,
-                 flatten_bboxes,
-                 gt_bboxes,
-                 gt_labels,
+                 flatten_cls_pred_scores,#[4725, 80]
+                 flatten_center_and_stride,#[4725, 4]
+                 flatten_bboxes,# flatten_bboxes
+                 gt_bboxes,#[20, 4]
+                 gt_labels,#[20, 1]
                  eps=1e-7):
         """Assign gt to priors using SimOTA.
         TODO: add comment.
@@ -183,47 +183,26 @@ class SimOTAAssigner(object):
             flatten_center_and_stride, gt_bboxes)
 
         # bboxes and scores to calculate matrix
-        valid_flatten_bboxes = flatten_bboxes[is_in_gts_or_centers_all_inds]
-        valid_cls_pred_scores = flatten_cls_pred_scores[
-            is_in_gts_or_centers_all_inds]
+        valid_flatten_bboxes = flatten_bboxes
+        valid_cls_pred_scores = flatten_cls_pred_scores
         num_valid_bboxes = valid_flatten_bboxes.shape[0]
 
         pairwise_ious = batch_bbox_overlaps(valid_flatten_bboxes,
                                             gt_bboxes)  # [num_points,num_gts]
-        if self.use_vfl:
-            gt_vfl_labels = gt_labels.squeeze(-1).unsqueeze(0).tile(
-                [num_valid_bboxes, 1]).reshape([-1])
-            valid_pred_scores = valid_cls_pred_scores.unsqueeze(1).tile(
-                [1, num_gt, 1]).reshape([-1, self.num_classes])
-            vfl_score = np.zeros(valid_pred_scores.shape)
-            vfl_score[np.arange(0, vfl_score.shape[0]), gt_vfl_labels.numpy(
-            )] = pairwise_ious.reshape([-1])
-            vfl_score = paddle.to_tensor(vfl_score)
-            losses_vfl = varifocal_loss(
-                valid_pred_scores, vfl_score,
-                use_sigmoid=False).reshape([num_valid_bboxes, num_gt])
-            losses_giou = batch_bbox_overlaps(
-                valid_flatten_bboxes, gt_bboxes, mode='giou')
-            cost_matrix = (
-                losses_vfl * self.cls_weight + losses_giou * self.iou_weight +
-                paddle.logical_not(is_in_boxes_and_center).cast('float32') *
-                100000000)
-        else:
-            iou_cost = -paddle.log(pairwise_ious + eps)
-            gt_onehot_label = (F.one_hot(
-                gt_labels.squeeze(-1).cast(paddle.int64),
-                flatten_cls_pred_scores.shape[-1]).cast('float32').unsqueeze(0)
-                               .tile([num_valid_bboxes, 1, 1]))
+        
+        iou_cost = -paddle.log(pairwise_ious + eps)
+        gt_onehot_label = (F.one_hot(
+            gt_labels.squeeze(-1).cast(paddle.int64),
+            flatten_cls_pred_scores.shape[-1]).cast('float32').unsqueeze(0)
+                            .tile([num_valid_bboxes, 1, 1]))
 
-            valid_pred_scores = valid_cls_pred_scores.unsqueeze(1).tile(
-                [1, num_gt, 1])
-            cls_cost = F.binary_cross_entropy(
-                valid_pred_scores, gt_onehot_label, reduction='none').sum(-1)
-
-            cost_matrix = (
-                cls_cost * self.cls_weight + iou_cost * self.iou_weight +
-                paddle.logical_not(is_in_boxes_and_center).cast('float32') *
-                100000000)
+        valid_pred_scores = valid_cls_pred_scores.unsqueeze(1).tile(
+            [1, num_gt, 1])
+        cls_cost = F.binary_cross_entropy(
+            valid_pred_scores, gt_onehot_label, reduction='none').sum(-1)
+        dis_cost=distance_cost(flatten_center_and_stride,gt_bboxes)*0.01
+        cost_matrix = (
+            cls_cost * self.cls_weight + iou_cost * self.iou_weight+dis_cost)
 
         match_gt_inds_to_fg, match_fg_mask_inmatrix = \
             self.dynamic_k_matching(
@@ -232,8 +211,7 @@ class SimOTAAssigner(object):
         # sample and assign results
         assigned_gt_inds = np.zeros([num_bboxes], dtype=np.int64)
         match_fg_mask_inall = np.zeros_like(assigned_gt_inds)
-        match_fg_mask_inall[is_in_gts_or_centers_all.numpy(
-        )] = match_fg_mask_inmatrix
+        match_fg_mask_inall= match_fg_mask_inmatrix
 
         assigned_gt_inds[match_fg_mask_inall.astype(
             np.bool)] = match_gt_inds_to_fg + 1
@@ -263,3 +241,38 @@ class SimOTAAssigner(object):
         pos_num = max(pos_inds.size, 1)
 
         return pos_num, label, label_weight, bbox_target
+
+
+
+def distance_cost(flatten_center_and_stride,gt_bboxes):
+    num_gt=gt_bboxes.shape[0]
+    flatten_x = flatten_center_and_stride[:, 0].unsqueeze(1).tile(
+        [1, num_gt])
+    flatten_y = flatten_center_and_stride[:, 1].unsqueeze(1).tile(
+        [1, num_gt])
+    gt_center_xs = (gt_bboxes[:, 0] + gt_bboxes[:, 2]) / 2.0
+    gt_center_ys = (gt_bboxes[:, 1] + gt_bboxes[:, 3]) / 2.0
+
+    distance_ctr_x=(flatten_x-gt_center_xs).pow(2)
+    distance_ctr_y=(flatten_y-gt_center_ys).pow(2)
+    l=(distance_ctr_x+distance_ctr_y).pow(0.5)
+
+
+    # num_gt=gt_bboxes.shape[0]
+    # flatten_x = flatten_center_and_stride[:, 0].unsqueeze(1).tile(
+    #     [1, num_gt])
+    # flatten_y = flatten_center_and_stride[:, 1].unsqueeze(1).tile(
+    #     [1, num_gt])
+    # gt_center_xs = (gt_bboxes[:, 0] + gt_bboxes[:, 2]) / 2.0
+    # gt_center_ys = (gt_bboxes[:, 1] + gt_bboxes[:, 3]) / 2.0
+    # gt_center=paddle.concat([gt_center_xs.unsqueeze(1),gt_center_ys.unsqueeze(1)],axis=-1).unsqueeze(0).tile([8400,1,1])
+    # pred_center=paddle.concat([flatten_x.unsqueeze(-1),flatten_y.unsqueeze(-1)],axis=-1)
+    # dist = paddle.nn.PairwiseDistance()
+    # if num_gt==1:
+    #     gt_center=paddle.squeeze(gt_center,axis=1)  
+    #     pred_center=paddle.squeeze(pred_center,axis=1) 
+
+    #     distance = dist(paddle.squeeze(pred_center ,axis=1)  , paddle.squeeze(gt_center,axis=1) ).unsqueeze(-1)
+    # else:
+    #     distance = dist(pred_center.reshape([-1,2]),gt_center.reshape([-1,2])).reshape([8400,num_gt])
+    return l

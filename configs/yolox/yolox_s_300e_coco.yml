@@ -11,3 +11,4 @@ width_mult: 0.50
 log_iter: 100
 snapshot_epoch: 10
 weights: output/yolox_s_300e_coco/model_final
+pretrain_weights: https://paddledet.bj.bcebos.com/models/yolox_s_300e_coco.pdparams

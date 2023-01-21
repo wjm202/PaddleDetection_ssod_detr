@@ -21,7 +21,6 @@ from . import fcosr_assigner
 from . import rotated_task_aligned_assigner
 from . import task_aligned_assigner_cr
 from . import uniform_assigner
-
 from .utils import *
 from .task_aligned_assigner import *
 from .atss_assigner import *
