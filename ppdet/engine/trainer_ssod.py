@@ -323,7 +323,7 @@ class Trainer_DenseTeacher(Trainer):
                         teacher_bboxes=batch_distance2bbox(anchor_points,teacher_preds[1].detach())
                     pred_bboxes=batch_distance2bbox(anchor_points,student_preds[1])
                     pred_scores=student_preds[0]
-                    bbox_pred, bbox_num=self.ema.model._layers.yolo_head.post_process([teacher_labels,\
+                    bbox_pred, bbox_num=self.ema.model._layers.yolo_head.post_process_semi([teacher_labels,\
                         teacher_bboxes],paddle.ones_like(data_unsup_w['scale_factor']))
                     pseudo_labels,pseudo_bboxes=pseduo_transform(bbox_pred, bbox_num)
                     
