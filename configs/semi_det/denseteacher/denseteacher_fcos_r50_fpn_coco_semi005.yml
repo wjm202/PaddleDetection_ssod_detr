@@ -2,19 +2,19 @@ _BASE_: [
   '../../fcos/fcos_r50_fpn_iou_multiscale_2x_coco.yml',
   '../_base_/coco_detection_percent_5.yml',
 ]
-log_iter: 20
-snapshot_epoch: 5
+log_iter: 1
+snapshot_epoch: 11
 epochs: &epochs 240 # 480 will be better
 weights: output/denseteacher_fcos_r50_fpn_coco_semi005/model_final
 
 
 ### pretrain and warmup config, choose one and coment another
-pretrain_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_cos_pretrained.pdparams
-semi_start_iters: 5000
-ema_start_iters: 3000
-use_warmup: &use_warmup True
+pretrain_weights: https://paddledet.bj.bcebos.com/models/fcos_r50_fpn_2x_coco_sup005.pdparams
+semi_start_iters: -1
+ema_start_iters: -1
+use_warmup: &use_warmup False
 
-
+update_interval: 4000
 ### global config
 use_simple_ema: True
 ema_decay: 0.9996
@@ -23,7 +23,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0,distill_loss_asa_cls: 0.5,distill_loss_asa_iou: 1.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01
@@ -87,6 +87,18 @@ TestReader:
   fuse_normalize: True
 
 
+LMReader:
+  sample_transforms:
+    - Decode: {}
+    - Resize: {target_size: [800, 1333], keep_ratio: True, interp: 1}
+    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: True}
+    - Permute: {}
+  batch_transforms:
+    - PadBatch: {pad_to_stride: 32}
+  batch_size: 1
+  shuffle: True
+
+
 ### model config
 architecture: FCOS
 FCOS:
@@ -128,11 +140,15 @@ FCOSHead:
     iou_loss_type: "giou"
     reg_weights: 1.0
     quality: "iou"
+  assigner_ssod:
+    name: SimOTAAssigner
+    candidate_topk: 10
+    use_vfl: False
   nms:
     name: MultiClassNMS
     nms_top_k: 1000
     keep_top_k: 100
-    score_threshold: 0.05
+    score_threshold: 0.025
     nms_threshold: 0.6
 
 
@@ -157,3 +173,14 @@ OptimizerBuilder:
     factor: 0.0001
     type: L2
   clip_grad_by_value: 1.0
+
+
+TrainDatasetLM:
+  !LMCocoDataset
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class']
+    manual_length: 10
+percent: 0.4
+label_match: True

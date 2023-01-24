@@ -16,11 +16,15 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import numpy as np
 import paddle
 import paddle.nn.functional as F
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 from ..ssod_utils import permute_to_N_HWA_K, QFLv2
+from ..losses import GIoULoss
+from ppdet.modeling.bbox_utils import bbox_overlaps
+from ppdet.modeling.losses import IouLoss
 from ..losses import GIoULoss
 
 __all__ = ['FCOS']
@@ -83,7 +87,7 @@ class FCOS(BaseArch):
         return self._forward()
 
     def get_loss_keys(self):
-        return ['loss_cls', 'loss_box', 'loss_quality']
+        return ['loss_cls', 'loss_box', 'loss_quality','loss_asa_cls','loss_asa_iou']
 
     def get_distill_loss(self,
                          fcos_head_outs,
@@ -91,51 +95,17 @@ class FCOS(BaseArch):
                          ratio=0.01):
         student_logits, student_deltas, student_quality = fcos_head_outs
         teacher_logits, teacher_deltas, teacher_quality = teacher_fcos_head_outs
-        nc = student_logits[0].shape[1]
-
-        student_logits = paddle.concat(
-            [
-                _.transpose([0, 2, 3, 1]).reshape([-1, nc])
-                for _ in student_logits
-            ],
-            axis=0)
-        teacher_logits = paddle.concat(
-            [
-                _.transpose([0, 2, 3, 1]).reshape([-1, nc])
-                for _ in teacher_logits
-            ],
-            axis=0)
-
-        student_deltas = paddle.concat(
-            [
-                _.transpose([0, 2, 3, 1]).reshape([-1, 4])
-                for _ in student_deltas
-            ],
-            axis=0)
-        teacher_deltas = paddle.concat(
-            [
-                _.transpose([0, 2, 3, 1]).reshape([-1, 4])
-                for _ in teacher_deltas
-            ],
-            axis=0)
-
-        student_quality = paddle.concat(
-            [
-                _.transpose([0, 2, 3, 1]).reshape([-1, 1])
-                for _ in student_quality
-            ],
-            axis=0)
-        teacher_quality = paddle.concat(
-            [
-                _.transpose([0, 2, 3, 1]).reshape([-1, 1])
-                for _ in teacher_quality
-            ],
-            axis=0)
-
+        nc=student_logits.shape[2]
+        student_logits=paddle.reshape(student_logits, [-1,nc])
+        student_deltas=paddle.reshape(student_deltas, [-1,4])
+        student_quality=paddle.reshape( student_quality, [-1,1])
+        teacher_logits=paddle.reshape(teacher_logits, [-1,nc])
+        teacher_deltas=paddle.reshape(teacher_deltas, [-1,4])
+        teacher_quality=paddle.reshape(teacher_quality, [-1,1])
         with paddle.no_grad():
             # Region Selection
             count_num = int(teacher_logits.shape[0] * ratio)
-            teacher_probs = F.sigmoid(teacher_logits)
+            teacher_probs = teacher_logits
             max_vals = paddle.max(teacher_probs, 1)
             sorted_vals, sorted_inds = paddle.topk(max_vals,
                                                    teacher_logits.shape[0])
@@ -146,7 +116,7 @@ class FCOS(BaseArch):
 
         # distill_loss_cls
         loss_logits = QFLv2(
-            F.sigmoid(student_logits),
+            student_logits,
             teacher_probs,
             weight=mask,
             reduction="sum") / fg_num
@@ -173,3 +143,49 @@ class FCOS(BaseArch):
             "distill_loss_quality": loss_quality,
             "fg_sum": fg_num,
         }
+        
+    def semi_loss(self,pred_cls, pred_bboxes,label_list,bbox_target_list,pos_num_list):
+                if type(bbox_target_list)==int:
+                    return paddle.to_tensor(0.0),paddle.to_tensor(0.0)
+                labels = paddle.to_tensor(np.stack(label_list, axis=0)).unsqueeze(0)
+                bbox_targets = paddle.to_tensor(np.stack(bbox_target_list, axis=0)).unsqueeze(0)
+                pred_bboxes=pred_bboxes.unsqueeze(0)
+                pred_cls   =pred_cls.unsqueeze(0)
+                # bbox_targets /= stride_tensor  # rescale bbox
+                iou_loss=GIoULoss(reduction='mean')    
+                # 1. obj score loss
+                mask_positive = (labels != 80)
+                num_pos = pos_num_list
+                num_classes=80
+                if num_pos > 0:
+                    num_pos = paddle.to_tensor(num_pos, dtype='float32').clip(min=1)
+                    # loss_obj /= num_pos
+
+                    # 2. iou loss
+                    bbox_mask = mask_positive.unsqueeze(-1).tile([1, 1, 4])
+                    pred_bboxes_pos = paddle.masked_select(pred_bboxes,
+                                                        bbox_mask).reshape([-1, 4])
+                    assigned_bboxes_pos = paddle.masked_select(
+                        bbox_targets, bbox_mask).reshape([-1, 4])
+                    bbox_iou = bbox_overlaps(pred_bboxes_pos, assigned_bboxes_pos)
+                    bbox_iou = paddle.diag(bbox_iou)
+
+                    loss_iou = iou_loss(
+                        pred_bboxes_pos,
+                        assigned_bboxes_pos)
+                    # loss_iou = loss_iou.sum() / num_pos
+
+                    # 3. cls loss
+                    cls_mask = mask_positive.unsqueeze(-1).tile(
+                        [1, 1, num_classes])
+                    pred_cls_pos = paddle.masked_select(
+                        pred_cls, cls_mask).reshape([-1, num_classes])
+                    assigned_cls_pos = paddle.masked_select(labels, mask_positive)
+                    assigned_cls_pos = F.one_hot(assigned_cls_pos,
+                                                num_classes + 1)[..., :-1]
+                    assigned_cls_pos *= bbox_iou.unsqueeze(-1)
+                    loss_cls = F.binary_cross_entropy(
+                        pred_cls_pos, assigned_cls_pos, reduction='sum')
+                    loss_cls /= num_pos
+
+                    return loss_cls,loss_iou

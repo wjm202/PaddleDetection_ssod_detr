@@ -321,12 +321,13 @@ class Trainer_DenseTeacher(Trainer):
                     with paddle.no_grad():
                         data_unsup_w['is_teacher'] = True
                         teacher_preds,anchor_points,stride_tensor = self.ema.model(data_unsup_w)
-
-                        teacher_labels=teacher_preds[0].detach()
-                        teacher_bboxes=batch_distance2bbox(anchor_points,teacher_preds[1].detach())
+                    student_preds,teacher_preds=reshape_ssod(student_preds,teacher_preds)
+                    teacher_labels=teacher_preds[0]
+                    anchor_points=paddle.concat([_ for _ in anchor_points],axis=0)
+                    teacher_bboxes=batch_distance2bbox(anchor_points,teacher_preds[1])
                     pred_bboxes=batch_distance2bbox(anchor_points,student_preds[1])
                     pred_scores=student_preds[0]
-                    pseudo_labels,pseudo_bboxes=self.ema.model._layers.yolo_head.post_process_semi([teacher_labels,\
+                    pseudo_labels,pseudo_bboxes=self.ema.model._layers.fcos_head.post_process_semi([teacher_labels,\
                         teacher_bboxes],paddle.ones_like(data_unsup_w['scale_factor']),self.model.cls_thr)
                     center_and_strides = paddle.concat(
                         [anchor_points, stride_tensor, stride_tensor], axis=-1)
@@ -334,7 +335,7 @@ class Trainer_DenseTeacher(Trainer):
                     pos_num_list, label_list, bbox_target_list = [], [], []
                     for pred_score, pred_bbox, pseudo_bbox,  pseudo_label in zip(
                             pred_scores.detach(), pred_bboxes.detach(),pseudo_bboxes,  pseudo_labels):
-                        pos_num, label, _, bbox_target = self.model._layers.yolo_head.assigner_ssod(pred_score,\
+                        pos_num, label, _, bbox_target = self.model._layers.fcos_head.assigner_ssod(pred_score,\
                                 center_and_strides, pred_bbox,pseudo_bbox, pseudo_label)
                         pos_num_list.append(pos_num)
                         label_list.append(label)
@@ -529,7 +530,7 @@ def pseduo_transform(teacher_bbox,bbox_num,thr=0.5):
         return gt_class,gt_bbox
 
 
-def batch_distance2bbox(points, distance, max_shapes=None):
+def batch_distance2bbox(points, distance):
     """Decode distance prediction to bounding box for batch.
     Args:
         points (Tensor): [B, ..., 2], "xy" format
@@ -538,18 +539,59 @@ def batch_distance2bbox(points, distance, max_shapes=None):
     Returns:
         Tensor: Decoded bboxes, "x1y1x2y2" format.
     """
+    
     lt, rb = paddle.split(distance, 2, -1)
     # while tensor add parameters, parameters should be better placed on the second place
     x1y1 = -lt + points
     x2y2 = rb + points
     out_bbox = paddle.concat([x1y1, x2y2], -1)
-    if max_shapes is not None:
-        max_shapes = max_shapes.flip(-1).tile([1, 2])
-        delta_dim = out_bbox.ndim - max_shapes.ndim
-        for _ in range(delta_dim):
-            max_shapes.unsqueeze_(1)
-        out_bbox = paddle.where(out_bbox < max_shapes, out_bbox, max_shapes)
-        out_bbox = paddle.where(out_bbox > 0, out_bbox,
-                                paddle.zeros_like(out_bbox))
+
     return out_bbox
 
+
+import paddle.nn.functional as F
+def reshape_ssod(fcos_head_outs,
+                         teacher_fcos_head_outs):
+        student_logits, student_deltas, student_quality = fcos_head_outs
+        teacher_logits, teacher_deltas, teacher_quality = teacher_fcos_head_outs
+        nc = student_logits[0].shape[1]
+        bs=student_logits[0].shape[0]
+        student_logits = F.softmax(paddle.concat(
+            [
+                _.transpose([0, 2, 3, 1]).reshape([bs,-1, nc])
+                for _ in student_logits
+            ],
+            axis=1))
+        teacher_logits = F.softmax(paddle.concat(
+            [
+                _.transpose([0, 2, 3, 1]).reshape([bs,-1, nc])
+                for _ in teacher_logits
+            ],
+            axis=1))
+
+        student_deltas = paddle.concat(
+            [
+                _.transpose([0, 2, 3, 1]).reshape([bs,-1, 4])
+                for _ in student_deltas
+            ],
+            axis=1)
+        teacher_deltas = paddle.concat(
+            [
+                _.transpose([0, 2, 3, 1]).reshape([bs,-1, 4])
+                for _ in teacher_deltas
+            ],
+            axis=1)
+
+        student_quality = paddle.concat(
+            [
+                _.transpose([0, 2, 3, 1]).reshape([bs,-1, 1])
+                for _ in student_quality
+            ],
+            axis=1)
+        teacher_quality = paddle.concat(
+            [
+                _.transpose([0, 2, 3, 1]).reshape([bs,-1, 1])
+                for _ in teacher_quality
+            ],
+            axis=1)
+        return [student_logits, student_deltas, student_quality],[teacher_logits, teacher_deltas, teacher_quality]

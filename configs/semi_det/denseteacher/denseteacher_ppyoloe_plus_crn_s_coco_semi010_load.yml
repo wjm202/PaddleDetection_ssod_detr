@@ -29,7 +29,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 0.0, distill_loss_iou: 0.0, distill_loss_dfl: 0.,distill_loss_asa_cls: 1.0,distill_loss_asa_iou: 1.0}
+    loss_weight: {distill_loss_cls: 0.0, distill_loss_iou: 0.0, distill_loss_dfl: 0.,distill_loss_asa_cls: 0.5,distill_loss_asa_iou: 1.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
@@ -182,6 +182,6 @@ TrainDatasetLM:
     anno_path: annotations/instances_val2017.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class']
-    manual_length: 5000
+    manual_length: 10
 percent: 0.2
 label_match: True

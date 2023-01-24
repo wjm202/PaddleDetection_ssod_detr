@@ -128,7 +128,7 @@ class FCOSHead(nn.Layer):
         nms (object): Instance of 'MultiClassNMS'
         trt (bool): Whether to use trt in nms of deploy
     """
-    __inject__ = ['fcos_feat', 'fcos_loss', 'nms']
+    __inject__ = ['fcos_feat', 'fcos_loss', 'nms','assigner_ssod']
     __shared__ = ['num_classes', 'trt']
 
     def __init__(self,
@@ -143,6 +143,7 @@ class FCOSHead(nn.Layer):
                  sqrt_score=False,
                  fcos_loss='FCOSLoss',
                  nms='MultiClassNMS',
+                 assigner_ssod='SimOTAAssigner',
                  trt=False):
         super(FCOSHead, self).__init__()
         self.fcos_feat = fcos_feat
@@ -154,6 +155,7 @@ class FCOSHead(nn.Layer):
         self.centerness_on_reg = centerness_on_reg
         self.multiply_strides_reg_targets = multiply_strides_reg_targets
         self.num_shift = num_shift
+        self.assigner_ssod=assigner_ssod
         self.nms = nms
         if isinstance(self.nms, MultiClassNMS) and trt:
             self.nms.trt = trt
@@ -264,8 +266,19 @@ class FCOSHead(nn.Layer):
 
         if targets is not None:
             self.is_teacher = targets.get('is_teacher', False)
+            locations_list = []
+            fpn_stride_list=[]
+            for fpn_stride, feature in zip(self.fpn_stride, fpn_feats):
+                
+                location = self._compute_locations_by_level(fpn_stride, feature,
+                                                            self.num_shift)
+                locations_list.append(location)
+                h,w = feature.shape[2],feature.shape[3]
+                fpn_stride_list.append(paddle.ones([h*w,1])*fpn_stride)
+            fpn_stride_list=paddle.concat([_ for _ in fpn_stride_list])
+
             if self.is_teacher:
-                return [cls_logits_list, bboxes_reg_list, centerness_list]
+                return [cls_logits_list, bboxes_reg_list, centerness_list],locations_list,fpn_stride_list
 
         if self.training and targets is not None:
             get_data = targets.get('get_data', False)
@@ -361,3 +374,39 @@ class FCOSHead(nn.Layer):
         pred_scores = pred_scores.transpose([0, 2, 1])
         bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
         return bbox_pred, bbox_num
+        
+    def post_process_semi(self, head_outs, scale_factor,thr):
+        #thr=[0.63,0.43,0.53,0.58,0.61,0.82,0.91,0.53,0.45,0.45,0.89,0.90,0.56,0.45,0.39,0.81,0.74,0.64,0.55,0.63,0.72,0.86,0.88,0.88,0.41,0.47,0.40,0.44,0.48,0.65,0.39,0.36,0.46,0.53,0.48,0.53,0.49,0.51,0.67,0.48,0.36,0.52,0.40,0.37,0.39,0.57,0.41,0.42,0.58,0.43,0.50,0.46,0.51,0.62,0.54,0.52,0.48,0.58,0.46,0.65,0.56,0.79,0.74,0.74,0.65,0.46,0.66,0.51,0.52,0.56,0.39,0.52,0.71,0.36,0.75,0.49,0.40,0.52,0.18,0.36]
+        pred_scores, pred_dist = head_outs
+        pred_scores=paddle.transpose(pred_scores ,[0,2,1])
+        pred_bboxes = pred_dist  
+        scale_y, scale_x = paddle.split(scale_factor, 2, axis=-1)
+        scale_factor = paddle.concat(
+            [scale_x, scale_y, scale_x, scale_y],
+            axis=-1).reshape([-1, 1, 4])
+        pred_bboxes /= scale_factor
+
+        bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+        # return bbox_pred, bbox_num
+        pseudo_labels=[]
+        pseudo_bboxes=[]
+        bbox_pred=paddle.split(bbox_pred,bbox_num.tolist())
+       
+        for i in range(pred_scores.shape[0]):
+            # mask=paddle.zeros_like(pred_scores[i])
+            cls=bbox_pred[i][:,0]
+            mask=bbox_pred[i][:,1]>paddle.index_select(paddle.to_tensor(thr),cls.astype('int32'))
+            if mask.sum()>0:
+                pseudo_labels.append(bbox_pred[i][:,0][mask].unsqueeze(-1))
+                pseudo_bboxes.append(bbox_pred[i][:,2:][mask])  
+            else:
+                pseudo_labels.append(paddle.empty(shape=[0,1]))
+                pseudo_bboxes.append(paddle.empty(shape=[0,4]))
+        # bs=pred_scores.shape[0]
+        # for i in range(bs):
+        #    mask=((pred_scores[i]>paddle.to_tensor(thr)).sum(1))>0
+        # pseudo_labels.append(pred_scores[mask])
+        # pseudo_bboxes.append(pred_bboxes[mask])
+             
+        
+        return pseudo_labels,pseudo_bboxes
