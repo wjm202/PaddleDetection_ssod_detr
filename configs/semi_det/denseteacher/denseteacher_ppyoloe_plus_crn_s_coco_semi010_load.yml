@@ -29,14 +29,14 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 1.0, distill_loss_iou: 2.5, distill_loss_dfl: 0.,distill_loss_asa_cls: 1.0,distill_loss_asa_iou: 1.0}
+    loss_weight: {distill_loss_cls: 0.0, distill_loss_iou: 0.0, distill_loss_dfl: 0.,distill_loss_asa_cls: 1.0,distill_loss_asa_iou: 1.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01 #
     gamma: 2.0
   test_cfg:
     inference_on: teacher
-
+update_interval: 800
 
 ### reader config
 batch_size: &batch_size 8
@@ -133,6 +133,24 @@ PPYOLOEHead:
     score_threshold: 0.01
     nms_threshold: 0.7
 
+LMReader:
+  sample_transforms:
+    - Decode: {}
+    - RandomDistort: {}
+    - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
+    - RandomCrop: {}
+    - RandomFlip: {}
+  batch_transforms:
+    - BatchRandomResize: {target_size: [640,640], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - Permute: {}
+    - PadGT: {}
+  batch_size: 2
+  shuffle: true
+  drop_last: false
+  use_shared_memory: true
+  collate_batch: true
+
 
 ### other config
 epoch: *epochs
@@ -154,3 +172,16 @@ OptimizerBuilder:
     factor: 0.0005 # dt-fcos 0.0001
     type: L2
   clip_grad_by_norm: 1.0 # dt-fcos clip_grad_by_value
+
+
+
+
+TrainDatasetLM:
+  !LMCocoDataset
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class']
+    manual_length: 5000
+percent: 0.2
+label_match: True

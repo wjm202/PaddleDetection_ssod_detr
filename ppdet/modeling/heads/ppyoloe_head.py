@@ -455,23 +455,38 @@ class PPYOLOEHead(nn.Layer):
 
 
 
-    def post_process_semi(self, head_outs, scale_factor):
+    def post_process_semi(self, head_outs, scale_factor,thr):
+        #thr=[0.63,0.43,0.53,0.58,0.61,0.82,0.91,0.53,0.45,0.45,0.89,0.90,0.56,0.45,0.39,0.81,0.74,0.64,0.55,0.63,0.72,0.86,0.88,0.88,0.41,0.47,0.40,0.44,0.48,0.65,0.39,0.36,0.46,0.53,0.48,0.53,0.49,0.51,0.67,0.48,0.36,0.52,0.40,0.37,0.39,0.57,0.41,0.42,0.58,0.43,0.50,0.46,0.51,0.62,0.54,0.52,0.48,0.58,0.46,0.65,0.56,0.79,0.74,0.74,0.65,0.46,0.66,0.51,0.52,0.56,0.39,0.52,0.71,0.36,0.75,0.49,0.40,0.52,0.18,0.36]
         pred_scores, pred_dist = head_outs
         pred_scores=paddle.transpose(pred_scores ,[0,2,1])
-        pred_bboxes = pred_dist
-        if self.exclude_post_process:
-            return paddle.concat(
-                [pred_bboxes, pred_scores.transpose([0, 2, 1])], axis=-1), None
-        else:
-            # scale bbox to origin
-            scale_y, scale_x = paddle.split(scale_factor, 2, axis=-1)
-            scale_factor = paddle.concat(
-                [scale_x, scale_y, scale_x, scale_y],
-                axis=-1).reshape([-1, 1, 4])
-            pred_bboxes /= scale_factor
-            if self.exclude_nms:
-                # `exclude_nms=True` just use in benchmark
-                return pred_bboxes, pred_scores
+        pred_bboxes = pred_dist  
+        scale_y, scale_x = paddle.split(scale_factor, 2, axis=-1)
+        scale_factor = paddle.concat(
+            [scale_x, scale_y, scale_x, scale_y],
+            axis=-1).reshape([-1, 1, 4])
+        pred_bboxes /= scale_factor
+
+        bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
+        # return bbox_pred, bbox_num
+        pseudo_labels=[]
+        pseudo_bboxes=[]
+        bbox_pred=paddle.split(bbox_pred,bbox_num.tolist())
+       
+        for i in range(pred_scores.shape[0]):
+            # mask=paddle.zeros_like(pred_scores[i])
+            cls=bbox_pred[i][:,0]
+            mask=bbox_pred[i][:,1]>paddle.index_select(paddle.to_tensor(thr),cls.astype('int32'))
+            if mask.sum()>0:
+                pseudo_labels.append(bbox_pred[i][:,0][mask].unsqueeze(-1))
+                pseudo_bboxes.append(bbox_pred[i][:,2:][mask])  
             else:
-                bbox_pred, bbox_num, _ = self.nms(pred_bboxes, pred_scores)
-                return bbox_pred, bbox_num
+                pseudo_labels.append(paddle.empty(shape=[0,1]))
+                pseudo_bboxes.append(paddle.empty(shape=[0,4]))
+        # bs=pred_scores.shape[0]
+        # for i in range(bs):
+        #    mask=((pred_scores[i]>paddle.to_tensor(thr)).sum(1))>0
+        # pseudo_labels.append(pred_scores[mask])
+        # pseudo_bboxes.append(pred_bboxes[mask])
+             
+        
+        return pseudo_labels,pseudo_bboxes

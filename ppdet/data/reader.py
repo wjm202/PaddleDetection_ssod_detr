@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import math
 import copy
 import os
 import traceback
@@ -27,7 +27,7 @@ import paddle.nn.functional as F
 
 from copy import deepcopy
 
-from paddle.io import DataLoader, DistributedBatchSampler
+from paddle.io import DataLoader, DistributedBatchSampler,BatchSampler
 from .utils import default_collate_fn
 
 from ppdet.core.workspace import register
@@ -36,6 +36,7 @@ from .shm_utils import _get_shared_memory_size_in_M
 
 from ppdet.utils.logger import setup_logger
 logger = setup_logger('reader')
+import paddle.distributed as dist
 
 MAIN_PID = os.getpid()
 
@@ -109,7 +110,6 @@ class BatchCompose(Compose):
 class BaseDataLoader(object):
     """
     Base DataLoader implementation for detection models
-
     Args:
         sample_transforms (list): a list of transforms to perform
                                   on each sample
@@ -456,6 +456,7 @@ class CombineSSODLoader(object):
             except:
                 self.unlabel_loader_iter = iter(self.unlabel_loader)
                 unlabel_samples = next(self.unlabel_loader_iter)
+
             yield (
                 label_samples[0],  # sup weak
                 label_samples[1],  # sup strong
@@ -608,3 +609,191 @@ class SemiTrainReader(BaseSemiDataLoader):
             sample_transforms, weak_aug, strong_aug, sup_batch_transforms,
             unsup_batch_transforms, sup_batch_size, unsup_batch_size, shuffle,
             drop_last, num_classes, collate_batch, **kwargs)
+
+
+
+
+
+
+
+
+
+def get_dist_info():
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    return rank, world_size
+
+
+@register
+class LMReader(BaseDataLoader):
+    __shared__ = ['num_classes']
+
+    def __init__(self,
+                 sample_transforms=[],
+                 batch_transforms=[],
+                 batch_size=1,
+                 shuffle=False,
+                 drop_last=False,
+                 num_classes=80,
+                 **kwargs):
+        super(LMReader, self).__init__(sample_transforms, batch_transforms,
+                                         batch_size, shuffle, drop_last,
+                                         num_classes, **kwargs)
+
+    def __call__(self,
+                 dataset,
+                 worker_num,
+                 batch_sampler=None,
+                 return_list=False):
+        self.dataset = dataset
+        self.dataset.check_or_download_dataset()
+        self.dataset.parse_dataset()
+        # get data
+        self.dataset.set_transform(self._sample_transforms)
+        # set kwargs
+        self.dataset.set_kwargs(**self.kwargs)
+        # batch sampler
+        if batch_sampler is None:
+            self._batch_sampler = DistributedBatchLMSampler1(
+                self.dataset,
+                batch_size=self.batch_size,
+                shuffle=self.shuffle,
+                drop_last=self.drop_last)
+        else:
+            self._batch_sampler = batch_sampler
+
+        # DataLoader do not start sub-process in Windows and Mac
+        # system, do not need to use shared memory
+        use_shared_memory = self.use_shared_memory and \
+                            sys.platform not in ['win32', 'darwin']
+        # check whether shared memory size is bigger than 1G(1024M)
+        if use_shared_memory:
+            shm_size = _get_shared_memory_size_in_M()
+            if shm_size is not None and shm_size < 1024.:
+                logger.warning("Shared memory size is less than 1G, "
+                               "disable shared_memory in DataLoader")
+                use_shared_memory = False
+
+        self.dataloader = DataLoader(
+            dataset=self.dataset,
+            batch_sampler=self._batch_sampler,
+            collate_fn=self._batch_transforms,
+            num_workers=worker_num,
+            return_list=return_list,
+            use_shared_memory=use_shared_memory)
+        self.loader = iter(self.dataloader)
+
+        return self
+
+
+
+
+class DistributedBatchLMSampler1(BatchSampler):
+    
+    def __init__(self,
+                 dataset,
+                 batch_size,
+                 num_replicas=None,
+                 rank=None,
+                 shuffle=False,
+                 drop_last=False,
+                 ):
+        self.dataset = dataset
+
+        assert isinstance(batch_size, int) and batch_size > 0, \
+                "batch_size should be a positive integer"
+        self.batch_size = batch_size
+        assert isinstance(shuffle, bool), \
+                "shuffle should be a boolean value"
+        self.shuffle = shuffle
+        assert isinstance(drop_last, bool), \
+                "drop_last should be a boolean number"
+
+        from paddle.fluid.dygraph.parallel import ParallelEnv
+
+        if num_replicas is not None:
+            assert isinstance(num_replicas, int) and num_replicas > 0, \
+                    "num_replicas should be a positive integer"
+            self.nranks = num_replicas
+        else:
+            self.nranks = ParallelEnv().nranks
+
+        if rank is not None:
+            assert isinstance(rank, int) and rank >= 0, \
+                    "rank should be a non-negative integer"
+            self.local_rank = rank
+        else:
+            self.local_rank = ParallelEnv().local_rank
+
+        self.drop_last = drop_last
+        self.epoch = 0
+        if self.dataset.manual_length != None and self.dataset.manual_length < len(self.dataset):
+            manual_length = self.dataset.manual_length
+        else:
+            manual_length = len(self.dataset)
+        self.manual_length = manual_length
+        self.num_samples = int(math.ceil(self.manual_length * 1.0 / self.nranks))
+        self.total_size = self.num_samples * self.nranks
+
+    def __iter__(self):
+        num_samples = self.manual_length
+        if self.manual_length < len(self.dataset):
+            indices = np.random.RandomState(self.epoch).choice(np.arange(len(self.dataset)), num_samples).tolist()
+        else:
+            indices = np.arange(num_samples).tolist()
+        indices += indices[:(self.total_size - len(indices))]
+        assert len(indices) == self.total_size
+        if self.shuffle:
+            np.random.RandomState(self.epoch).shuffle(indices)
+            self.epoch += 1
+
+        # subsample
+        def _get_indices_by_batch_size(indices):
+            subsampled_indices = []
+            last_batch_size = self.total_size % (self.batch_size * self.nranks)
+            assert last_batch_size % self.nranks == 0
+            last_local_batch_size = last_batch_size // self.nranks
+
+            for i in range(self.local_rank * self.batch_size,
+                           len(indices) - last_batch_size,
+                           self.batch_size * self.nranks):
+                subsampled_indices.extend(indices[i:i + self.batch_size])
+
+            indices = indices[len(indices) - last_batch_size:]
+            subsampled_indices.extend(indices[
+                self.local_rank * last_local_batch_size:(
+                    self.local_rank + 1) * last_local_batch_size])
+            return subsampled_indices
+
+        if self.nranks > 1:
+            indices = _get_indices_by_batch_size(indices)
+
+        assert len(indices) == self.num_samples
+        _sample_iter = iter(indices)
+
+        batch_indices = []
+        for idx in _sample_iter:
+            batch_indices.append(idx)
+            if len(batch_indices) == self.batch_size:
+                yield batch_indices
+                batch_indices = []
+        if not self.drop_last and len(batch_indices) > 0:
+            yield batch_indices
+
+    def __len__(self):
+        num_samples = self.num_samples
+        num_samples += int(not self.drop_last) * (self.batch_size - 1)
+        return num_samples // self.batch_size
+
+    def set_epoch(self, epoch):
+        """
+        Sets the epoch number. When :attr:`shuffle=True`, this number is used
+        as seeds of random numbers. By default, users may not set this, all
+        replicas (workers) use a different random ordering for each epoch.
+        If set same number at each epoch, this sampler will yield the same
+        ordering at all epoches.
+        Arguments:
+            epoch (int): Epoch number.
+        """
+        self.epoch = epoch

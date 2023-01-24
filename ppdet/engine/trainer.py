@@ -15,7 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
-
+from ppdet.engine.labelmatch_callbacks import LabelMatchCallback
 import os
 import sys
 import copy
@@ -215,6 +215,8 @@ class Trainer(object):
                 self._callbacks.append(SniperProposalsGenerator(self))
             if self.cfg.get('use_wandb', False) or 'wandb' in self.cfg:
                 self._callbacks.append(WandbCallback(self))
+            if self.cfg.get('label_match', False):
+                self._callbacks.append(LabelMatchCallback(self))
             self._compose_callback = ComposeCallback(self._callbacks)
         elif self.mode == 'eval':
             self._callbacks = [LogPrinter(self)]
