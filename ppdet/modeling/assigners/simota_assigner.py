@@ -120,7 +120,7 @@ class SimOTAAssigner(object):
             min(self.candidate_topk, pairwise_ious.shape[0]),
             axis=0)
         # calculate dynamic k for each gt
-        dynamic_ks = paddle.clip(topk_ious.sum(0).cast('int'), min=1)#defalut=10
+        dynamic_ks = [5]*pairwise_ious.shape[1]#defalut=10
         for gt_idx in range(num_gt):
             _, pos_idx = paddle.topk(
                 cost_matrix[:, gt_idx], k=dynamic_ks[gt_idx], largest=False)
@@ -174,10 +174,8 @@ class SimOTAAssigner(object):
 
         if num_gt == 0 or num_bboxes == 0:
             # No ground truth or boxes
-            label = np.ones([num_bboxes], dtype=np.int64) * self.num_classes
-            label_weight = np.ones([num_bboxes], dtype=np.float32)
-            bbox_target = np.zeros_like(flatten_center_and_stride)
-            return 0, label, label_weight, bbox_target
+
+            return 0, 0, 0, 0
 
         is_in_gts_or_centers_all, is_in_gts_or_centers_all_inds, is_in_boxes_and_center = self.get_in_gt_and_in_center_info(
             flatten_center_and_stride, gt_bboxes)
@@ -200,7 +198,7 @@ class SimOTAAssigner(object):
             [1, num_gt, 1])
         cls_cost = F.binary_cross_entropy(
             valid_pred_scores, gt_onehot_label, reduction='none').sum(-1)
-        dis_cost=distance_cost(flatten_center_and_stride,gt_bboxes)*0.01
+        dis_cost=distance_cost(flatten_center_and_stride,gt_bboxes)*0.001
         cost_matrix = (
             cls_cost * self.cls_weight + iou_cost * self.iou_weight+dis_cost)
 

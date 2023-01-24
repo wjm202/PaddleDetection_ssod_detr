@@ -212,6 +212,7 @@ class Trainer_DenseTeacher(Trainer):
 
         train_cfg = self.cfg.DenseTeacher['train_cfg']
         concat_sup_data = train_cfg.get('concat_sup_data', True)
+        
         # if self._nranks > 1:
         #     self.model=self.model._layers
         #     self.ema.model=self.model._layers
@@ -323,9 +324,17 @@ class Trainer_DenseTeacher(Trainer):
                         teacher_bboxes=batch_distance2bbox(anchor_points,teacher_preds[1].detach())
                     pred_bboxes=batch_distance2bbox(anchor_points,student_preds[1])
                     pred_scores=student_preds[0]
+
+                    # scale_y, scale_x = paddle.split(data_unsup_w['scale_factor'], 2, axis=-1)
+                    # scale_factor = paddle.concat(
+                    #     [scale_x, scale_y, scale_x, scale_y],
+                    #     axis=-1).reshape([-1, 1, 4])
+                    # pred_bboxes /= scale_factor
+
+
                     bbox_pred, bbox_num=self.ema.model._layers.yolo_head.post_process_semi([teacher_labels,\
                         teacher_bboxes],paddle.ones_like(data_unsup_w['scale_factor']))
-                    pseudo_labels,pseudo_bboxes=pseduo_transform(bbox_pred, bbox_num)
+                    pseudo_labels,pseudo_bboxes=pseduo_transform(bbox_pred, bbox_num,paddle.ones_like(data_unsup_w['scale_factor']))
                     
                     center_and_strides = paddle.concat(
                         [anchor_points, stride_tensor, stride_tensor], axis=-1)
@@ -338,8 +347,12 @@ class Trainer_DenseTeacher(Trainer):
                         pos_num_list.append(pos_num)
                         label_list.append(label)
                         bbox_target_list.append(bbox_target)
-                    loss_asa_cls,loss_asa_iou =self.model._layers.semi_loss(pred_scores, pred_bboxes,label_list,bbox_target_list,pos_num_list)
-                                            
+                    loss_asa_cls_list=[paddle.to_tensor(0)]*pred_scores.shape[0]
+                    loss_asa_iou_list=[paddle.to_tensor(0)]*pred_scores.shape[0]
+                    for i in range(pred_scores.shape[0]):
+                        loss_asa_cls_list[i],loss_asa_iou_list[i] =self.model._layers.semi_loss(pred_scores[i], pred_bboxes[i],label_list[i],bbox_target_list[i],pos_num_list[i])
+                    loss_asa_cls=sum(loss_asa_cls_list)/len(loss_asa_cls_list)
+                    loss_asa_iou=sum(loss_asa_iou_list)/len(loss_asa_iou_list)
                     if self._nranks > 1:
                         loss_dict_unsup = self.model._layers.get_distill_loss(
                             student_preds,
@@ -505,17 +518,23 @@ class Trainer_DenseTeacher(Trainer):
         self._reset_metrics()
 
 
-def pseduo_transform(teacher_bbox,bbox_num,thr=0.5):
+def pseduo_transform(teacher_bbox,bbox_num,scale_factor_tea=None,thr=0.5):
         teacher_bbox=paddle.split(teacher_bbox,bbox_num.tolist())
         gt_class=[]
         gt_bbox=[]
         for i in range (len(teacher_bbox)):
+            scale_y, scale_x = paddle.split(scale_factor_tea[i], 2, axis=-1)
+            scale_factor = paddle.concat(
+            [scale_x, scale_y, scale_x, scale_y],
+            axis=-1).reshape([-1, 4])
             pseudo_bbox=teacher_bbox[i]
+            pseudo_bbox[:,2:]=teacher_bbox[i][:,2:]/scale_factor 
+            # data_unsup_w['scale_factor']
             vaild=pseudo_bbox[:,1]>thr
             if vaild.sum()==0:
-                vaild=paddle.argmax(pseudo_bbox[:,1])
-                gt_class.append(paddle.to_tensor(np.expand_dims(pseudo_bbox[:,:1][vaild].numpy(),axis=0)))
-                gt_bbox.append(paddle.to_tensor(np.expand_dims(pseudo_bbox[:,2:][vaild].numpy(),axis=0)))
+                # vaild=paddle.argmax(pseudo_bbox[:,1])
+                gt_class.append(paddle.to_tensor([]))
+                gt_bbox.append(paddle.to_tensor([]))
             else:
                 gt_class.append(paddle.to_tensor(pseudo_bbox[:,:1][vaild].numpy()))
                 gt_bbox.append(paddle.to_tensor(pseudo_bbox[:,2:][vaild].numpy()))

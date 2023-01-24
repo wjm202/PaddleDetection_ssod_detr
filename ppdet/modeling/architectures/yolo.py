@@ -215,13 +215,17 @@ class YOLOv3(BaseArch):
         return loss_dfl
 
     def semi_loss(self,pred_cls, pred_bboxes,label_list,bbox_target_list,pos_num_list):
-                labels = paddle.to_tensor(np.stack(label_list, axis=0))
-                bbox_targets = paddle.to_tensor(np.stack(bbox_target_list, axis=0))
+                if type(bbox_target_list)==int:
+                    return 0,0
+                labels = paddle.to_tensor(np.stack(label_list, axis=0)).unsqueeze(0)
+                bbox_targets = paddle.to_tensor(np.stack(bbox_target_list, axis=0)).unsqueeze(0)
+                pred_bboxes=pred_bboxes.unsqueeze(0)
+                pred_cls   =pred_cls.unsqueeze(0)
                 # bbox_targets /= stride_tensor  # rescale bbox
-                iou_loss= IouLoss(loss_weight=1.0)   
+                iou_loss=GIoULoss(reduction='mean')    
                 # 1. obj score loss
                 mask_positive = (labels != 80)
-                num_pos = sum(pos_num_list)
+                num_pos = pos_num_list
                 num_classes=80
                 if num_pos > 0:
                     num_pos = paddle.to_tensor(num_pos, dtype='float32').clip(min=1)
@@ -237,11 +241,9 @@ class YOLOv3(BaseArch):
                     bbox_iou = paddle.diag(bbox_iou)
 
                     loss_iou = iou_loss(
-                        pred_bboxes_pos.split(
-                            4, axis=-1),
-                        assigned_bboxes_pos.split(
-                            4, axis=-1))
-                    loss_iou = loss_iou.sum() / num_pos
+                        pred_bboxes_pos,
+                        assigned_bboxes_pos)
+                    # loss_iou = loss_iou.sum() / num_pos
 
                     # 3. cls loss
                     cls_mask = mask_positive.unsqueeze(-1).tile(
