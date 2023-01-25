@@ -105,7 +105,7 @@ class FCOS(BaseArch):
         with paddle.no_grad():
             # Region Selection
             count_num = int(teacher_logits.shape[0] * ratio)
-            teacher_probs = teacher_logits
+            teacher_probs = F.sigmoid(teacher_logits)
             max_vals = paddle.max(teacher_probs, 1)
             sorted_vals, sorted_inds = paddle.topk(max_vals,
                                                    teacher_logits.shape[0])
@@ -115,8 +115,9 @@ class FCOS(BaseArch):
             b_mask = mask > 0
 
         # distill_loss_cls
+
         loss_logits = QFLv2(
-            student_logits,
+            F.sigmoid(student_logits),
             teacher_probs,
             weight=mask,
             reduction="sum") / fg_num

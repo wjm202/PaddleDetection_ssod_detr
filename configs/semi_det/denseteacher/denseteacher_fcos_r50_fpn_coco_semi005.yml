@@ -2,7 +2,7 @@ _BASE_: [
   '../../fcos/fcos_r50_fpn_iou_multiscale_2x_coco.yml',
   '../_base_/coco_detection_percent_5.yml',
 ]
-log_iter: 1
+log_iter: 20
 snapshot_epoch: 11
 epochs: &epochs 240 # 480 will be better
 weights: output/denseteacher_fcos_r50_fpn_coco_semi005/model_final
@@ -23,7 +23,7 @@ DenseTeacher:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0,distill_loss_asa_cls: 0.5,distill_loss_asa_iou: 1.0}
+    loss_weight: {distill_loss_cls: 4.0, distill_loss_box: 1.0, distill_loss_quality: 1.0,distill_loss_asa_cls: 1.0,distill_loss_asa_iou: 1.0}
     concat_sup_data: True
     suppress: linear
     ratio: 0.01
@@ -181,6 +181,6 @@ TrainDatasetLM:
     anno_path: annotations/instances_val2017.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class']
-    manual_length: 10
+    manual_length: 5000
 percent: 0.4
 label_match: True

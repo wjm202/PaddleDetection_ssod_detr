@@ -17,6 +17,7 @@ from __future__ import division
 from __future__ import print_function
 
 import math
+from numpy import empty
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
@@ -266,18 +267,18 @@ class FCOSHead(nn.Layer):
 
         if targets is not None:
             self.is_teacher = targets.get('is_teacher', False)
-            locations_list = []
-            fpn_stride_list=[]
-            for fpn_stride, feature in zip(self.fpn_stride, fpn_feats):
-                
-                location = self._compute_locations_by_level(fpn_stride, feature,
-                                                            self.num_shift)
-                locations_list.append(location)
-                h,w = feature.shape[2],feature.shape[3]
-                fpn_stride_list.append(paddle.ones([h*w,1])*fpn_stride)
-            fpn_stride_list=paddle.concat([_ for _ in fpn_stride_list])
-
             if self.is_teacher:
+                with paddle.no_grad():
+                    locations_list = []
+                    fpn_stride_list=[]
+                    for fpn_stride, feature in zip(self.fpn_stride, fpn_feats):
+                        
+                        location = self._compute_locations_by_level(fpn_stride, feature,
+                                                                    self.num_shift)
+                        locations_list.append(location)
+                        h,w = feature.shape[2],feature.shape[3]
+                        fpn_stride_list.append(paddle.ones([h*w,1])*fpn_stride)
+                    fpn_stride_list=paddle.concat([_ for _ in fpn_stride_list])
                 return [cls_logits_list, bboxes_reg_list, centerness_list],locations_list,fpn_stride_list
 
         if self.training and targets is not None:
@@ -394,14 +395,18 @@ class FCOSHead(nn.Layer):
        
         for i in range(pred_scores.shape[0]):
             # mask=paddle.zeros_like(pred_scores[i])
-            cls=bbox_pred[i][:,0]
-            mask=bbox_pred[i][:,1]>paddle.index_select(paddle.to_tensor(thr),cls.astype('int32'))
-            if mask.sum()>0:
-                pseudo_labels.append(bbox_pred[i][:,0][mask].unsqueeze(-1))
-                pseudo_bboxes.append(bbox_pred[i][:,2:][mask])  
+            if bbox_pred[i][:,0] is paddle.to_tensor([]):
+                    pseudo_labels.append(paddle.empty(shape=[0,1]))
+                    pseudo_bboxes.append(paddle.empty(shape=[0,4]))
             else:
-                pseudo_labels.append(paddle.empty(shape=[0,1]))
-                pseudo_bboxes.append(paddle.empty(shape=[0,4]))
+                cls=bbox_pred[i][:,0]
+                mask=bbox_pred[i][:,1]>paddle.index_select(paddle.to_tensor(thr),cls.astype('int32'))
+                if mask.sum()>0:
+                    pseudo_labels.append(bbox_pred[i][:,0][mask].unsqueeze(-1))
+                    pseudo_bboxes.append(bbox_pred[i][:,2:][mask])  
+                else:
+                    pseudo_labels.append(paddle.empty(shape=[0,1]))
+                    pseudo_bboxes.append(paddle.empty(shape=[0,4]))
         # bs=pred_scores.shape[0]
         # for i in range(bs):
         #    mask=((pred_scores[i]>paddle.to_tensor(thr)).sum(1))>0

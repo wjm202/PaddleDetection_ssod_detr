@@ -38,6 +38,7 @@ from ppdet.modeling.ssod_utils import align_weak_strong_shape
 from .trainer import Trainer
 from ppdet.engine.labelmatch_callbacks import LabelMatchCallback
 from ppdet.utils.logger import setup_logger
+import paddle.nn.functional as F
 logger = setup_logger('ppdet.engine')
 
 __all__ = ['Trainer_DenseTeacher']
@@ -322,11 +323,11 @@ class Trainer_DenseTeacher(Trainer):
                         data_unsup_w['is_teacher'] = True
                         teacher_preds,anchor_points,stride_tensor = self.ema.model(data_unsup_w)
                     student_preds,teacher_preds=reshape_ssod(student_preds,teacher_preds)
-                    teacher_labels=teacher_preds[0]
+                    teacher_labels=F.sigmoid(teacher_preds[0])
                     anchor_points=paddle.concat([_ for _ in anchor_points],axis=0)
                     teacher_bboxes=batch_distance2bbox(anchor_points,teacher_preds[1])
                     pred_bboxes=batch_distance2bbox(anchor_points,student_preds[1])
-                    pred_scores=student_preds[0]
+                    pred_scores=F.sigmoid(student_preds[0])
                     pseudo_labels,pseudo_bboxes=self.ema.model._layers.fcos_head.post_process_semi([teacher_labels,\
                         teacher_bboxes],paddle.ones_like(data_unsup_w['scale_factor']),self.model.cls_thr)
                     center_and_strides = paddle.concat(
@@ -549,25 +550,24 @@ def batch_distance2bbox(points, distance):
     return out_bbox
 
 
-import paddle.nn.functional as F
 def reshape_ssod(fcos_head_outs,
                          teacher_fcos_head_outs):
         student_logits, student_deltas, student_quality = fcos_head_outs
         teacher_logits, teacher_deltas, teacher_quality = teacher_fcos_head_outs
         nc = student_logits[0].shape[1]
         bs=student_logits[0].shape[0]
-        student_logits = F.softmax(paddle.concat(
+        student_logits = paddle.concat(
             [
                 _.transpose([0, 2, 3, 1]).reshape([bs,-1, nc])
                 for _ in student_logits
             ],
-            axis=1))
-        teacher_logits = F.softmax(paddle.concat(
+            axis=1)
+        teacher_logits = paddle.concat(
             [
                 _.transpose([0, 2, 3, 1]).reshape([bs,-1, nc])
                 for _ in teacher_logits
             ],
-            axis=1))
+            axis=1)
 
         student_deltas = paddle.concat(
             [
