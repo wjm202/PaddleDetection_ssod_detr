@@ -139,7 +139,7 @@ class YOLOv3(BaseArch):
     def get_loss_keys(self):
         return ['loss_cls', 'loss_iou', 'loss_dfl']
 
-    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.01):
+    def get_distill_loss(self, head_outs, teacher_head_outs, ratio=0.01,thr=None):
         # student_probs: already sigmoid
         student_probs, student_deltas, student_dfl = head_outs
         teacher_probs, teacher_deltas, teacher_dfl = teacher_head_outs
@@ -150,18 +150,49 @@ class YOLOv3(BaseArch):
         teacher_deltas = teacher_deltas.reshape([-1, 4])
         student_dfl = student_dfl.reshape([-1, 4, 17])
         teacher_dfl = teacher_dfl.reshape([-1, 4, 17])
-
-        with paddle.no_grad():
+        with paddle.no_grad():#ratio=0.03
             # Region Selection
-            count_num = int(teacher_probs.shape[0] * ratio)
-            #teacher_probs = F.sigmoid(teacher_probs) # already sigmoid
-            max_vals = paddle.max(teacher_probs, 1)
-            sorted_vals, sorted_inds = paddle.topk(max_vals,
-                                                   teacher_probs.shape[0])
-            mask = paddle.zeros_like(max_vals)
-            mask[sorted_inds[:count_num]] = 1.
-            fg_num = sorted_vals[:count_num].sum()
-            b_mask = mask > 0.
+            # with paddle.no_grad():
+            # # Region Selection
+            
+            # teacher_probs =student_probs
+            # max_vals = paddle.max(teacher_probs, 1)
+            # # print(max_vals.max())
+            # max_class = paddle.argmax(teacher_probs, 1).astype('float32')
+            # max_values=paddle.concat( [max_class.unsqueeze(1), max_vals.unsqueeze(1)],axis=-1)
+            # mask=[]
+            # for i in range(nc):
+            #     mask.append(paddle.multiply(max_values[:,0]==i , max_values[:,1]>0.2).unsqueeze(1))
+            # mask=paddle.concat([_ for _ in mask],axis=1)
+            max_vals=paddle.max(teacher_probs, 1).unsqueeze(1)
+            mask=max_vals>0.2#试试改成numpy！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！！
+            mask=mask.sum(1)>0
+            b_mask=mask.astype('bool')
+            mask=mask.astype('int32')
+        if  mask.sum()==0:
+            return {
+            "distill_loss_cls": paddle.to_tensor(0.0),
+            "distill_loss_iou": paddle.to_tensor(0.0),
+            "distill_loss_dfl": paddle.to_tensor(0.0),
+            "fg_sum": paddle.to_tensor(0.0),
+        }
+        else:
+            fg_num = paddle.max(teacher_probs[b_mask], 1)
+            fg_num =fg_num.sum()
+    # distill_loss_cls 
+            # loss_logits = QFLv2(
+            #     F.sigmoid(student_logits),
+            #     teacher_probs,
+            #     weight=mask,
+            #     fg_num=fg_num) 
+            loss_logits = QFLv2(
+                student_probs,
+                teacher_probs,
+                weight=mask,
+                reduction = "sum"
+                ) /fg_num
+            if loss_logits>50:
+                print('nan')
 
         loss_logits = QFLv2(
             student_probs, teacher_probs, weight=mask, reduction="sum") / fg_num
