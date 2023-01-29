@@ -7,7 +7,7 @@ snapshot_epoch: 2
 epochs: &epochs 200
 cosine_epochs: &cosine_epochs 240
 weights: output/denseteacher_ppyoloe_plus_crn_s_coco_semi010/model_final
-
+update_interval: 1000
 
 ### pretrain and warmup config, choose one and coment another
 pretrain_weights: https://bj.bcebos.com/v1/paddledet/models/semi_det/ppyoloe_plus_crn_s_80e_coco_sup010.pdparams # mAP=35.3
@@ -150,3 +150,34 @@ OptimizerBuilder:
     factor: 0.0005 # dt-fcos 0.0001
     type: L2
   clip_grad_by_norm: 1.0 # dt-fcos clip_grad_by_value
+
+
+
+LMReader:
+  sample_transforms:
+    - Decode: {}
+    # - RandomDistort: {}
+    # - RandomExpand: {fill_value: [123.675, 116.28, 103.53]}
+    # - RandomCrop: {}
+    # - RandomFlip: {}
+  batch_transforms:
+    - BatchRandomResize: {target_size: [640,640], random_size: True, random_interp: True, keep_ratio: False}
+    - NormalizeImage: {mean: [0., 0., 0.], std: [1., 1., 1.], norm_type: none}
+    - Permute: {}
+    - PadGT: {}
+  batch_size: 2
+  shuffle: true
+  drop_last: false
+  use_shared_memory: true
+  collate_batch: true
+
+
+TrainDatasetLM:
+  !LMCocoDataset
+    image_dir: val2017
+    anno_path: annotations/instances_val2017.json
+    dataset_dir: dataset/coco
+    data_fields: ['image', 'gt_bbox', 'gt_class']
+    manual_length: 50
+percent: 0.2
+label_match: True

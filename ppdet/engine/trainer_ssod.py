@@ -212,7 +212,8 @@ class Trainer_DenseTeacher(Trainer):
 
         train_cfg = self.cfg.DenseTeacher['train_cfg']
         concat_sup_data = train_cfg.get('concat_sup_data', True)
-
+        curr_iter = -1
+        self.status['iter_id'] = 0
         for param in self.ema.model.parameters():
             param.stop_gradient = True
 
@@ -279,6 +280,7 @@ class Trainer_DenseTeacher(Trainer):
                 loss_dict.update({'loss_sup_sum': loss_dict['loss']})
 
                 curr_iter = len(self.loader) * epoch_id + step_id
+                self.status['iter_id'] = curr_iter
                 st_iter = self.semi_start_iters
                 if curr_iter == st_iter:
                     logger.info("***" * 30)
@@ -320,12 +322,14 @@ class Trainer_DenseTeacher(Trainer):
                         loss_dict_unsup = self.model._layers.get_distill_loss(
                             student_preds,
                             teacher_preds,
-                            ratio=train_cfg['ratio'])
+                            ratio=train_cfg['ratio'],
+                            thr=self.model.cls_thr_ig)
                     else:
                         loss_dict_unsup = self.model.get_distill_loss(
                             student_preds,
                             teacher_preds,
-                            ratio=train_cfg['ratio'])
+                            ratio=train_cfg['ratio'],
+                            thr=self.model.cls_thr_ig)
 
                     fg_num = loss_dict_unsup["fg_sum"]
                     del loss_dict_unsup["fg_sum"]
