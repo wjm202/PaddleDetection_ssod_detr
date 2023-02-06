@@ -47,6 +47,7 @@ class DETR_SSOD(MultiSteamDetector):
             train_cfg=train_cfg,
             test_cfg=test_cfg,
         )
+        self.momentum=0.9996
         if train_cfg is not None:
             self.freeze("teacher")
             self.unsup_weight = self.train_cfg['unsup_weight']
@@ -72,29 +73,32 @@ class DETR_SSOD(MultiSteamDetector):
             self.teacher = self.teacher._layers
             self._student = self.student
             self.student = self.student._layers
+       
         self.update_ema_model(self.momentum)
         data_sup_w, data_sup_s, data_unsup_w, data_unsup_s=inputs
-        if concat_sup_data:
+        if True:
             for k, v in data_sup_s.items():
                 if k in ['epoch_id']:
                     continue
-                data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
+                if k in ['gt_class','gt_bbox','is_crowd']:
+                    data_sup_s[k].extend(data_sup_w[k])
+                else:
+                    data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
         loss = {}
-        if "sup" in data_groups:
-            gt_bboxes = data_groups["sup"]["gt_bbox"]
-            sup_loss = self.student.forward(data_groups["sup"])
-            sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
-            loss.update(**sup_loss)
-
-        if "unsup_student" in data_groups:
-            unsup_loss = weighted_loss(
-                self.foward_unsup_train(
-                    data_groups["unsup_teacher"], data_groups["unsup_student"]
-                ),
-                weight=self.unsup_weight,
-            )
-            unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
-            loss.update(**unsup_loss)
+        sup_loss = self.student.forward(data_sup_s)    
+        sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
+        loss.update(**sup_loss)   
+        # unsup_loss = weighted_loss(
+        #         self.foward_unsup_train(
+        #             data_groups["unsup_teacher"], data_groups["unsup_student"]
+        #         ),
+        #         weight=self.unsup_weight,
+        #     )
+        unsup_loss =     self.foward_unsup_train(
+                    data_unsup_w, data_unsup_s
+                )
+        unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
+        loss.update(**unsup_loss)     
         
         loss.update({'loss': loss['sup_loss'] + loss.get('unsup_loss', 0)})
 
@@ -112,47 +116,56 @@ class DETR_SSOD(MultiSteamDetector):
 
     def foward_unsup_train(self, teacher_data, student_data):
 
-        teacher_data['img_metas'] = []
-        unsup_num = teacher_data["image"].shape[0]
-        for i in range(unsup_num):
-            tmp_dict = {}
-            tmp_dict['tag'] = teacher_data['tag'][i]
-            tmp_dict['batch_input_shape'] = teacher_data['batch_input_shape'][i]
-            tmp_dict['scale_factor'] = teacher_data['scale_factor'][i]
-            tmp_dict['transform_matrix'] = teacher_data['transform_matrix'][i]
-            tmp_dict['img_shape'] = tuple((teacher_data['image'][i].shape))
-            tmp_dict['img_shape'] = tmp_dict['img_shape'][1:] + (tmp_dict['img_shape'][0],)
-            teacher_data['img_metas'].append(tmp_dict)
-        
-        student_data['img_metas'] = []
-        for i in range(unsup_num):
-            tmp_dict = {}
-            tmp_dict['tag'] = student_data['tag'][i]
-            tmp_dict['batch_input_shape'] = student_data['batch_input_shape'][i]
-            tmp_dict['scale_factor'] = student_data['scale_factor'][i]
-            tmp_dict['transform_matrix'] = student_data['transform_matrix'][i]
-            tmp_dict['img_shape'] = tuple((student_data['image'][i].shape))
-            tmp_dict['img_shape'] = tmp_dict['img_shape'][1:] + (tmp_dict['img_shape'][0],)
-            student_data['img_metas'].append(tmp_dict)
-
         with paddle.no_grad():
-            teacher_info = self.extract_teacher_info(
-                teacher_data,
-                teacher_data["image"],
-                teacher_data["img_metas"],
-                teacher_data["proposals"]
-                if ("proposals" in teacher_data)
-                and (teacher_data["proposals"] is not None)
-                else None,
+           body_feats=self.teacher.backbone(teacher_data)
+           pad_mask = teacher_data['pad_mask'] if self.training else None
+           out_transformer = self.transformer(body_feats, pad_mask, teacher_data)
+           preds = self.detr_head(out_transformer, body_feats)
+           bbox, bbox_num = self.teacher.post_process(
+                    preds, teacher_data['im_shape'], teacher_data['scale_factor'])
+        if bbox.numel() > 0:
+            proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)
+            proposal_list = proposal_list.split(tuple(np.array(bbox_num)), 0)
+        else:
+            proposal_list = [paddle.expand(paddle.to_tensor([])[:, None], (-1, 5))]
+        
+        proposal_label_list = paddle.cast(bbox[:, 0], np.int32)
+        proposal_label_list = proposal_label_list.split(tuple(np.array(bbox_num)), 0)
+            
+
+        proposal_list = [paddle.to_tensor(p, place=feat[0].place) for p in proposal_list]
+        proposal_label_list = [paddle.to_tensor(p, place=feat[0].place) for p in proposal_label_list]
+
+        # filter invalid box roughly
+        if isinstance(self.train_cfg['pseudo_label_initial_score_thr'], float):
+            thr = self.train_cfg['pseudo_label_initial_score_thr']
+        else:
+            # TODO: use dynamic threshold
+            raise NotImplementedError("Dynamic Threshold is not implemented yet.")
+        # print("thr0.5 :",sum([len(bbox) for bbox in proposal_list]), "\tscore:",[proposal[:, -1] for proposal in proposal_list])
+        
+        proposal_list, proposal_label_list, _ = list(
+            zip(
+                *[
+                    filter_invalid(
+                        proposal,
+                        proposal_label,
+                        proposal[:, -1],
+                        thr=thr,
+                        min_size=self.train_cfg['min_pseduo_box_size'],
+                    )
+                    for proposal, proposal_label in zip(
+                        proposal_list, proposal_label_list
+                    )
+                ]
             )
-        student_info = self.extract_student_info(student_data, 
-            student_data["image"],
-            student_data["img_metas"],
-            student_data["proposals"]
-            if ("proposals" in student_data)
-            and (student_data["proposals"] is not None)
-            else None,
         )
+         
+
+
+
+
+
 
         return self.compute_pseudo_label_loss(student_info, teacher_info)
 
