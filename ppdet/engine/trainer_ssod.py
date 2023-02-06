@@ -228,8 +228,8 @@ class Trainer_DenseTeacher(Trainer):
         self._compose_callback.on_train_begin(self.status)
         iter_id = -1
         self.status['iter_id'] = 0
-        # self.status['eval_interval'] = self.cfg.eval_interval
-        # self.status['save_interval'] = self.cfg.save_interval
+        self.status['eval_interval'] = self.cfg.eval_interval
+        self.status['save_interval'] = self.cfg.save_interval
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
             self.status['mode'] = 'train'
             self.status['epoch_id'] = epoch_id
@@ -238,6 +238,7 @@ class Trainer_DenseTeacher(Trainer):
             self.loader.dataset_unlabel.set_epoch(epoch_id)
             iter_tic = time.time()
             if self._nranks > 1:
+                print(model)
                 model._layers.teacher.eval()
                 model._layers.student.train()
             else:
@@ -270,7 +271,10 @@ class Trainer_DenseTeacher(Trainer):
                     scaler.minimize(self.optimizer, scaled_loss)
                 else:
                     # model forward
-                    outputs = model(data)
+                    if self._nranks > 1:
+                        outputs = model._layers(data)
+                    else:
+                        outputs = model(data)
                     
                     loss = outputs['loss']
                     # model backward

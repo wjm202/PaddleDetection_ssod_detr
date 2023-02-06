@@ -34,7 +34,7 @@ from ppdet.core.workspace import register, create
 from ppdet.modeling.bbox_utils import delta2bbox
 from ppdet.data.transform.atss_assigner import bbox_overlaps
 from ppdet.utils.logger import setup_logger
-
+from ppdet.modeling.ssod_utils import filter_invalid
 from .multi_stream_detector import MultiSteamDetector
 logger = setup_logger(__name__)
 
@@ -68,11 +68,12 @@ class DETR_SSOD(MultiSteamDetector):
         }
 
     def forward_train(self, inputs, **kwargs):
+        # print(self.teacher)
         if dist.get_world_size() > 1 and self._teacher == None:
             self._teacher = self.teacher
-            self.teacher = self.teacher._layers
+            self.teacher = self.teacher
             self._student = self.student
-            self.student = self.student._layers
+            self.student = self.student
        
         self.update_ema_model(self.momentum)
         data_sup_w, data_sup_s, data_unsup_w, data_unsup_s=inputs
@@ -102,15 +103,15 @@ class DETR_SSOD(MultiSteamDetector):
         
         loss.update({'loss': loss['sup_loss'] + loss.get('unsup_loss', 0)})
 
-        if dist.get_world_size() > 1:
-            if framework._dygraph_tracer(
-            )._has_grad and self._teacher.grad_need_sync:
-                self._teacher._reducer.prepare_for_backward(
-                    list(self._teacher._find_varbase(loss)))
-            if framework._dygraph_tracer(
-            )._has_grad and self._student.grad_need_sync:
-                self._student._reducer.prepare_for_backward(
-                    list(self._student._find_varbase(loss)))
+        # if dist.get_world_size() > 1:
+        #     if framework._dygraph_tracer(
+        #     )._has_grad and self._teacher.grad_need_sync:
+        #         self._teacher._reducer.prepare_for_backward(
+        #             list(self._teacher._find_varbase(loss)))
+        #     if framework._dygraph_tracer(
+        #     )._has_grad and self._student.grad_need_sync:
+        #         self._student._reducer.prepare_for_backward(
+        #             list(self._student._find_varbase(loss)))
         
         return loss
 
@@ -119,10 +120,13 @@ class DETR_SSOD(MultiSteamDetector):
         with paddle.no_grad():
            body_feats=self.teacher.backbone(teacher_data)
            pad_mask = teacher_data['pad_mask'] if self.training else None
-           out_transformer = self.transformer(body_feats, pad_mask, teacher_data)
-           preds = self.detr_head(out_transformer, body_feats)
+           out_transformer = self.teacher.transformer(body_feats, pad_mask, teacher_data)
+           preds = self.teacher.detr_head(out_transformer, body_feats)
            bbox, bbox_num = self.teacher.post_process(
                     preds, teacher_data['im_shape'], teacher_data['scale_factor'])
+           scale_factor=teacher_data['scale_factor'].flip(-1).tile([1, 2])
+           bbox=paddle.concat([bbox[:,0:2],bbox[:,2:]*scale_factor],axis=-1)
+        
         if bbox.numel() > 0:
             proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)
             proposal_list = proposal_list.split(tuple(np.array(bbox_num)), 0)
@@ -132,9 +136,8 @@ class DETR_SSOD(MultiSteamDetector):
         proposal_label_list = paddle.cast(bbox[:, 0], np.int32)
         proposal_label_list = proposal_label_list.split(tuple(np.array(bbox_num)), 0)
             
-
-        proposal_list = [paddle.to_tensor(p, place=feat[0].place) for p in proposal_list]
-        proposal_label_list = [paddle.to_tensor(p, place=feat[0].place) for p in proposal_label_list]
+        proposal_list = [paddle.to_tensor(p, place=body_feats[0].place) for p in proposal_list]
+        proposal_label_list = [paddle.to_tensor(p, place=body_feats[0].place) for p in proposal_label_list]
 
         # filter invalid box roughly
         if isinstance(self.train_cfg['pseudo_label_initial_score_thr'], float):
@@ -160,76 +163,61 @@ class DETR_SSOD(MultiSteamDetector):
                 ]
             )
         )
-         
-
-
-
-
-
-
+        teacher_bboxes = proposal_list
+        teacher_labels = proposal_label_list
+        teacher_info=[teacher_bboxes,teacher_labels]
+        student_info=student_data
         return self.compute_pseudo_label_loss(student_info, teacher_info)
 
     def compute_pseudo_label_loss(self, student_info, teacher_info):                                 
-        # teacher_info["transform_matrix"] = [matrix.astype('float32') for matrix in teacher_info["transform_matrix"]]
-        # student_info["transform_matrix"] = [matrix.astype('float32') for matrix in student_info["transform_matrix"]]
-        M = Transform2D.get_trans_mat(
-            teacher_info["transform_matrix"], student_info["transform_matrix"]
-        )
-        # n,9
-        pseudo_bboxes = self._transform_bbox(
-            teacher_info["det_bboxes"],
-            M,
-            [meta["img_shape"] for meta in student_info["img_metas"]],
-        )
-        pseudo_labels = teacher_info["det_labels"]
-        loss = {}
-        rpn_loss, proposal_list, rois, rois_num = self.rpn_loss(
-           student_info["rpn_out"],
-           pseudo_bboxes,
-           pseudo_labels,
-           student_info["img_metas"],
-           student_info=student_info,
-        )
-        loss.update(rpn_loss)
-        if proposal_list is not None:
-           student_info["proposals"] = proposal_list
-        if self.train_cfg['use_teacher_proposal']:
-            proposals = self._transform_bbox(
-                teacher_info["proposals"],
-                M,
-                [meta["img_shape"] for meta in student_info["img_metas"]],
-            )
+
+        pseudo_bboxes=list(teacher_info[0])
+        pseudo_labels=list(teacher_info[1])
+        student_data=student_info
+        losses = dict()
+        if sum([label.shape[0] for label in pseudo_labels]) > 0:
+            for i in range(len(pseudo_bboxes)):
+                pseudo_bboxes[i]=pseudo_bboxes[i][:,:4].numpy()
+                pseudo_labels[i]=pseudo_labels[i].unsqueeze(-1).numpy()
+            student_data.update(gt_bbox=pseudo_bboxes[:4],gt_class=pseudo_labels)
+            student_data=self.normalize_box(student_data)
+            losses=self.student(student_data)
         else:
-            proposals = student_info["proposals"]
-
-        loss.update(
-            self.unsup_rcnn_cls_loss(
-                student_info["backbone_feature"],
-                student_info["img_metas"],
-                proposals,
-                pseudo_bboxes,
-                pseudo_labels,
-                teacher_info["transform_matrix"],
-                student_info["transform_matrix"],
-                teacher_info["img_metas"],
-                teacher_info["backbone_feature"],
-                rois, rois_num, 
-                student_info=student_info,
-                teacher_info=teacher_info,
-            )
-        )
-        loss.update(
-            self.unsup_rcnn_reg_loss(
-                student_info["backbone_feature"],
-                student_info["img_metas"],
-                proposals,
-                pseudo_bboxes,
-                pseudo_labels,
-                rois_num, 
-                student_info=student_info,
-            )
-        )
-        return loss
+            losses['loss'] = paddle.zeros([1], dtype='float32')
+            losses['loss_class'] = paddle.zeros([1], dtype='float32')
+            losses['loss_bbox'] = paddle.zeros([1], dtype='float32')
+            losses['loss_giou'] = paddle.zeros([1], dtype='float32')
+            losses['loss_class_aux'] = paddle.zeros([1], dtype='float32')
+            losses['loss_bbox_aux'] = paddle.zeros([1], dtype='float32')
+            losses['loss_giou_aux'] = paddle.zeros([1], dtype='float32')
+        return losses
 
 
 
+    def normalize_box(self,sample,):
+        im = sample['image']
+        place= sample['image'].place
+        if  'gt_bbox' in sample.keys():
+            gt_bbox = sample['gt_bbox']
+            gt_class = sample['gt_class']
+            _, _, height, width, = im.shape
+            for i in range(len(gt_bbox)):
+                for j in range(gt_bbox[i].shape[0]):
+                    gt_bbox[i][j][0] = gt_bbox[i][j][0] / width
+                    gt_bbox[i][j][1] = gt_bbox[i][j][1] / height
+                    gt_bbox[i][j][2] = gt_bbox[i][j][2] / width
+                    gt_bbox[i][j][3] = gt_bbox[i][j][3] / height
+                    gt_class[i]= paddle.to_tensor(gt_class[i],dtype=paddle.int32,place=place)
+            sample['gt_bbox'] = gt_bbox
+            sample['gt_class'] = gt_class
+        if  'gt_bbox' in sample.keys():
+            bbox = sample['gt_bbox']
+            for i in range(len(bbox)):
+                bbox[i][:, 2:4] = bbox[i][:, 2:4] - bbox[i][:, :2]
+                bbox[i][:, :2] = bbox[i][:, :2] + bbox[i][:, 2:4] / 2.
+                bbox[i]= paddle.to_tensor(bbox[i],dtype=paddle.float32,place=place)
+            sample['gt_bbox'] = bbox
+
+        
+        return sample
+        

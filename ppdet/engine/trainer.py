@@ -47,7 +47,7 @@ from ppdet.utils.fuse_utils import fuse_conv_bn
 from ppdet.utils import profiler
 from ppdet.modeling.post_process import multiclass_nms
 
-from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator, WandbCallback
+from .callbacks import Callback, ComposeCallback, LogPrinter, Checkpointer, WiferFaceEval, VisualDLWriter, SniperProposalsGenerator, WandbCallback,SemiCheckpointer,SemiLogPrinter
 from .export_utils import _dump_infer_config, _prune_input_spec, apply_to_static
 
 from paddle.distributed.fleet.utils.hybrid_parallel_util import fused_allreduce_gradients
@@ -218,7 +218,11 @@ class Trainer(object):
                 self._callbacks.append(SniperProposalsGenerator(self))
             if self.cfg.get('use_wandb', False) or 'wandb' in self.cfg:
                 self._callbacks.append(WandbCallback(self))
+            if self.cfg.get('ssod_method', False):
+                self._callbacks.append(SemiLogPrinter(self))
+                self._callbacks.append(SemiCheckpointer(self))
             self._compose_callback = ComposeCallback(self._callbacks)
+
         elif self.mode == 'eval':
             self._callbacks = [LogPrinter(self)]
             if self.cfg.metric == 'WiderFace':

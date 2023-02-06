@@ -91,3 +91,44 @@ def QFLv2(pred_sigmoid,
     elif reduction == "sum":
         loss = loss[valid].sum()
     return loss
+
+
+
+def filter_invalid(bbox, label=None, score=None, mask=None, thr=0.0, min_size=0):
+    if score.numel() > 0:
+        # valid = score > thr
+        valid = score >= thr
+        if valid.shape[0] == 1 :
+            bbox = bbox if valid.item() else paddle.expand(paddle.to_tensor([])[:, None], (-1, 4))
+        else:
+            bbox = bbox[valid]
+
+        if label is not None:
+            if valid.shape[0] == 1 :
+                label = label if valid.item() else paddle.to_tensor([])
+            else:
+                label = label[valid]
+        # bbox = bbox[valid]
+        # if label is not None:
+        #     label = label[valid]
+        if mask is not None:
+            mask = BitmapMasks(mask.masks[valid.cpu().numpy()], mask.height, mask.width)
+    if min_size is not None and bbox.shape[0] > 0:
+        bw = bbox[:, 2] - bbox[:, 0]
+        bh = bbox[:, 3] - bbox[:, 1]
+        valid = (bw > min_size) & (bh > min_size)
+
+        if valid.shape[0] == 1 :
+            bbox = bbox if valid.item() else paddle.expand(paddle.to_tensor([])[:, None], (-1, 4))
+        else:
+            bbox = bbox[valid]
+
+        if label is not None:
+            if valid.shape[0] == 1 :
+                label = label if valid.item() else paddle.to_tensor([])
+            else:
+                label = label[valid]
+            
+        if mask is not None:
+            mask = BitmapMasks(mask.masks[valid.cpu().numpy()], mask.height, mask.width)
+    return bbox, label, mask
