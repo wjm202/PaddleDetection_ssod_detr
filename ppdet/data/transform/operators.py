@@ -1803,27 +1803,29 @@ class NormalizeBox(BaseOperator):
 
     def apply(self, sample, context):
         im = sample['image']
-        gt_bbox = sample['gt_bbox']
-        height, width, _ = im.shape
-        for i in range(gt_bbox.shape[0]):
-            gt_bbox[i][0] = gt_bbox[i][0] / width
-            gt_bbox[i][1] = gt_bbox[i][1] / height
-            gt_bbox[i][2] = gt_bbox[i][2] / width
-            gt_bbox[i][3] = gt_bbox[i][3] / height
-        sample['gt_bbox'] = gt_bbox
+        if  'gt_bbox' in sample.keys():
+            gt_bbox = sample['gt_bbox']
+            height, width, _ = im.shape
+            for i in range(gt_bbox.shape[0]):
+                gt_bbox[i][0] = gt_bbox[i][0] / width
+                gt_bbox[i][1] = gt_bbox[i][1] / height
+                gt_bbox[i][2] = gt_bbox[i][2] / width
+                gt_bbox[i][3] = gt_bbox[i][3] / height
+            sample['gt_bbox'] = gt_bbox
 
-        if 'gt_keypoint' in sample.keys():
-            gt_keypoint = sample['gt_keypoint']
+            if 'gt_keypoint' in sample.keys():
+                gt_keypoint = sample['gt_keypoint']
 
-            for i in range(gt_keypoint.shape[1]):
-                if i % 2:
-                    gt_keypoint[:, i] = gt_keypoint[:, i] / height
-                else:
-                    gt_keypoint[:, i] = gt_keypoint[:, i] / width
-            sample['gt_keypoint'] = gt_keypoint
+                for i in range(gt_keypoint.shape[1]):
+                    if i % 2:
+                        gt_keypoint[:, i] = gt_keypoint[:, i] / height
+                    else:
+                        gt_keypoint[:, i] = gt_keypoint[:, i] / width
+                sample['gt_keypoint'] = gt_keypoint
 
-        return sample
-
+            return sample
+        else:
+            return sample
 
 @register_op
 class BboxXYXY2XYWH(BaseOperator):
@@ -1835,13 +1837,14 @@ class BboxXYXY2XYWH(BaseOperator):
         super(BboxXYXY2XYWH, self).__init__()
 
     def apply(self, sample, context=None):
-        assert 'gt_bbox' in sample
-        bbox = sample['gt_bbox']
-        bbox[:, 2:4] = bbox[:, 2:4] - bbox[:, :2]
-        bbox[:, :2] = bbox[:, :2] + bbox[:, 2:4] / 2.
-        sample['gt_bbox'] = bbox
-        return sample
-
+        if  'gt_bbox' in sample.keys():
+            bbox = sample['gt_bbox']
+            bbox[:, 2:4] = bbox[:, 2:4] - bbox[:, :2]
+            bbox[:, :2] = bbox[:, :2] + bbox[:, 2:4] / 2.
+            sample['gt_bbox'] = bbox
+            return sample
+        else:
+            return sample
 
 @register_op
 class PadBox(BaseOperator):

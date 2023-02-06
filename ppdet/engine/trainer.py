@@ -405,6 +405,14 @@ class Trainer(object):
         else:
             load_weight(self.model.reid, reid_weights)
 
+    def load_semi_weights(self, t_weights, s_weights):
+        if self.is_loaded_weights:
+            return 
+        self.start_epoch = 0
+        load_pretrain_weight(self.model.teacher, t_weights)
+        load_pretrain_weight(self.model.student, s_weights)
+        logger.info("Load teacher weights {} to start training".format(t_weights))
+        logger.info("Load student weights {} to start training".format(s_weights))
     def resume_weights(self, weights):
         # support Distill resume weights
         if hasattr(self.model, 'student_model'):

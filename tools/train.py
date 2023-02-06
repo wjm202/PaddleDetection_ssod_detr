@@ -144,6 +144,9 @@ def run(FLAGS, cfg):
     # load weights
     if FLAGS.resume is not None:
         trainer.resume_weights(FLAGS.resume)
+    elif 'pretrain_student_weights' in cfg and 'pretrain_teacher_weights' in cfg \
+            and cfg.pretrain_teacher_weights and cfg.pretrain_student_weights:
+                trainer.load_semi_weights(cfg.pretrain_teacher_weights, cfg.pretrain_student_weights)
     elif 'pretrain_weights' in cfg and cfg.pretrain_weights:
         trainer.load_weights(cfg.pretrain_weights)
 
