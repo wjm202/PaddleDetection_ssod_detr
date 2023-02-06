@@ -24,14 +24,14 @@ SemiTrainReader:
   sample_transforms:
   - Decode: {}
   - RandomFlip: {prob: 0.5}
-  - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [ 480, 512, 544, 576, 608, 640 ], max_size: 1333 } ],
+  - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [ 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800 ], max_size: 1333 } ],
                     transforms2: [
                         RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
                         RandomSizeCrop: { min_size: 384, max_size: 600 },
-                        RandomShortSideResize: { short_side_sizes: [ 480, 512, 544, 576, 608, 640 ], max_size: 1333 } ]
+                        RandomShortSideResize: { short_side_sizes: [ 480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800 ], max_size: 1333 } ]
   }
   weak_aug:
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
     - NormalizeBox: {}
     - BboxXYXY2XYWH: {}
     - Permute: {}
@@ -42,7 +42,7 @@ SemiTrainReader:
         RandomGaussianBlur: {prob: 0.5, sigma: [0.1, 2.0]},
         RandomGrayscale: {prob: 0.2},
       ]}
-    - NormalizeImage: {mean: [0.485, 0.456, 0.406], std: [0.229, 0.224, 0.225], is_scale: true}
+    - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
     - NormalizeBox: {}
     - BboxXYXY2XYWH: {}
     - Permute: {}
@@ -52,8 +52,8 @@ SemiTrainReader:
   unsup_batch_transforms:
     # - Permute: {}
    - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
-  sup_batch_size: 1
-  unsup_batch_size: 1
+  sup_batch_size: 2
+  unsup_batch_size: 2
   shuffle: true
   drop_last: true
   collate_batch: false
@@ -66,24 +66,23 @@ SemiTrainReader:
 EvalReader:
   sample_transforms:
   - Decode: {}
-  - Resize: {target_size: [640, 640], keep_ratio: True}
+  - Resize: {target_size: [800, 1333], keep_ratio: True}
   - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
   - Permute: {}
   batch_transforms:
-  - PadMaskBatch: {pad_size: [640, 640]}
+  - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
   batch_size: 1
   shuffle: false
   drop_last: false
 
-
 TestReader:
   sample_transforms:
   - Decode: {}
-  - Resize: {target_size: [640, 640], keep_ratio: True}
+  - Resize: {target_size: [800, 1333], keep_ratio: True}
   - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
   - Permute: {}
   batch_transforms:
-  - PadMaskBatch: {pad_to_stride: 32}
+  - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
   batch_size: 1
   shuffle: false
   drop_last: false
@@ -98,6 +97,8 @@ DETR_SSOD:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
+    semi_start_iters: 5000
+    ema_start_iters: 3000
     pseudo_label_initial_score_thr: 0.7
     min_pseduo_box_size: 0
     loss_weight: {distill_loss_class: 1.0, distill_loss_bbox: 1.0, distill_loss_giou: 1.0,

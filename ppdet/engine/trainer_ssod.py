@@ -238,7 +238,7 @@ class Trainer_DenseTeacher(Trainer):
             self.loader.dataset_unlabel.set_epoch(epoch_id)
             iter_tic = time.time()
             if self._nranks > 1:
-                print(model)
+                # print(model)
                 model._layers.teacher.eval()
                 model._layers.student.train()
             else:
@@ -258,6 +258,7 @@ class Trainer_DenseTeacher(Trainer):
                 self.status['data_time'].update(time.time() - iter_tic)
                 self.status['step_id'] = step_id
                 self.status['iter_id'] = iter_id
+                data.append(iter_id)
                 profiler.add_profiler_step(profiler_options)
                 self._compose_callback.on_step_begin(self.status)
                 if self.cfg.get('amp', False):

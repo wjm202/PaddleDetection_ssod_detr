@@ -47,6 +47,8 @@ class DETR_SSOD(MultiSteamDetector):
             train_cfg=train_cfg,
             test_cfg=test_cfg,
         )
+        self.semi_start_iters=train_cfg['semi_start_iters']
+        self.ema_start_iters=train_cfg['ema_start_iters']
         self.momentum=0.9996
         if train_cfg is not None:
             self.freeze("teacher")
@@ -74,9 +76,13 @@ class DETR_SSOD(MultiSteamDetector):
             self.teacher = self.teacher
             self._student = self.student
             self.student = self.student
-       
-        self.update_ema_model(self.momentum)
-        data_sup_w, data_sup_s, data_unsup_w, data_unsup_s=inputs
+        data_sup_w, data_sup_s, data_unsup_w, data_unsup_s,iter_id=inputs
+        if iter_id==self.ema_start_iters:
+            self.update_ema_model(self.momentum==0)
+        elif iter_id<self.ema_start_iters:
+            pass
+        elif iter_id>self.ema_start_iters:
+            self.update_ema_model(self.momentum==0.99)
         if True:
             for k, v in data_sup_s.items():
                 if k in ['epoch_id']:
@@ -95,14 +101,16 @@ class DETR_SSOD(MultiSteamDetector):
         #         ),
         #         weight=self.unsup_weight,
         #     )
-        unsup_loss =     self.foward_unsup_train(
-                    data_unsup_w, data_unsup_s
-                )
-        unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
-        loss.update(**unsup_loss)     
-        
-        loss.update({'loss': loss['sup_loss'] + loss.get('unsup_loss', 0)})
-
+        if iter_id>self.semi_start_iters:
+            unsup_loss =     self.foward_unsup_train(
+                        data_unsup_w, data_unsup_s
+                    )
+            unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
+            loss.update(**unsup_loss)     
+            
+            loss.update({'loss': loss['sup_loss'] + loss.get('unsup_loss', 0)})
+        else:
+            loss.update({'loss': loss['sup_loss']})
         # if dist.get_world_size() > 1:
         #     if framework._dygraph_tracer(
         #     )._has_grad and self._teacher.grad_need_sync:
