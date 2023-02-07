@@ -147,22 +147,17 @@ def filter_invalid(bbox, label=None, score=None, mask=None, thr=0.0, min_size=0)
 def weighted_loss(loss: dict, weight, ignore_keys=[], warmup=0):
     if len(loss) == 0:
         return {}
-    _step_counter["weight"] += 1
-    lambda_weight = (
-        lambda x: x * (_step_counter["weight"] - 1) / warmup
-        if _step_counter["weight"] <= warmup
-        else x
-    )
+
     if isinstance(weight, Mapping):
         for k, v in weight.items():
             for name, loss_item in loss.items():
                 if (k in name) and ("loss" in name):
-                    loss[name] = sequence_mul(loss[name], lambda_weight(v))
+                    loss[name] = sequence_mul(loss[name], v)
     elif isinstance(weight, Number):
         for name, loss_item in loss.items():
             if "loss" in name:
                 if not is_match(name, ignore_keys):
-                    loss[name] = sequence_mul(loss[name], lambda_weight(weight))
+                    loss[name] = sequence_mul(loss[name], weight)
                 else:
                     loss[name] = sequence_mul(loss[name], 0.0)
     else:
@@ -177,3 +172,9 @@ def sequence_mul(obj, multiplier):
         return [o * multiplier for o in obj]
     else:
         return obj * multiplier
+        
+def is_match(word, word_list):
+    for keyword in word_list:
+        if keyword in word:
+            return True
+    return False

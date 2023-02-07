@@ -188,20 +188,15 @@ class Trainer_DenseTeacher(Trainer):
         
         if self.cfg.get('fleet', False):
             # model = fleet.distributed_model(model)
-            model.teacher = fleet.distributed_model(model.teacher)
-            model.student = fleet.distributed_model(model.student)
+            model = fleet.distributed_model(model)
+
             self.optimizer = fleet.distributed_optimizer(self.optimizer)
         elif self._nranks > 1:
             find_unused_parameters = self.cfg[
                 'find_unused_parameters'] if 'find_unused_parameters' in self.cfg else False
             model = paddle.DataParallel(
                 model, find_unused_parameters=find_unused_parameters)
-            # model.teacher = paddle.DataParallel(
-            #     self.model.teacher, find_unused_parameters=find_unused_parameters)
-            # model.student = paddle.DataParallel(
-            #     self.model.student, find_unused_parameters=find_unused_parameters)
-        # self.freeze_teacher(model)
-        # enabel auto mixed precision mode
+
         if self.cfg.get('amp', False):
             scaler = amp.GradScaler(
                 enable=self.cfg.use_gpu or self.cfg.use_npu,
@@ -264,7 +259,10 @@ class Trainer_DenseTeacher(Trainer):
                 if self.cfg.get('amp', False):
                     with amp.auto_cast(enable=self.cfg.use_gpu):
                         # model forward
-                        outputs = model(data)
+                        if self._nranks > 1:
+                            outputs = model._layers(data)
+                        else:
+                            outputs = model(data)
                         loss = outputs['loss']
 
                     scaled_loss = scaler.scale(loss)

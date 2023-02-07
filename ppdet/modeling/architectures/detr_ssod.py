@@ -34,7 +34,7 @@ from ppdet.core.workspace import register, create
 from ppdet.modeling.bbox_utils import delta2bbox
 from ppdet.data.transform.atss_assigner import bbox_overlaps
 from ppdet.utils.logger import setup_logger
-from ppdet.modeling.ssod_utils import filter_invalid
+from ppdet.modeling.ssod_utils import filter_invalid,weighted_loss
 from .multi_stream_detector import MultiSteamDetector
 logger = setup_logger(__name__)
 
@@ -71,11 +71,6 @@ class DETR_SSOD(MultiSteamDetector):
 
     def forward_train(self, inputs, **kwargs):
         # print(self.teacher)
-        if dist.get_world_size() > 1 and self._teacher == None:
-            self._teacher = self.teacher
-            self.teacher = self.teacher
-            self._student = self.student
-            self.student = self.student
         data_sup_w, data_sup_s, data_unsup_w, data_unsup_s,iter_id=inputs
         if iter_id==self.ema_start_iters:
             self.update_ema_model(self.momentum==0)
@@ -97,8 +92,8 @@ class DETR_SSOD(MultiSteamDetector):
         loss.update(**sup_loss)   
         unsup_loss = weighted_loss(
                 self.foward_unsup_train(
-                    data_groups["unsup_teacher"], data_groups["unsup_student"]
-                ),
+                        data_unsup_w, data_unsup_s
+                    ),
                 weight=self.unsup_weight,
             )
         if iter_id>self.semi_start_iters:
@@ -228,4 +223,4 @@ class DETR_SSOD(MultiSteamDetector):
 
         
         return sample
-        
+    

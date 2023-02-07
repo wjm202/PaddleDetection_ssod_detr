@@ -211,18 +211,17 @@ class Trainer(object):
 
     def _init_callbacks(self):
         if self.mode == 'train':
-            self._callbacks = [LogPrinter(self), Checkpointer(self)]
+            if self.cfg.get('ssod_method', False):
+                self._callbacks = [SemiLogPrinter(self), SemiCheckpointer(self)]
+            else:
+                self._callbacks = [LogPrinter(self), Checkpointer(self)]
             if self.cfg.get('use_vdl', False):
                 self._callbacks.append(VisualDLWriter(self))
             if self.cfg.get('save_proposals', False):
                 self._callbacks.append(SniperProposalsGenerator(self))
             if self.cfg.get('use_wandb', False) or 'wandb' in self.cfg:
                 self._callbacks.append(WandbCallback(self))
-            if self.cfg.get('ssod_method', False):
-                self._callbacks.append(SemiLogPrinter(self))
-                self._callbacks.append(SemiCheckpointer(self))
             self._compose_callback = ComposeCallback(self._callbacks)
-
         elif self.mode == 'eval':
             self._callbacks = [LogPrinter(self)]
             if self.cfg.metric == 'WiderFace':
