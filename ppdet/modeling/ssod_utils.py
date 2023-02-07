@@ -14,6 +14,16 @@
 
 import paddle
 import paddle.nn.functional as F
+import warnings
+from collections import Counter, Mapping, Sequence
+from numbers import Number
+from typing import List, Optional, Tuple, Union, Dict
+from functools import partial
+
+import numpy as np
+import paddle
+from six.moves import map, zip
+
 
 
 def align_weak_strong_shape(data_weak, data_strong):
@@ -132,3 +142,38 @@ def filter_invalid(bbox, label=None, score=None, mask=None, thr=0.0, min_size=0)
         if mask is not None:
             mask = BitmapMasks(mask.masks[valid.cpu().numpy()], mask.height, mask.width)
     return bbox, label, mask
+
+
+def weighted_loss(loss: dict, weight, ignore_keys=[], warmup=0):
+    if len(loss) == 0:
+        return {}
+    _step_counter["weight"] += 1
+    lambda_weight = (
+        lambda x: x * (_step_counter["weight"] - 1) / warmup
+        if _step_counter["weight"] <= warmup
+        else x
+    )
+    if isinstance(weight, Mapping):
+        for k, v in weight.items():
+            for name, loss_item in loss.items():
+                if (k in name) and ("loss" in name):
+                    loss[name] = sequence_mul(loss[name], lambda_weight(v))
+    elif isinstance(weight, Number):
+        for name, loss_item in loss.items():
+            if "loss" in name:
+                if not is_match(name, ignore_keys):
+                    loss[name] = sequence_mul(loss[name], lambda_weight(weight))
+                else:
+                    loss[name] = sequence_mul(loss[name], 0.0)
+    else:
+        raise NotImplementedError()
+
+    total_loss = paddle.add_n(list(loss.values()))
+    loss.update({'loss': total_loss})
+    return loss
+
+def sequence_mul(obj, multiplier):
+    if isinstance(obj, Sequence):
+        return [o * multiplier for o in obj]
+    else:
+        return obj * multiplier

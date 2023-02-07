@@ -95,12 +95,12 @@ class DETR_SSOD(MultiSteamDetector):
         sup_loss = self.student.forward(data_sup_s)    
         sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
         loss.update(**sup_loss)   
-        # unsup_loss = weighted_loss(
-        #         self.foward_unsup_train(
-        #             data_groups["unsup_teacher"], data_groups["unsup_student"]
-        #         ),
-        #         weight=self.unsup_weight,
-        #     )
+        unsup_loss = weighted_loss(
+                self.foward_unsup_train(
+                    data_groups["unsup_teacher"], data_groups["unsup_student"]
+                ),
+                weight=self.unsup_weight,
+            )
         if iter_id>self.semi_start_iters:
             unsup_loss =     self.foward_unsup_train(
                         data_unsup_w, data_unsup_s

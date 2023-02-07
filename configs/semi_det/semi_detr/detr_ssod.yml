@@ -10,8 +10,8 @@ save_interval: 2000
 weights: output/dino_r50vd_pan_4_0_6_2x_cocosemi/model_final
 find_unused_parameters: True
 save_dir: output
-log_iter: 1
-epochs: 240
+log_iter: 20
+epochs: 480
 ssod_method: DenseTeacher
 ### global config
 use_simple_ema: True
@@ -88,8 +88,8 @@ TestReader:
   drop_last: false
 
 
-pretrain_student_weights: https://paddledet.bj.bcebos.com/models/deformable_detr_r50_1x_coco.pdparams
-pretrain_teacher_weights: https://paddledet.bj.bcebos.com/models/deformable_detr_r50_1x_coco.pdparams
+pretrain_student_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vb_normal_pretrained.pdparams
+pretrain_teacher_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vb_normal_pretrained.pdparams
 SSOD: DETR_SSOD
 DETR_SSOD:
   teacher: DETR
@@ -124,7 +124,7 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@1.json
+    anno_path: semi_annotations/instances_train2017.1@5.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 
@@ -132,7 +132,7 @@ TrainDataset:
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@1-unlabeled.json
+    anno_path: semi_annotations/instances_train2017.1@5-unlabeled.json
     dataset_dir: dataset/coco
     data_fields: ['image']
     supervised: False
