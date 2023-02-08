@@ -480,7 +480,7 @@ class DETRBBoxPostProcess(object):
         self.num_top_queries = num_top_queries
         self.use_focal_loss = use_focal_loss
 
-    def __call__(self, head_out, im_shape, scale_factor):
+    def __call__(self, head_out, im_shape, scale_factor,ssod=False):
         """
         Decode the bbox.
 
@@ -496,14 +496,15 @@ class DETRBBoxPostProcess(object):
                 shape [bs], and is N.
         """
         bboxes, logits, masks = head_out
-
-        bbox_pred = bbox_cxcywh_to_xyxy(bboxes)
-        origin_shape = paddle.floor(im_shape / scale_factor + 0.5)
-        img_h, img_w = paddle.split(origin_shape, 2, axis=-1)
-        origin_shape = paddle.concat(
-            [img_w, img_h, img_w, img_h], axis=-1).reshape([-1, 1, 4])
-        bbox_pred *= origin_shape
-
+        bbox_pred = bboxes
+        if ssod == False:
+            bbox_pred = bbox_cxcywh_to_xyxy(bboxes)
+            origin_shape = paddle.floor(im_shape / scale_factor + 0.5)
+            img_h, img_w = paddle.split(origin_shape, 2, axis=-1)
+            origin_shape = paddle.concat(
+                [img_w, img_h, img_w, img_h], axis=-1).reshape([-1, 1, 4])
+            bbox_pred *= origin_shape
+            
         scores = F.sigmoid(logits) if self.use_focal_loss else F.softmax(
             logits)[:, :, :-1]
 
