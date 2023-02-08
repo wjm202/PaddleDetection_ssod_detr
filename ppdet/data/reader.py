@@ -434,7 +434,6 @@ class BatchCompose_SSOD(Compose):
                 if not 'gt_' in k and not 'is_crowd' in k and not 'difficult' in k:
                     tmp_data = np.stack(tmp_data, axis=0)
                 strong_batch_data[k] = tmp_data
-
         return batch_data, strong_batch_data
 
 

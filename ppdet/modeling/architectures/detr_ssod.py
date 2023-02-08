@@ -73,6 +73,10 @@ class DETR_SSOD(MultiSteamDetector):
     def forward_train(self, inputs, **kwargs):
         # print(self.teacher)
         data_sup_w, data_sup_s, data_unsup_w, data_unsup_s,iter_id=inputs
+        if iter_id==2:
+            print(2)
+        if data_unsup_s[ 'scale_factor'].shape[0]==1:
+                print(1)
         if iter_id==self.ema_start_iters:
             self.update_ema_model(self.momentum==0)
         elif iter_id<self.ema_start_iters:
@@ -91,16 +95,13 @@ class DETR_SSOD(MultiSteamDetector):
         sup_loss = self.student.forward(data_sup_w)    
         sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
         loss.update(**sup_loss)   
-        unsup_loss = weighted_loss(
-                self.foward_unsup_train(
-                        data_unsup_w, data_unsup_s
-                    ),
-                weight=self.unsup_weight,
-            )
         if iter_id>self.semi_start_iters:
-            unsup_loss =     self.foward_unsup_train(
-                        data_unsup_w, data_unsup_s
-                    )
+            unsup_loss = weighted_loss(
+                    self.foward_unsup_train(
+                            data_unsup_w, data_unsup_s
+                        ),
+                    weight=self.unsup_weight,
+                )
             unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
             loss.update(**unsup_loss)     
             
@@ -190,12 +191,6 @@ class DETR_SSOD(MultiSteamDetector):
                     no_empty.append(i)
                 pseudo_bboxes[i]=pseudo_bboxes[i][:,:4].numpy()
                 pseudo_labels[i]=pseudo_labels[i].unsqueeze(-1).numpy()
-            print('scale_factor')
-            print(student_data[ 'scale_factor'])
-            print('curr_iter')
-            print(student_data[ 'curr_iter'])
-            import copy
-            f=copy.copy(student_data)
             for k in ['im_id', 'curr_iter', 'image', 'im_shape', 'scale_factor', 'pad_mask', 'epoch_id','gt_class','gt_bbox']:
                 if k in 'gt_class':
                     gt =[]
@@ -211,21 +206,6 @@ class DETR_SSOD(MultiSteamDetector):
                     continue
                 else:
                     student_data[k]=paddle.to_tensor(paddle.index_select(student_data[k], paddle.to_tensor(no_empty), axis=0),place=self.place)
-            print('**************************')
-            print('scale_factor_after')
-            if student_data[ 'scale_factor'].sum()==0:
-                print(1)
-            print(student_data[ 'scale_factor'])
-            if student_data[ 'curr_iter']>10000:
-                print('curr_iter_after')
-            print(student_data[ 'curr_iter'])
-            print('**************************')
-            print(paddle.to_tensor(no_empty))
-            print('**************************')
-            print('**************************')
-            print('**************************')
-            print('**************************')
-
             student_data=self.normalize_box(student_data)
             losses=self.student(student_data)
         else:
