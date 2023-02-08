@@ -52,7 +52,7 @@ SemiTrainReader:
     # - Permute: {}
    - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
   sup_batch_size: 1
-  unsup_batch_size: 2
+  unsup_batch_size: 1
   shuffle: true
   drop_last: true
   collate_batch: false
@@ -98,7 +98,7 @@ DETR_SSOD:
     unsup_weight: 4.0
     semi_start_iters: -1
     ema_start_iters: -1
-    pseudo_label_initial_score_thr: 0.7
+    pseudo_label_initial_score_thr: 0.6
     min_pseduo_box_size: 0
     # loss_weight: {distill_loss_class: 1.0, distill_loss_bbox: 1.0, distill_loss_giou: 1.0,
     #              distill_loss_class_aux: 1.0,distill_loss_bbox_aux: 1.0,distill_loss_giou_aux: 1.0, 

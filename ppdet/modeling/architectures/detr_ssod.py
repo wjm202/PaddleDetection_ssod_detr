@@ -126,6 +126,7 @@ class DETR_SSOD(MultiSteamDetector):
            bbox, bbox_num = self.teacher.post_process(
                     preds, teacher_data['im_shape'], paddle.ones_like(teacher_data['scale_factor']),ssod=True)
         self.place=body_feats[0].place
+
         if bbox.numel() > 0:
             proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)
             proposal_list = proposal_list.split(tuple(np.array(bbox_num)), 0)
@@ -186,11 +187,9 @@ class DETR_SSOD(MultiSteamDetector):
                     pseudo_labels[i]=pseudo_labels[i].unsqueeze(-1).numpy()
             student_data.update(gt_bbox=pseudo_bboxes,gt_class=pseudo_labels)
             student_data=self.normalize_box(student_data)
-            losses=self.student(student_data)
         else:
             student_data.update(gt_bbox=[paddle.zeros([1,4]),paddle.zeros([1,4])],gt_class=[paddle.zeros([1,1]),paddle.zeros([1,1])])
             student_data=self.normalize_box(student_data)
-
         body_feats=self.student.backbone(student_data)
         pad_mask = student_data['pad_mask'] if self.training else None
         out_transformer = self.student.transformer(body_feats, pad_mask)

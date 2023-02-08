@@ -244,8 +244,6 @@ class Trainer_DenseTeacher(Trainer):
             for step_id in range(len(self.loader)):
                 data = next(self.loader)
                 data_sup_w, data_sup_s, data_unsup_w, data_unsup_s = data
-                if data_unsup_s[ 'scale_factor'].shape[0]==1:
-                    print(1)
                 data_sup_w['epoch_id'] = epoch_id
                 data_sup_s['epoch_id'] = epoch_id
                 data_unsup_w['epoch_id'] = epoch_id
