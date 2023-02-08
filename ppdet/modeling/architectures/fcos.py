@@ -131,7 +131,6 @@ class FCOS(BaseArch):
                 for _ in teacher_quality
             ],
             axis=0)
-
         with paddle.no_grad():
             # Region Selection
             count_num = int(teacher_logits.shape[0] * ratio)

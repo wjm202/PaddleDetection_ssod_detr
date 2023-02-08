@@ -66,10 +66,9 @@ class DETR(BaseArch):
     def _forward(self):
         # Backbone
         body_feats = self.backbone(self.inputs)
-
         # Transformer
         pad_mask = self.inputs['pad_mask'] if self.training else None
-        out_transformer = self.transformer(body_feats, pad_mask, self.inputs)
+        out_transformer = self.transformer(body_feats, pad_mask,self.inputs)
 
         # DETR Head
         if self.training:

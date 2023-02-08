@@ -5,8 +5,8 @@ _BASE_: [
   '../../deformable_detr/_base_/deformable_detr_r50.yml',
   '../../deformable_detr/_base_/deformable_detr_reader.yml',
 ]
-eval_interval: 2000
-save_interval: 2000
+eval_interval: 3640
+save_interval: 3640
 weights: output/dino_r50vd_pan_4_0_6_2x_cocosemi/model_final
 find_unused_parameters: True
 save_dir: output
@@ -36,10 +36,10 @@ SemiTrainReader:
     - Permute: {}
   strong_aug:
     - StrongAugImage: {transforms: [
-        RandomColorJitter: {prob: 0.8, brightness: 0.4, contrast: 0.4, saturation: 0.4, hue: 0.1},
+        # RandomColorJitter: {prob: 0.8, brightness: 0.4, contrast: 0.4, saturation: 0.4, hue: 0.1},
         RandomErasingCrop: {},
-        RandomGaussianBlur: {prob: 0.5, sigma: [0.1, 2.0]},
-        RandomGrayscale: {prob: 0.2},
+        # RandomGaussianBlur: {prob: 0.5, sigma: [0.1, 2.0]},
+        # RandomGrayscale: {prob: 0.2},
       ]}
     - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
     - NormalizeBox: {}
@@ -51,8 +51,8 @@ SemiTrainReader:
   unsup_batch_transforms:
     # - Permute: {}
    - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
-  sup_batch_size: 1
-  unsup_batch_size: 1
+  sup_batch_size: 2
+  unsup_batch_size: 2
   shuffle: true
   drop_last: true
   collate_batch: false
@@ -87,8 +87,8 @@ TestReader:
   drop_last: false
 
 
-pretrain_student_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vb_normal_pretrained.pdparams
-pretrain_teacher_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vb_normal_pretrained.pdparams
+pretrain_student_weights: https://paddledet.bj.bcebos.com/models/deformable_detr_r50_1x_coco.pdparams
+pretrain_teacher_weights: https://paddledet.bj.bcebos.com/models/deformable_detr_r50_1x_coco.pdparams
 SSOD: DETR_SSOD
 DETR_SSOD:
   teacher: DETR
@@ -96,8 +96,8 @@ DETR_SSOD:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 2.5
-    semi_start_iters: 10000
-    ema_start_iters: 6000
+    semi_start_iters: -1
+    ema_start_iters: -1
     pseudo_label_initial_score_thr: 0.7
     min_pseduo_box_size: 0
     # loss_weight: {distill_loss_class: 1.0, distill_loss_bbox: 1.0, distill_loss_giou: 1.0,
@@ -123,7 +123,7 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: annotations/instances_train2017_rand8.json
+    anno_path: semi_annotations/instances_train2017.1@5.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 

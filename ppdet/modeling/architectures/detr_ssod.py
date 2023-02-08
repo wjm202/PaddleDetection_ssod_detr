@@ -15,6 +15,7 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+from typing import KeysView
 
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
@@ -87,7 +88,7 @@ class DETR_SSOD(MultiSteamDetector):
                 else:
                     data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
         loss = {}
-        sup_loss = self.student.forward(data_sup_s)    
+        sup_loss = self.student.forward(data_sup_w)    
         sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
         loss.update(**sup_loss)   
         unsup_loss = weighted_loss(
@@ -128,19 +129,22 @@ class DETR_SSOD(MultiSteamDetector):
            bbox, bbox_num = self.teacher.post_process(
                     preds, teacher_data['im_shape'], teacher_data['scale_factor'])
            scale_factor=teacher_data['scale_factor'].flip(-1).tile([1, 2])
-           bbox=paddle.concat([bbox[:,0:2],bbox[:,2:]*scale_factor],axis=-1)
-        
+           bbox = paddle.split(bbox,list(bbox_num))
+           for i in range (len(bbox)):
+               bbox[i]=paddle.concat([bbox[i][:,0:2],bbox[i][:,2:]*scale_factor[i]],axis=-1)
+           bbox=paddle.concat(bbox,axis=0)
+        self.place=body_feats[0].place
         if bbox.numel() > 0:
             proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)
             proposal_list = proposal_list.split(tuple(np.array(bbox_num)), 0)
         else:
-            proposal_list = [paddle.expand(paddle.to_tensor([])[:, None], (-1, 5))]
+            proposal_list = [paddle.expand(paddle.to_tensor([])[:, None], (-1, 5),place=self.place)]
         
         proposal_label_list = paddle.cast(bbox[:, 0], np.int32)
         proposal_label_list = proposal_label_list.split(tuple(np.array(bbox_num)), 0)
             
-        proposal_list = [paddle.to_tensor(p, place=body_feats[0].place) for p in proposal_list]
-        proposal_label_list = [paddle.to_tensor(p, place=body_feats[0].place) for p in proposal_label_list]
+        proposal_list = [paddle.to_tensor(p, place=self.place) for p in proposal_list]
+        proposal_label_list = [paddle.to_tensor(p, place=self.place) for p in proposal_label_list]
 
         # filter invalid box roughly
         if isinstance(self.train_cfg['pseudo_label_initial_score_thr'], float):
@@ -170,6 +174,7 @@ class DETR_SSOD(MultiSteamDetector):
         teacher_labels = proposal_label_list
         teacher_info=[teacher_bboxes,teacher_labels]
         student_info=student_data
+
         return self.compute_pseudo_label_loss(student_info, teacher_info)
 
     def compute_pseudo_label_loss(self, student_info, teacher_info):                                 
@@ -179,10 +184,48 @@ class DETR_SSOD(MultiSteamDetector):
         student_data=student_info
         losses = dict()
         if sum([label.shape[0] for label in pseudo_labels]) > 0:
+            no_empty=[]
             for i in range(len(pseudo_bboxes)):
+                if pseudo_labels[i].shape[0]>0:
+                    no_empty.append(i)
                 pseudo_bboxes[i]=pseudo_bboxes[i][:,:4].numpy()
                 pseudo_labels[i]=pseudo_labels[i].unsqueeze(-1).numpy()
-            student_data.update(gt_bbox=pseudo_bboxes[:4],gt_class=pseudo_labels)
+            print('scale_factor')
+            print(student_data[ 'scale_factor'])
+            print('curr_iter')
+            print(student_data[ 'curr_iter'])
+            import copy
+            f=copy.copy(student_data)
+            for k in ['im_id', 'curr_iter', 'image', 'im_shape', 'scale_factor', 'pad_mask', 'epoch_id','gt_class','gt_bbox']:
+                if k in 'gt_class':
+                    gt =[]
+                    for i in no_empty:
+                        gt.append(pseudo_labels[i])
+                    student_data.update({k:gt})
+                elif k in 'gt_bbox':
+                    gt =[]
+                    for i in no_empty:
+                        gt.append(pseudo_bboxes[i])
+                    student_data.update({k:gt})
+                elif k in ['epoch_id','im_id', 'curr_iter']:
+                    continue
+                else:
+                    student_data[k]=paddle.to_tensor(paddle.index_select(student_data[k], paddle.to_tensor(no_empty), axis=0),place=self.place)
+            print('**************************')
+            print('scale_factor_after')
+            if student_data[ 'scale_factor'].sum()==0:
+                print(1)
+            print(student_data[ 'scale_factor'])
+            if student_data[ 'curr_iter']>10000:
+                print('curr_iter_after')
+            print(student_data[ 'curr_iter'])
+            print('**************************')
+            print(paddle.to_tensor(no_empty))
+            print('**************************')
+            print('**************************')
+            print('**************************')
+            print('**************************')
+
             student_data=self.normalize_box(student_data)
             losses=self.student(student_data)
         else:
@@ -199,7 +242,6 @@ class DETR_SSOD(MultiSteamDetector):
 
     def normalize_box(self,sample,):
         im = sample['image']
-        place= sample['image'].place
         if  'gt_bbox' in sample.keys():
             gt_bbox = sample['gt_bbox']
             gt_class = sample['gt_class']
@@ -210,7 +252,7 @@ class DETR_SSOD(MultiSteamDetector):
                     gt_bbox[i][j][1] = gt_bbox[i][j][1] / height
                     gt_bbox[i][j][2] = gt_bbox[i][j][2] / width
                     gt_bbox[i][j][3] = gt_bbox[i][j][3] / height
-                    gt_class[i]= paddle.to_tensor(gt_class[i],dtype=paddle.int32,place=place)
+                    gt_class[i]= paddle.to_tensor(gt_class[i],dtype=paddle.int32,place=self.place)
             sample['gt_bbox'] = gt_bbox
             sample['gt_class'] = gt_class
         if  'gt_bbox' in sample.keys():
@@ -218,7 +260,7 @@ class DETR_SSOD(MultiSteamDetector):
             for i in range(len(bbox)):
                 bbox[i][:, 2:4] = bbox[i][:, 2:4] - bbox[i][:, :2]
                 bbox[i][:, :2] = bbox[i][:, :2] + bbox[i][:, 2:4] / 2.
-                bbox[i]= paddle.to_tensor(bbox[i],dtype=paddle.float32,place=place)
+                bbox[i]= paddle.to_tensor(bbox[i],dtype=paddle.float32,place=self.place)
             sample['gt_bbox'] = bbox
 
         
