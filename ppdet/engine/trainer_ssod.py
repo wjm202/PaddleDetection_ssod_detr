@@ -284,6 +284,8 @@ class Trainer_DenseTeacher(Trainer):
                 if self.cfg.get('unstructured_prune'):
                     self.pruner.step()
                 self.optimizer.clear_grad()
+                # print(outputs)
+                outputs=reduce_dict(outputs)
                 # if self.model.debug:
                 #     check_gradient(model)
                 # self.check_gradient()
@@ -402,3 +404,29 @@ class Trainer_DenseTeacher(Trainer):
     def evaluate(self):
         with paddle.no_grad():
             self._eval_with_loader(self.loader)
+
+def reduce_dict(input_dict, average=True):
+    """
+    Args:
+        input_dict (dict): all the values will be reduced
+        average (bool): whether to do average or sum
+    Reduce the values in the dictionary from all processes so that all processes
+    have the averaged results. Returns a dict with the same fields as
+    input_dict, after reduction.
+    """
+    world_size = dist.get_world_size()
+    if world_size < 2:
+        return input_dict
+    with paddle.no_grad():
+        names = []
+        values = []
+        # sort the keys so that they are consistent across processes
+        for k in sorted(input_dict.keys()):
+            names.append(k)
+            values.append(input_dict[k])
+        values = paddle.stack(values, axis=0)
+        dist.all_reduce(values)
+        if average:
+            values /= world_size
+        reduced_dict = {k: v for k, v in zip(names, values)}
+    return reduced_dict

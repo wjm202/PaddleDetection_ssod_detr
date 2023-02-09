@@ -78,8 +78,8 @@ class DETR_SSOD(MultiSteamDetector):
             self.update_ema_model(self.momentum==0)
         elif iter_id<self.ema_start_iters:
             pass
-        elif iter_id>self.ema_start_iters:
-            self.update_ema_model(self.momentum==0.99)
+        elif iter_id>self.semi_start_iters:
+            self.update_ema_model(self.momentum)
         if True:
             for k, v in data_sup_s.items():
                 if k in ['epoch_id']:
@@ -130,7 +130,7 @@ class DETR_SSOD(MultiSteamDetector):
         #             preds, teacher_data['im_shape'], paddle.ones_like(teacher_data['scale_factor']))
            bbox, bbox_num = self.teacher.post_process_semi(preds)
         self.place=body_feats[0].place
-        print(bbox[:,1].max())
+        # print(bbox[:,1].max())
 
         if bbox.numel() > 0:
             proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)

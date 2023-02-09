@@ -1,10 +1,3 @@
-_BASE_: [
-  '../_base_/coco_detection_percent_10.yml',
-  '../../runtime.yml',
-  '../../deformable_detr/_base_/deformable_optimizer_1x.yml',
-  '../../deformable_detr/_base_/deformable_detr_r50.yml',
-  '../../deformable_detr/_base_/deformable_detr_reader.yml',
-]
 eval_interval: 3640
 save_interval: 3640
 weights: output/dino_r50vd_pan_4_0_6_2x_cocosemi/model_final
@@ -15,7 +8,7 @@ ssod_method: DenseTeacher
 ### global config
 use_simple_ema: True
 ema_decay: 0.9996
-
+use_gpu: true
 
 ### reader config
 worker_num: 2
@@ -86,6 +79,53 @@ TestReader:
   shuffle: false
   drop_last: false
 
+architecture: DETR
+hidden_dim: 256
+use_focal_loss: True
+
+
+DETR:
+  backbone: ResNet
+  transformer: DeformableTransformer
+  detr_head: DeformableDETRHead
+  post_process: DETRBBoxPostProcess
+  post_process_semi: DETRBBoxSemiPostProcess
+
+ResNet:
+  # index 0 stands for res2
+  depth: 50
+  norm_type: bn
+  freeze_at: 0
+  return_idx: [1, 2, 3]
+  lr_mult_list: [0.0, 0.1, 0.1, 0.1]
+  num_stages: 4
+
+
+DeformableTransformer:
+  num_queries: 300
+  position_embed_type: sine
+  nhead: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 1024
+  dropout: 0.1
+  activation: relu
+  num_feature_levels: 4
+  num_encoder_points: 4
+  num_decoder_points: 4
+
+
+DeformableDETRHead:
+  num_mlp_layers: 3
+
+
+DETRLoss:
+  loss_coeff: {class: 2, bbox: 5, giou: 2, mask: 1, dice: 1}
+  aux_loss: True
+
+
+HungarianMatcher:
+  matcher_coeff: {class: 2, bbox: 5, giou: 2}
 
 pretrain_student_weights: def_detr_sup005_50epoch_bs_1_20.pdparams
 pretrain_teacher_weights: def_detr_sup005_50epoch_bs_1_20.pdparams
@@ -95,19 +135,16 @@ DETR_SSOD:
   student: DETR
   train_cfg:
     sup_weight: 1.0
-    unsup_weight: 2.0
+    unsup_weight: 1.0
     semi_start_iters: -1
     ema_start_iters: -1
-    pseudo_label_initial_score_thr: 0.6
+    pseudo_label_initial_score_thr: 0.7
     min_pseduo_box_size: 0
     # loss_weight: {distill_loss_class: 1.0, distill_loss_bbox: 1.0, distill_loss_giou: 1.0,
     #              distill_loss_class_aux: 1.0,distill_loss_bbox_aux: 1.0,distill_loss_giou_aux: 1.0, 
     #              distill_loss_class_dn: 1.0,distill_loss_bbox_dn: 1.0,distill_loss_giou_dn: 1.0,
     #              distill_loss_class_aux_dn: 1.0,distill_loss_bbox_aux_dn: 1.0,distill_giou_aux_dn: 1.0}
     concat_sup_data: True
-    suppress: linear
-    ratio: 0.01
-    gamma: 2.0
   test_cfg:
     inference_on: teacher
 

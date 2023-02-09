@@ -174,10 +174,14 @@ class DETRLoss(nn.Layer):
         loss_class = []
         loss_bbox = []
         loss_giou = []
+        # t=0
         for aux_boxes, aux_logits in zip(boxes, logits):
-            if match_indices is None:
-                match_indices = self.matcher(aux_boxes, aux_logits, gt_bbox,
-                                             gt_class)
+            
+            # print(aux_boxes.sum())
+            # print(boxes[t].sum())
+            # t+=1
+            match_indices = self.matcher(aux_boxes, aux_logits, gt_bbox,
+                                            gt_class)
             loss_class.append(
                 self._get_loss_class(aux_logits, gt_class, match_indices,
                                      bg_index, num_gts, postfix)['loss_class' +
@@ -186,6 +190,7 @@ class DETRLoss(nn.Layer):
                                         num_gts, postfix)
             loss_bbox.append(loss_['loss_bbox' + postfix])
             loss_giou.append(loss_['loss_giou' + postfix])
+            # match_indices=None
         loss = {
             "loss_class_aux" + postfix: paddle.add_n(loss_class),
             "loss_bbox_aux" + postfix: paddle.add_n(loss_bbox),
@@ -226,6 +231,7 @@ class DETRLoss(nn.Layer):
                 masks=None,
                 gt_mask=None,
                 postfix="",
+                ssod=False,
                 **kwargs):
         r"""
         Args:
@@ -276,7 +282,7 @@ class DETRLoss(nn.Layer):
                 self._get_loss_aux(
                     boxes[:-1] if boxes is not None else None, logits[:-1]
                     if logits is not None else None, gt_bbox, gt_class,
-                    self.num_classes, num_gts, match_indices, postfix))
+                    self.num_classes, num_gts, match_indices, postfix))      
 
         return total_loss
 

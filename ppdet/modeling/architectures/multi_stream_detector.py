@@ -52,7 +52,8 @@ class MultiSteamDetector(BaseArch):
         for param in model.parameters():
             param.stop_gradient = True
 
-    def update_ema_model(self, momentum=0.99):
+    def update_ema_model(self, momentum=0.9996):
+        # print(momentum)
         model_dict = self.student.state_dict()
         new_dict = OrderedDict()
         for key, value in self.teacher.state_dict().items():

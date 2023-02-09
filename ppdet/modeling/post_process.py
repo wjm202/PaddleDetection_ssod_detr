@@ -722,7 +722,7 @@ class DETRBBoxSemiPostProcess(object):
         bbox_pred = bboxes
 
             
-        scores = F.softmax(logits)
+        scores = F.softmax(logits,axis=2)
         import copy
         soft_scores=copy.deepcopy(scores)
         scores, index = paddle.topk(
