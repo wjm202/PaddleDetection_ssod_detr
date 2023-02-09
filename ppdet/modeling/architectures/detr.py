@@ -26,7 +26,7 @@ __all__ = ['DETR']
 @register
 class DETR(BaseArch):
     __category__ = 'architecture'
-    __inject__ = ['post_process']
+    __inject__ = ['post_process','post_process_semi']   
     __shared__ = ['exclude_post_process']
 
     def __init__(self,
@@ -34,12 +34,14 @@ class DETR(BaseArch):
                  transformer,
                  detr_head,
                  post_process='DETRBBoxPostProcess',
+                 post_process_semi='DETRBBoxSemiPostProcess',
                  exclude_post_process=False):
         super(DETR, self).__init__()
         self.backbone = backbone
         self.transformer = transformer
         self.detr_head = detr_head
         self.post_process = post_process
+        self.post_process_semi= post_process_semi
         self.exclude_post_process = exclude_post_process
 
     @classmethod

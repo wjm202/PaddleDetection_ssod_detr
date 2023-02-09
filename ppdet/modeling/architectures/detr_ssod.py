@@ -54,6 +54,7 @@ class DETR_SSOD(MultiSteamDetector):
         if train_cfg is not None:
             self.freeze("teacher")
             self.unsup_weight = self.train_cfg['unsup_weight']
+            self.sup_weight = self.train_cfg['sup_weight']
             self._teacher = None
             self._student = None
 
@@ -88,7 +89,9 @@ class DETR_SSOD(MultiSteamDetector):
                 else:
                     data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
         loss = {}
-        sup_loss = self.student.forward(data_sup_w)    
+        sup_loss = weighted_loss(
+                    self.student.forward(data_sup_s),
+                    weight=self.unsup_weight) 
         sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
         loss.update(**sup_loss)   
         if iter_id>self.semi_start_iters:
@@ -123,9 +126,11 @@ class DETR_SSOD(MultiSteamDetector):
            pad_mask = teacher_data['pad_mask'] if self.training else None
            out_transformer = self.teacher.transformer(body_feats, pad_mask, teacher_data)
            preds = self.teacher.detr_head(out_transformer, body_feats)
-           bbox, bbox_num = self.teacher.post_process(
-                    preds, teacher_data['im_shape'], paddle.ones_like(teacher_data['scale_factor']),ssod=True)
+        #    bbox, bbox_num = self.teacher.post_process(
+        #             preds, teacher_data['im_shape'], paddle.ones_like(teacher_data['scale_factor']))
+           bbox, bbox_num = self.teacher.post_process_semi(preds)
         self.place=body_feats[0].place
+        print(bbox[:,1].max())
 
         if bbox.numel() > 0:
             proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)

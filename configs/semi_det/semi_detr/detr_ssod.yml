@@ -10,7 +10,7 @@ save_interval: 3640
 weights: output/dino_r50vd_pan_4_0_6_2x_cocosemi/model_final
 find_unused_parameters: True
 save_dir: output
-log_iter: 20
+log_iter: 1
 ssod_method: DenseTeacher
 ### global config
 use_simple_ema: True
@@ -95,7 +95,7 @@ DETR_SSOD:
   student: DETR
   train_cfg:
     sup_weight: 1.0
-    unsup_weight: 4.0
+    unsup_weight: 2.0
     semi_start_iters: -1
     ema_start_iters: -1
     pseudo_label_initial_score_thr: 0.6
