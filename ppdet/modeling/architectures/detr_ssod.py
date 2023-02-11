@@ -89,22 +89,19 @@ class DETR_SSOD(MultiSteamDetector):
                 else:
                     data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
         loss = {}
-        sup_loss = weighted_loss(
-                    self.student.forward(data_sup_s),
-                    weight=self.unsup_weight) 
+        sup_loss = self.student(data_sup_w)
         sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
         loss.update(**sup_loss)   
         if iter_id>self.semi_start_iters:
-            unsup_loss = weighted_loss(
-                    self.foward_unsup_train(
-                            data_unsup_w, data_unsup_s
-                        ),
-                    weight=self.unsup_weight,
-                )
+            unsup_loss =  self.foward_unsup_train(data_unsup_w, data_unsup_s)
+            unsup_loss.update({
+            'loss':
+            paddle.add_n([v for k, v in unsup_loss.items() if 'log' not in k])
+        })
             unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
             loss.update(**unsup_loss)     
             
-            loss.update({'loss': loss['sup_loss'] + loss.get('unsup_loss', 0)})
+            loss.update({'loss': loss['sup_loss'] + loss['unsup_loss']})
         else:
             loss.update({'loss': loss['sup_loss']})
         # if dist.get_world_size() > 1:

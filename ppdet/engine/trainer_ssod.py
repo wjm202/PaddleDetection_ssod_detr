@@ -269,12 +269,7 @@ class Trainer_DenseTeacher(Trainer):
                     scaled_loss.backward()
                     scaler.minimize(self.optimizer, scaled_loss)
                 else:
-                    # model forward
-                    if self._nranks > 1:
-                        outputs = model._layers(data)
-                    else:
-                        outputs = model(data)
-                    
+                    outputs = model(data)                    
                     loss = outputs['loss']
                     # model backward
                     loss.backward()
@@ -285,7 +280,7 @@ class Trainer_DenseTeacher(Trainer):
                     self.pruner.step()
                 self.optimizer.clear_grad()
                 # print(outputs)
-                outputs=reduce_dict(outputs)
+                # outputs=reduce_dict(outputs)
                 # if self.model.debug:
                 #     check_gradient(model)
                 # self.check_gradient()
@@ -343,34 +338,34 @@ class Trainer_DenseTeacher(Trainer):
             flops_loader = create('{}Reader'.format(self.mode.capitalize()))(
                 self.dataset, self.cfg.worker_num, self._eval_batch_sampler)
             self._flops(flops_loader)
-        print("*****teacher evaluate*****")
-        for step_id, data in enumerate(loader):
-            self.status['step_id'] = step_id
-            self._compose_callback.on_step_begin(self.status)
-            # forward
-            outs = self.model.teacher(data)
+        # print("*****teacher evaluate*****")
+        # for step_id, data in enumerate(loader):
+        #     self.status['step_id'] = step_id
+        #     self._compose_callback.on_step_begin(self.status)
+        #     # forward
+        #     outs = self.model.teacher(data)
 
-            # update metrics
-            for metric in self._metrics:
-                metric.update(data, outs)
+        #     # update metrics
+        #     for metric in self._metrics:
+        #         metric.update(data, outs)
 
-            # multi-scale inputs: all inputs have same im_id
-            if isinstance(data, typing.Sequence):
-                sample_num += data[0]['im_id'].numpy().shape[0]
-            else:
-                sample_num += data['im_id'].numpy().shape[0]
-            self._compose_callback.on_step_end(self.status)
+        #     # multi-scale inputs: all inputs have same im_id
+        #     if isinstance(data, typing.Sequence):
+        #         sample_num += data[0]['im_id'].numpy().shape[0]
+        #     else:
+        #         sample_num += data['im_id'].numpy().shape[0]
+        #     self._compose_callback.on_step_end(self.status)
 
-        self.status['sample_num'] = sample_num
-        self.status['cost_time'] = time.time() - tic
+        # self.status['sample_num'] = sample_num
+        # self.status['cost_time'] = time.time() - tic
 
-        # accumulate metric to log out
-        for metric in self._metrics:
-            metric.accumulate()
-            metric.log()
-        self._compose_callback.on_epoch_end(self.status)
-        # reset metric states for metric may performed multiple times
-        self._reset_metrics()
+        # # accumulate metric to log out
+        # for metric in self._metrics:
+        #     metric.accumulate()
+        #     metric.log()
+        # self._compose_callback.on_epoch_end(self.status)
+        # # reset metric states for metric may performed multiple times
+        # self._reset_metrics()
 
         print("*****student evaluate*****")
         for step_id, data in enumerate(loader):

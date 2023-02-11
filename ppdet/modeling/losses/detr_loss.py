@@ -177,15 +177,13 @@ class DETRLoss(nn.Layer):
         # t=0
         for aux_boxes, aux_logits in zip(boxes, logits):
             
-            # print(aux_boxes.sum())
-            # print(boxes[t].sum())
-            # t+=1
+        #    if match_indices is None:
             match_indices = self.matcher(aux_boxes, aux_logits, gt_bbox,
                                             gt_class)
             loss_class.append(
                 self._get_loss_class(aux_logits, gt_class, match_indices,
-                                     bg_index, num_gts, postfix)['loss_class' +
-                                                                 postfix])
+                                    bg_index, num_gts, postfix)['loss_class' +
+                                                                postfix])
             loss_ = self._get_loss_bbox(aux_boxes, gt_bbox, match_indices,
                                         num_gts, postfix)
             loss_bbox.append(loss_['loss_bbox' + postfix])
