@@ -89,7 +89,7 @@ class DETR_SSOD(MultiSteamDetector):
                 else:
                     data_sup_s[k] = paddle.concat([v, data_sup_w[k]])
         loss = {}
-        sup_loss = self.student(data_sup_w)
+        sup_loss = self.student(data_sup_s)
         sup_loss = {"sup_" + k: v for k, v in sup_loss.items()}
         loss.update(**sup_loss)   
         if iter_id>self.semi_start_iters:

@@ -1,6 +1,6 @@
 eval_interval: 5000
 save_interval: 5000
-weights: output/dino_r50vd_pan_4_0_6_2x_cocosemi/model_final
+weights: output/semi_detr_semi005_size_600_1000/model_final
 find_unused_parameters: True
 save_dir: output
 log_iter: 1
