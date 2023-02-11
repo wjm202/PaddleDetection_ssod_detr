@@ -75,11 +75,11 @@ class DETR_SSOD(MultiSteamDetector):
         # print(self.teacher)
         data_sup_w, data_sup_s, data_unsup_w, data_unsup_s,iter_id=inputs
         if iter_id==self.ema_start_iters:
-            self.update_ema_model(self.momentum==0)
+            self.update_ema_model(momentum=0)
         elif iter_id<self.ema_start_iters:
             pass
         elif iter_id>self.semi_start_iters:
-            self.update_ema_model(self.momentum)
+            self.update_ema_model(momentum=self.momentum)
         if True:
             for k, v in data_sup_s.items():
                 if k in ['epoch_id']:
@@ -101,7 +101,7 @@ class DETR_SSOD(MultiSteamDetector):
             unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
             loss.update(**unsup_loss)     
             
-            loss.update({'loss': loss['sup_loss'] + loss['unsup_loss']})
+            loss.update({'loss': loss['sup_loss'] + self.unsup_weight*loss['unsup_loss']})
         else:
             loss.update({'loss': loss['sup_loss']})
         # if dist.get_world_size() > 1:
