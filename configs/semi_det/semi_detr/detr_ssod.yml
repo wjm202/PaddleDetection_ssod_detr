@@ -1,5 +1,5 @@
-eval_interval: 5000
-save_interval: 5000
+eval_interval: 2000
+save_interval: 2000
 weights: output/semi_detr_semi005_size_600_1000/model_final
 find_unused_parameters: True
 save_dir: output
@@ -11,10 +11,10 @@ ema_decay: 0.9996
 use_gpu: true
 
 ### reader config
-worker_num: 2
+worker_num: 4
 SemiTrainReader:
   sample_transforms:
-  - Decode: {}
+  - DecodeCache: {cache_root: 'dataset/coco/cache/buffer' }
   - RandomFlip: {prob: 0.5}
   - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
                   transforms2: [
@@ -45,7 +45,7 @@ SemiTrainReader:
     # - Permute: {}
    - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
   sup_batch_size: 1
-  unsup_batch_size: 2
+  unsup_batch_size: 1
   shuffle: true
   drop_last: true
   collate_batch: false
@@ -127,8 +127,8 @@ DETRLoss:
 HungarianMatcher:
   matcher_coeff: {class: 2, bbox: 5, giou: 2}
 
-pretrain_student_weights: def_detr_sup005_50epoch_bs_1_20.pdparams #19.1
-pretrain_teacher_weights: def_detr_sup005_50epoch_bs_1_20.pdparams
+pretrain_student_weights: 124.pdparams #19.9
+pretrain_teacher_weights: 124.pdparams
 
 SSOD: DETR_SSOD
 DETR_SSOD:
@@ -188,7 +188,7 @@ LearningRate:
   schedulers:
   - !PiecewiseDecay
     gamma: 0.1
-    milestones: [200]
+    milestones: [7]
     use_warmup: false
 
 OptimizerBuilder:

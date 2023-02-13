@@ -135,6 +135,7 @@ class Trainer_DenseTeacher(Trainer):
         self.status = {}
 
         self.start_epoch = 0
+        self.start_iter = 0
         self.end_epoch = 0 if 'epoch' not in cfg else cfg.epoch
 
         # initial default callbacks
@@ -163,10 +164,11 @@ class Trainer_DenseTeacher(Trainer):
             self.start_epoch = load_weight(self.model.student_model, weights,
                                            self.optimizer, exchange)
         else:
-            self.start_epoch = load_weight(self.model, weights, self.optimizer,
+            self.start_iter,self.start_epoch = load_weight(self.model, weights, self.optimizer,
                                            self.ema
                                            if self.use_ema else None, exchange)
         logger.debug("Resume weights of epoch {}".format(self.start_epoch))
+        logger.debug("Resume weights of iter {}".format(self.start_iter))
 
     def train(self, validate=False):
         assert self.mode == 'train', "Model not in 'train' mode"
@@ -204,7 +206,8 @@ class Trainer_DenseTeacher(Trainer):
 
         self.status.update({
             'epoch_id': self.start_epoch,
-            'step_id': 0,
+            'iter_id': self.start_iter,
+            # 'step_id': self.start_step,
             'steps_per_epoch': len(self.loader),
         })
 
@@ -221,8 +224,8 @@ class Trainer_DenseTeacher(Trainer):
         profiler_options = self.cfg.get('profiler_options', None)
 
         self._compose_callback.on_train_begin(self.status)
-        iter_id = -1
-        self.status['iter_id'] = 0
+        iter_id = self.start_iter
+        self.status['iter_id'] = iter_id
         self.status['eval_interval'] = self.cfg.eval_interval
         self.status['save_interval'] = self.cfg.save_interval
         for epoch_id in range(self.start_epoch, self.cfg.epoch):
@@ -240,7 +243,6 @@ class Trainer_DenseTeacher(Trainer):
                 model.teacher.eval()
                 model.student.train()
             iter_tic = time.time()
-
             for step_id in range(len(self.loader)):
                 data = next(self.loader)
                 data_sup_w, data_sup_s, data_unsup_w, data_unsup_s = data
@@ -400,28 +402,3 @@ class Trainer_DenseTeacher(Trainer):
         with paddle.no_grad():
             self._eval_with_loader(self.loader)
 
-def reduce_dict(input_dict, average=True):
-    """
-    Args:
-        input_dict (dict): all the values will be reduced
-        average (bool): whether to do average or sum
-    Reduce the values in the dictionary from all processes so that all processes
-    have the averaged results. Returns a dict with the same fields as
-    input_dict, after reduction.
-    """
-    world_size = dist.get_world_size()
-    if world_size < 2:
-        return input_dict
-    with paddle.no_grad():
-        names = []
-        values = []
-        # sort the keys so that they are consistent across processes
-        for k in sorted(input_dict.keys()):
-            names.append(k)
-            values.append(input_dict[k])
-        values = paddle.stack(values, axis=0)
-        dist.all_reduce(values)
-        if average:
-            values /= world_size
-        reduced_dict = {k: v for k, v in zip(names, values)}
-    return reduced_dict

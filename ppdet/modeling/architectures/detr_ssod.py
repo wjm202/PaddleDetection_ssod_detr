@@ -101,18 +101,10 @@ class DETR_SSOD(MultiSteamDetector):
             unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
             loss.update(**unsup_loss)     
             
-            loss.update({'loss': loss['sup_loss'] + self.unsup_weight*loss['unsup_loss']})
+            loss.update({'loss': loss['sup_loss'] + self.unsup_weight*loss.get('unsup_loss', 0)})
         else:
             loss.update({'loss': loss['sup_loss']})
-        # if dist.get_world_size() > 1:
-        #     if framework._dygraph_tracer(
-        #     )._has_grad and self._teacher.grad_need_sync:
-        #         self._teacher._reducer.prepare_for_backward(
-        #             list(self._teacher._find_varbase(loss)))
-        #     if framework._dygraph_tracer(
-        #     )._has_grad and self._student.grad_need_sync:
-        #         self._student._reducer.prepare_for_backward(
-        #             list(self._student._find_varbase(loss)))
+
         
         return loss
 
