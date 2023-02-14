@@ -16,18 +16,24 @@ SemiTrainReader:
   sample_transforms:
   - DecodeCache: {cache_root: 'dataset/coco/cache/buffer' }
   - RandomFlip: {prob: 0.5}
-  - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
-                  transforms2: [
-                      RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
-                      RandomSizeCrop: { min_size: 384, max_size: 600 },
-                      RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ]
-  }
+  # - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
+  #                 transforms2: [
+  #                     RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
+  #                     RandomSizeCrop: { min_size: 384, max_size: 600 },
+  #                     RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ]
+  # }
   weak_aug:
     - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
     - NormalizeBox: {}
     - BboxXYXY2XYWH: {}
     - Permute: {}
   strong_aug:
+    - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
+                    transforms2: [
+                        RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
+                        RandomSizeCrop: { min_size: 384, max_size: 600 },
+                        RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ]
+    }
     - StrongAugImage: {transforms: [
         RandomColorJitter: {prob: 0.8, brightness: 0.4, contrast: 0.4, saturation: 0.4, hue: 0.1},
         RandomErasingCrop: {},
@@ -127,8 +133,8 @@ DETRLoss:
 HungarianMatcher:
   matcher_coeff: {class: 2, bbox: 5, giou: 2}
 
-pretrain_student_weights: 124.pdparams #19.9
-pretrain_teacher_weights: 124.pdparams
+pretrain_student_weights: def_detr_sup005_size_600_1000_mAP_230.pdparams
+pretrain_teacher_weights: def_detr_sup005_size_600_1000_mAP_230.pdparams
 
 SSOD: DETR_SSOD
 DETR_SSOD:
