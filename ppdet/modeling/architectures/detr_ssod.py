@@ -80,50 +80,84 @@ class DETR_SSOD(MultiSteamDetector):
             self.update_ema_model(momentum=self.momentum)
         elif iter_id<self.semi_start_iters:
             self.update_ema_model(momentum=0)
-
-        data_list=[data_sup_w, data_sup_s,data_unsup_s]
-        if data_list[0]['image'].shape[1] == 3:
-            max_size = _max_by_axis([list(data['image'].shape[1:]) for data in data_list])
-            batch_shape = [len(data_list)] + max_size
-            b, c, h, w = batch_shape
-            dtype = data_list[0]['image'].dtype
-            tensor = paddle.zeros(batch_shape, dtype=dtype)
-            mask = paddle.zeros((b, h, w), dtype=dtype)
-            mask_af=[]
-            pad_img_af=[]
-            for img, pad_img,m in zip(data_list, tensor,mask):
-                pad_img[:, : img['image'].shape[2], : img['image'].shape[3]]=paddle.clone(img['image'].squeeze(0))
-                m[: img['image'].shape[2], :img['image'].shape[3]] = paddle.to_tensor(1.0)
-                pad_img_af.append(pad_img)
-                mask_af.append(m)
-            mask_af=paddle.stack(mask_af,axis=0)
-            pad_img_af=paddle.stack(pad_img_af,axis=0)
-            data_student=copy.deepcopy(data_sup_w)
-            data_student.update({'image':pad_img_af,'pad_mask':mask_af})
-            for k in data_sup_w.keys():
-                if k in ['gt_class','gt_bbox','is_crowd']:
-                        data_student[k]=data_sup_w[k]
-            for k in data_sup_s.keys():
-                if k in ['gt_class','gt_bbox','is_crowd']:
-                        data_student[k].extend(data_sup_s[k])
-        else:
-            raise ValueError('not supported')
-        loss = {}
         if iter_id>=self.semi_start_iters:
+            if iter_id==self.semi_start_iters:
+                print('***********************')
+                print('******semi start*******')
+                print('***********************')
+            data_list=[data_sup_w, data_sup_s,data_unsup_s]
+            if data_list[0]['image'].shape[1] == 3:
+                max_size = _max_by_axis([list(data['image'].shape[1:]) for data in data_list])
+                batch_shape = [len(data_list)] + max_size
+                b, c, h, w = batch_shape
+                dtype = data_list[0]['image'].dtype
+                tensor = paddle.zeros(batch_shape, dtype=dtype)
+                mask = paddle.zeros((b, h, w), dtype=dtype)
+                mask_af=[]
+                pad_img_af=[]
+                for img, pad_img,m in zip(data_list, tensor,mask):
+                    pad_img[:, : img['image'].shape[2], : img['image'].shape[3]]=paddle.clone(img['image'].squeeze(0))
+                    m[: img['image'].shape[2], :img['image'].shape[3]] = paddle.to_tensor(1.0)
+                    pad_img_af.append(pad_img)
+                    mask_af.append(m)
+                mask_af=paddle.stack(mask_af,axis=0)
+                pad_img_af=paddle.stack(pad_img_af,axis=0)
+                data_student=copy.deepcopy(data_sup_w)
+                data_student.update({'image':pad_img_af,'pad_mask':mask_af})
+                for k in data_sup_w.keys():
+                    if k in ['gt_class','gt_bbox','is_crowd']:
+                            data_student[k]=data_sup_w[k]
+                for k in data_sup_s.keys():
+                    if k in ['gt_class','gt_bbox','is_crowd']:
+                            data_student[k].extend(data_sup_s[k])
+            else:
+                raise ValueError('not supported')
+            loss = {}
             unsup_loss =  self.foward_unsup_train(data_unsup_w, data_student,data_unsup_s)
             unsup_loss.update({
             'loss':
             paddle.add_n([v for k, v in unsup_loss.items() if 'log' not in k])
         })
-            unsup_loss = {"unsup_" + k: v for k, v in unsup_loss.items()}
+            unsup_loss = { k: v for k, v in unsup_loss.items()}
             loss.update(**unsup_loss)     
-            loss.update({'loss':  self.unsup_weight*loss.get('unsup_loss', 0)})
-            
-            # loss.update({'loss': loss['sup_loss'] + self.unsup_weight*loss.get('unsup_loss', 0)})
+            loss.update({'loss':  unsup_loss['loss']})                
+                # loss.update({'loss': loss['sup_loss'] + self.unsup_weight*loss.get('unsup_loss', 0)})
         else:
-            loss.update({'loss': loss['sup_loss']})
+            if iter_id==self.semi_start_iters-1:
+                print('********************')
+                print('******sup ing*******')
+                print('********************')
+            loss = {}
+            data_list=[data_sup_w, data_sup_s]
+            if data_list[0]['image'].shape[1] == 3:
+                max_size = _max_by_axis([list(data['image'].shape[1:]) for data in data_list])
+                batch_shape = [len(data_list)] + max_size
+                b, c, h, w = batch_shape
+                dtype = data_list[0]['image'].dtype
+                tensor = paddle.zeros(batch_shape, dtype=dtype)
+                mask = paddle.zeros((b, h, w), dtype=dtype)
+                mask_af=[]
+                pad_img_af=[]
+                for img, pad_img,m in zip(data_list, tensor,mask):
+                    pad_img[:, : img['image'].shape[2], : img['image'].shape[3]]=paddle.clone(img['image'].squeeze(0))
+                    m[: img['image'].shape[2], :img['image'].shape[3]] = paddle.to_tensor(1.0)
+                    pad_img_af.append(pad_img)
+                    mask_af.append(m)
+                mask_af=paddle.stack(mask_af,axis=0)
+                pad_img_af=paddle.stack(pad_img_af,axis=0)
+                data_student=copy.deepcopy(data_sup_w)
+                data_student.update({'image':pad_img_af,'pad_mask':mask_af})
+                for k in data_sup_w.keys():
+                    if k in ['gt_class','gt_bbox','is_crowd']:
+                            data_student[k]=data_sup_w[k]
+                for k in data_sup_s.keys():
+                    if k in ['gt_class','gt_bbox','is_crowd']:
+                            data_student[k].extend(data_sup_s[k])
+            sup_loss=self.student(data_student)
+            sup_loss = {k: v for k, v in sup_loss.items()}
+            loss.update(**sup_loss)    
+            loss.update({'loss': loss['loss']})   
 
-        
         return loss
 
     def foward_unsup_train(self, teacher_data, student_data,data_unsup_s):
@@ -137,7 +171,6 @@ class DETR_SSOD(MultiSteamDetector):
         #             preds, teacher_data['im_shape'], paddle.ones_like(teacher_data['scale_factor']))
            bbox, bbox_num = self.teacher.post_process_semi(preds)
         self.place=body_feats[0].place
-        # print(bbox[:,1].max())
 
         if bbox.numel() > 0:
             proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)
@@ -262,6 +295,7 @@ class DETR_SSOD(MultiSteamDetector):
         for i in range(len(pseudo_bboxes)):
             pseudo_labels[i]= paddle.to_tensor(pseudo_labels[i],dtype=paddle.int32,place=self.place)
             pseudo_bboxes[i]= paddle.to_tensor(pseudo_bboxes[i],dtype=paddle.float32,place=self.place)
+        # print(pseudo_bboxes[0].shape[0])
         student_data['gt_bbox'].extend(pseudo_bboxes)  
         student_data['gt_class'].extend(pseudo_labels)
         # student_data.update(gt_bbox=pseudo_bboxes,gt_class=pseudo_labels)
