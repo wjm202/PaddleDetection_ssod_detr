@@ -72,19 +72,22 @@ class DETR_SSOD(MultiSteamDetector):
         }
 
     def forward_train(self, inputs, **kwargs):
-        # print(self.teacher)
-        data_sup_w, data_sup_s, data_unsup_w, data_unsup_s,iter_id=inputs
-        if iter_id==self.ema_start_iters:
+        if isinstance(inputs,dict):
+            iter_id=inputs['iter_id']
+        elif isinstance(inputs,list):
+            iter_id=inputs[-1]
+        if iter_id==self.semi_start_iters:
             self.update_ema_model(momentum=0)
         elif iter_id>self.semi_start_iters:
             self.update_ema_model(momentum=self.momentum)
-        elif iter_id<self.semi_start_iters:
-            self.update_ema_model(momentum=0)
+        # elif iter_id<self.semi_start_iters:
+        #     self.update_ema_model(momentum=0)
         if iter_id>=self.semi_start_iters:
             if iter_id==self.semi_start_iters:
                 print('***********************')
                 print('******semi start*******')
                 print('***********************')
+            data_sup_w, data_sup_s, data_unsup_w, data_unsup_s,_=inputs
             data_list=[data_sup_w, data_sup_s,data_unsup_s]
             if data_list[0]['image'].shape[1] == 3:
                 max_size = _max_by_axis([list(data['image'].shape[1:]) for data in data_list])
@@ -128,35 +131,9 @@ class DETR_SSOD(MultiSteamDetector):
                 print('******sup ing*******')
                 print('********************')
             loss = {}
-            data_list=[data_sup_w, data_sup_s]
-            if data_list[0]['image'].shape[1] == 3:
-                max_size = _max_by_axis([list(data['image'].shape[1:]) for data in data_list])
-                batch_shape = [len(data_list)] + max_size
-                b, c, h, w = batch_shape
-                dtype = data_list[0]['image'].dtype
-                tensor = paddle.zeros(batch_shape, dtype=dtype)
-                mask = paddle.zeros((b, h, w), dtype=dtype)
-                mask_af=[]
-                pad_img_af=[]
-                for img, pad_img,m in zip(data_list, tensor,mask):
-                    pad_img[:, : img['image'].shape[2], : img['image'].shape[3]]=paddle.clone(img['image'].squeeze(0))
-                    m[: img['image'].shape[2], :img['image'].shape[3]] = paddle.to_tensor(1.0)
-                    pad_img_af.append(pad_img)
-                    mask_af.append(m)
-                mask_af=paddle.stack(mask_af,axis=0)
-                pad_img_af=paddle.stack(pad_img_af,axis=0)
-                data_student=copy.deepcopy(data_sup_w)
-                data_student.update({'image':pad_img_af,'pad_mask':mask_af})
-                for k in data_sup_w.keys():
-                    if k in ['gt_class','gt_bbox','is_crowd']:
-                            data_student[k]=data_sup_w[k]
-                for k in data_sup_s.keys():
-                    if k in ['gt_class','gt_bbox','is_crowd']:
-                            data_student[k].extend(data_sup_s[k])
-            sup_loss=self.student(data_student)
+            sup_loss=self.student(inputs)
             sup_loss = {k: v for k, v in sup_loss.items()}
-            loss.update(**sup_loss)    
-            loss.update({'loss': loss['loss']})   
+            loss.update(**sup_loss)      
 
         return loss
 
@@ -216,12 +193,28 @@ class DETR_SSOD(MultiSteamDetector):
                 teacher_bboxes[i]=paddle.zeros([1,4])
             
             else:
-                original_boxes = box_cxcywh_to_xyxy(teacher_bboxes[i])
+                cur_one_tensor = paddle.to_tensor([1.0, 0.0, 0.0, 0.0])
+                cur_one_tensor = cur_one_tensor
+                cur_one_tensor = cur_one_tensor.tile([teacher_bboxes[i].shape[0], 1])
+                if 'flipped' in teacher_data.keys() and teacher_data['flipped']:
+                    original_boxes = paddle.abs(cur_one_tensor - teacher_bboxes[i])
+
+                else:
+                    original_boxes = teacher_bboxes[i]
+
+                # if 'filpped' in records_unlabel_q.keys() and records_unlabel_q['filpped']:
+                #     cur_boxes = cur_boxes[:, [2, 1, 0, 3]] * torch.as_tensor([-1, 1, -1, 1]).cuda() + torch.as_tensor([img_w, 0, img_w, 0]).cuda()
+
+                original_boxes = box_cxcywh_to_xyxy(original_boxes)
                 img_w = teacher_data['OriginalImageSize'][i][1]
                 img_h = teacher_data['OriginalImageSize'][i][0]
                 scale_fct = paddle.to_tensor([img_w, img_h, img_w, img_h])
                 original_boxes = original_boxes * scale_fct
                 cur_boxes = paddle.clone(original_boxes)
+
+                if 'filpped' in  data_unsup_s.keys() and  data_unsup_s['flipped']:
+                   cur_boxes = paddle.index_select(x=cur_boxes, index=paddle.to_tensor([2,1,0,3]), axis=1) * paddle.to_tensor([-1, 1, -1, 1]) + paddle.to_tensor([img_w, 0, img_w, 0])
+  
                 if data_unsup_s['RandomResize_times'][i] > 1:
                     rescaled_size1 = data_unsup_s['RandomResize_scale'][i][0]
                     

@@ -702,6 +702,7 @@ class RandomFlip(BaseOperator):
                     in sample are flipped.
         """
         sample.update({'OriginalImageSize':sample['image'].shape[:2]})
+        sample['flipped'] = False
         if np.random.uniform(0, 1) < self.prob:
             im = sample['image']
             height, width = im.shape[:2]

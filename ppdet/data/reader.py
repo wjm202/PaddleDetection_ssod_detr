@@ -401,7 +401,7 @@ class BatchCompose_SSOD(Compose):
                 raise e
 
         # remove keys which is not needed by model
-        extra_key = ['h', 'w','flipped']
+        extra_key = ['h', 'w']
         for k in extra_key:
             for sample in data:
                 if k in sample:
