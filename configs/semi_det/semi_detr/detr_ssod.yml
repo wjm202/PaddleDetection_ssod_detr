@@ -1,5 +1,5 @@
-eval_interval: 7260
-save_interval: 7260
+eval_interval: 7300
+save_interval: 7300
 weights: output/semi_detr_semi005_size_600_1000/model_final
 find_unused_parameters: True
 save_dir: output
@@ -158,8 +158,8 @@ DETR_SSOD:
   train_cfg:
     sup_weight: 1.0
     unsup_weight: 1.0
-    semi_start_iters: -1
-    ema_start_iters:  -1
+    semi_start_iters: 7300
+    ema_start_iters:  7300
     pseudo_label_initial_score_thr: 0.7
     min_pseduo_box_size: 0
     concat_sup_data: True
@@ -208,13 +208,13 @@ TestDataset:
     anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
     dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'
 
-epoch: 240
+epoch: 500
 LearningRate:
   base_lr: 0.0002
   schedulers:
   - !PiecewiseDecay
     gamma: 0.1
-    milestones: [200]
+    milestones: [500]
     use_warmup: false
 
 OptimizerBuilder:

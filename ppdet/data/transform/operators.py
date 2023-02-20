@@ -3717,10 +3717,7 @@ class RandomErasing(BaseOperator):
             im = sample['image']
             region = self._get_param(im, self.scale,self.ratio, value)
             top, left, erase_h, erase_w, v = region
-            # if 'RandomErasing' in sample.keys():
-            #      sample['RandomErasing'].append(region)
-            # else:
-            #     sample['RandomErasing'] = [region]
+            sample['RandomErasing'+context] = region
             im = self._erase(im, top, left, erase_h, erase_w, v, self.inplace)
             sample['image'] = im
         return sample
@@ -3738,7 +3735,7 @@ class RandomErasingCrop(BaseOperator):
             prob=0.3, scale=(0.05, 0.2), ratio=(0.05, 8), value="random")
 
     def apply(self, sample, context=None):
-        sample = self.transform1(sample)
-        sample = self.transform2(sample)
-        sample = self.transform3(sample)
+        sample = self.transform1(sample,context='1')
+        sample = self.transform2(sample,context='2')
+        sample = self.transform3(sample,context='3')
         return sample
