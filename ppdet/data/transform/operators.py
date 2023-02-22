@@ -3730,9 +3730,9 @@ class RandomErasingCrop(BaseOperator):
         self.transform1 = RandomErasing(
             prob=0.7, scale=(0.05, 0.2), ratio=(0.3, 3.3), value="random")
         self.transform2 = RandomErasing(
-            prob=0.5, scale=(0.05, 0.2), ratio=(0.1, 6), value="random")
+            prob=0.5, scale=(0.02, 0.2), ratio=(0.1, 6), value="random")
         self.transform3 = RandomErasing(
-            prob=0.3, scale=(0.05, 0.2), ratio=(0.05, 8), value="random")
+            prob=0.3, scale=(0.02, 0.2), ratio=(0.05, 8), value="random")
 
     def apply(self, sample, context=None):
         sample = self.transform1(sample,context='1')

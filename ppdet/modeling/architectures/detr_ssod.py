@@ -311,7 +311,7 @@ class DETR_SSOD(MultiSteamDetector):
                         cur_labels=paddle.zeros([0,1])
                 # if 'keep' in locals().keys():
                 #    print(keep)
-
+                assert cur_boxes.shape[0]==cur_labels.shape[0]
                 teacher_bboxes[i]=cur_boxes
                 teacher_labels[i]=cur_labels
         

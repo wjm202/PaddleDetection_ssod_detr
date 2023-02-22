@@ -314,12 +314,12 @@ def save_semi_model(
         os.makedirs(save_dir)
     save_path = os.path.join(save_dir, save_name)
     # save model
-    paddle.save(teacher_model, save_path + "_t.pdparams")
-    paddle.save(student_model, save_path + "_s.pdparams")
+    paddle.save(teacher_model, save_path +str(last_epoch)+"epoch_t.pdparams")
+    paddle.save(student_model, save_path +str(last_epoch)+"epoch_s.pdparams")
 
     # save optimizer
     state_dict = optimizer.state_dict()
     state_dict['last_epoch'] = last_epoch
     state_dict['last_iter'] = last_iter
-    paddle.save(state_dict, save_path + ".pdopt")
+    paddle.save(state_dict, save_path + str(last_epoch)+"epoch.pdopt")
     logger.info("Save checkpoint: {}".format(save_dir))

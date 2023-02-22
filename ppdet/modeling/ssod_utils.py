@@ -113,7 +113,7 @@ def filter_invalid(bbox, label=None, score=None, mask=None, thr=0.0, min_size=0)
         bw = bbox[:, 2]
         bh = bbox[:, 3]
         valid = (bw > min_size) & (bh > min_size)
-        print(valid)
+        # print(valid)
         # if valid.shape[0] == 1 :
         #     bbox = bbox if valid.item() else paddle.expand(paddle.to_tensor([])[:, None], (-1, 4))
         # else:
