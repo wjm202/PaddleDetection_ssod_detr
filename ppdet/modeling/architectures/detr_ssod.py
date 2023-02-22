@@ -212,7 +212,7 @@ class DETR_SSOD(MultiSteamDetector):
                 original_boxes = original_boxes * scale_fct
                 cur_boxes = paddle.clone(original_boxes)
                 cur_labels = paddle.clone(teacher_labels[i])
-                if 'filpped' in  data_unsup_s.keys() and  data_unsup_s['flipped']:
+                if 'flipped' in  data_unsup_s.keys() and  data_unsup_s['flipped']:
                    cur_boxes = paddle.index_select(x=cur_boxes, index=paddle.to_tensor([2,1,0,3]), axis=1) * paddle.to_tensor([-1, 1, -1, 1]) + paddle.to_tensor([img_w, 0, img_w, 0])
   
                 if data_unsup_s['RandomResize_times'][i] > 1:
@@ -264,7 +264,9 @@ class DETR_SSOD(MultiSteamDetector):
 
                 # finally, deal with normalize part in deformable detr aug code
                 if cur_boxes.shape[0]!=0:
+
                     cur_boxes = box_xyxy_to_cxcywh(cur_boxes)
+                    
                     cur_boxes = cur_boxes / paddle.to_tensor([img_w, img_h, img_w, img_h], dtype=paddle.float32)   
 
                 if 'RandomErasing1' in data_unsup_s.keys() and cur_boxes.shape[0]!=0:
@@ -309,6 +311,7 @@ class DETR_SSOD(MultiSteamDetector):
                         cur_labels=paddle.zeros([0,1])
                 # if 'keep' in locals().keys():
                 #    print(keep)
+
                 teacher_bboxes[i]=cur_boxes
                 teacher_labels[i]=cur_labels
         

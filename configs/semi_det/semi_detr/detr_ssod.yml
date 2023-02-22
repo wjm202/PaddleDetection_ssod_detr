@@ -178,20 +178,20 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@5.json
+    anno_path: semi_annotations/instances_train2017_coco_omni_label_seed1709_5fully95Unsup0tagsU0tagsK0pointsU0pointsK0boxesEC0boxesU.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 BurninTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@5.json
+    anno_path: semi_annotations/instances_train2017_coco_omni_label_seed1709_5fully95Unsup0tagsU0tagsK0pointsU0pointsK0boxesEC0boxesU.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 # partial unlabeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@5-unlabeled.json
+    anno_path: semi_annotations/instances_train2017_coco_omni_unlabel_seed1709_5fully95Unsup0tagsU0tagsK0pointsU0pointsK0boxesEC0boxesU.json
     dataset_dir: dataset/coco
     data_fields: ['image']
     supervised: False
@@ -208,13 +208,13 @@ TestDataset:
     anno_path: annotations/instances_val2017.json # also support txt (like VOC's label_list.txt)
     dataset_dir: dataset/coco # if set, anno_path will be 'dataset_dir/anno_path'
 
-epoch: 500
+epoch: 240
 LearningRate:
   base_lr: 0.0002
   schedulers:
   - !PiecewiseDecay
     gamma: 0.1
-    milestones: [500]
+    milestones: [200]
     use_warmup: false
 
 OptimizerBuilder:
