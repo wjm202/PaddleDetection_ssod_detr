@@ -64,3 +64,12 @@ class MultiSteamDetector(BaseArch):
             else:
                 raise Exception("{} is not found in student model".format(key))
         self.teacher.set_dict(new_dict)
+        # with paddle.no_grad():
+        #     state = {}
+        #     msd = model.state_dict()
+        #     for k, v in self.model.state_dict().items():
+        #         if paddle.is_floating_point(v):
+        #             v *= decay
+        #             v += (1.0 - decay) * msd[k].detach()
+        #         state[k] = v
+        #     self.model.set_state_dict(state)

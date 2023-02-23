@@ -1,7 +1,7 @@
 eval_interval: 7300
 save_interval: 7300
 weights: output/semi_detr_semi005_size_600_1000/model_final
-find_unused_parameters: True
+find_unused_parameters: true
 save_dir: output
 log_iter: 50
 ssod_method: DenseTeacher
@@ -178,20 +178,20 @@ num_classes: 80
 TrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017_coco_omni_label_seed1709_5fully95Unsup0tagsU0tagsK0pointsU0pointsK0boxesEC0boxesU.json
+    anno_path: semi_annotations/instances_train2017.1@5.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 BurninTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017_coco_omni_label_seed1709_5fully95Unsup0tagsU0tagsK0pointsU0pointsK0boxesEC0boxesU.json
+    anno_path: semi_annotations/instances_train2017.1@5.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 # partial unlabeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
 UnsupTrainDataset:
   !SemiCOCODataSet
     image_dir: train2017
-    anno_path: semi_annotations/instances_train2017_coco_omni_unlabel_seed1709_5fully95Unsup0tagsU0tagsK0pointsU0pointsK0boxesEC0boxesU.json
+    anno_path: semi_annotations/instances_train2017.1@5-unlabeled.json
     dataset_dir: dataset/coco
     data_fields: ['image']
     supervised: False
