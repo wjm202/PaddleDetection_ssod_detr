@@ -1,63 +1,62 @@
-eval_interval: 7300
-save_interval: 7300
+eval_interval: 3600
+save_interval: 3600
 weights: output/semi_detr_semi005_size_600_1000/model_final
 find_unused_parameters: true
 save_dir: output
 log_iter: 50
 ssod_method: DenseTeacher
 ### global config
-use_simple_ema: True
 ema_decay: 0.9996
 use_gpu: true
 
 ### reader config
-worker_num: 4
+worker_num: 2
 
-TrainReader:
-  sample_transforms:
-  - Decode: {}
-  - RandomFlip: {prob: 0.5}
-  - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
-                  transforms2: [
-                      RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
-                      RandomSizeCrop: { min_size: 384, max_size: 600 },
-                      RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ]
-  }
-  - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
-  - NormalizeBox: {}
-  - BboxXYXY2XYWH: {}
-  - Permute: {}
-  batch_transforms:
-  - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
-  batch_size: 2
-  shuffle: true
-  drop_last: true
-  collate_batch: false
-  use_shared_memory: false
+# TrainReader:
+#   sample_transforms:
+#   - DecodeCache: {cache_root: 'dataset/coco/cache/buffer' }
+#   - RandomFlip: {prob: 0.5}
+#   - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
+#                   transforms2: [
+#                       RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
+#                       RandomSizeCrop: { min_size: 384, max_size: 600 },
+#                       RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ]
+#   }
+#   - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
+#   - NormalizeBox: {}
+#   - BboxXYXY2XYWH: {}
+#   - Permute: {}
+#   batch_transforms:
+#   - PadMaskBatch: {pad_to_stride: -1, return_pad_mask: true}
+#   batch_size: 2
+#   shuffle: true
+#   drop_last: true
+#   collate_batch: false
+#   use_shared_memory: false
 
 SemiTrainReader:
   sample_transforms:
   - Decode: {}
-  - RandomFlip: {prob: 0.5}
   weak_aug:
+    - RandomFlip: {prob: 0.5}
     - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
     - NormalizeBox: {}
     - BboxXYXY2XYWH: {}
     - Permute: {}
   strong_aug:
+    - RandomFlip: {prob: 0.5}
+    - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
+      transforms2: [
+          RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
+          RandomSizeCrop: { min_size: 384, max_size: 600 },
+          RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ]}
     - StrongAugImage: {transforms: [
         RandomColorJitter: {prob: 0.8, brightness: 0.4, contrast: 0.4, saturation: 0.4, hue: 0.1},
+        RandomErasingCrop: {},
         RandomGrayscale: {prob: 0.2},
         RandomGaussianBlur: {prob: 0.5, sigma: [0.1, 2.0]},
       ]}
-    - RandomSelect: { transforms1: [ RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ],
-          transforms2: [
-              RandomShortSideResize: { short_side_sizes: [ 400, 500, 600 ] },
-              RandomSizeCrop: { min_size: 384, max_size: 600 },
-              RandomShortSideResize: { short_side_sizes: [360, 384, 408, 432, 456, 480, 504, 528, 552, 576, 600], max_size: 1000 } ]
-      }
     - NormalizeImage: {is_scale: true, mean: [0.485,0.456,0.406], std: [0.229, 0.224,0.225]}
-    - RandomErasingCrop: {}
     - NormalizeBox: {}
     - BboxXYXY2XYWH: {}
     - Permute: {}
@@ -148,8 +147,8 @@ DETRLoss:
 HungarianMatcher:
   matcher_coeff: {class: 2, bbox: 5, giou: 2}
 
-pretrain_student_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vb_normal_pretrained.pdparams
-pretrain_teacher_weights: https://paddledet.bj.bcebos.com/models/pretrained/ResNet50_vb_normal_pretrained.pdparams
+pretrain_student_weights: https://paddledet.bj.bcebos.com/models/deformable_detr_r50_1x_coco.pdparams
+pretrain_teacher_weights: https://paddledet.bj.bcebos.com/models/deformable_detr_r50_1x_coco.pdparams
 
 SSOD: DETR_SSOD
 DETR_SSOD:
@@ -181,12 +180,12 @@ TrainDataset:
     anno_path: semi_annotations/instances_train2017.1@5.json
     dataset_dir: dataset/coco
     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
-BurninTrainDataset:
-  !SemiCOCODataSet
-    image_dir: train2017
-    anno_path: semi_annotations/instances_train2017.1@5.json
-    dataset_dir: dataset/coco
-    data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
+# BurninTrainDataset:
+#   !SemiCOCODataSet
+#     image_dir: train2017
+#     anno_path: semi_annotations/instances_train2017.1@5.json
+#     dataset_dir: dataset/coco
+#     data_fields: ['image', 'gt_bbox', 'gt_class', 'is_crowd']
 # partial unlabeled COCO, use `SemiCOCODataSet` rather than `COCODataSet`
 UnsupTrainDataset:
   !SemiCOCODataSet

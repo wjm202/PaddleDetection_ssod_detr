@@ -15,8 +15,11 @@
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
+from cProfile import label
 from typing import KeysView
 import copy
+
+import cv2
 from ppdet.core.workspace import register, create
 from .meta_arch import BaseArch
 from ppdet.data.reader import transform
@@ -72,11 +75,15 @@ class DETR_SSOD(MultiSteamDetector):
         }
 
     def forward_train(self, inputs, **kwargs):
-        if isinstance(inputs,dict):
-            iter_id=inputs['iter_id']
-        elif isinstance(inputs,list):
-            iter_id=inputs[-1]
-        if iter_id==self.semi_start_iters:
+        # # if isinstance(inputs,dict):
+        # iter_id=inputs['iter_id']
+        # # elif isinstance(inputs,list):
+        iter_id=inputs[-1]
+        print(iter_id)
+        if iter_id==7300:
+            print('***********************')
+            print('******model quel*******')
+            print('***********************')
             self.update_ema_model(momentum=0)
         elif iter_id>self.semi_start_iters:
             self.update_ema_model(momentum=self.momentum)
@@ -89,6 +96,11 @@ class DETR_SSOD(MultiSteamDetector):
                 print('***********************')
             data_sup_w, data_sup_s, data_unsup_w, data_unsup_s,_=inputs
             data_list=[data_sup_w, data_sup_s,data_unsup_s]
+            # import cv2
+            # a= data_unsup_s['image'][0]
+            # image = a.numpy()
+            # img=np.uint8(image*255)
+            # cv2.imwrite('3.jpg',img.transpose([1,2,0]))
             if data_list[0]['image'].shape[1] == 3:
                 max_size = _max_by_axis([list(data['image'].shape[1:]) for data in data_list])
                 batch_shape = [len(data_list)] + max_size
@@ -114,6 +126,7 @@ class DETR_SSOD(MultiSteamDetector):
                     if k in ['gt_class','gt_bbox','is_crowd']:
                             data_student[k].extend(data_sup_s[k])
             else:
+                print(data_list[0]['image'])
                 raise ValueError('not supported')
             loss = {}
             unsup_loss =  self.foward_unsup_train(data_unsup_w, data_student,data_unsup_s)
@@ -144,49 +157,28 @@ class DETR_SSOD(MultiSteamDetector):
            pad_mask = teacher_data['pad_mask'] if self.training else None
            out_transformer = self.teacher.transformer(body_feats, pad_mask, teacher_data)
            preds = self.teacher.detr_head(out_transformer, body_feats)
-        #    bbox, bbox_num = self.teacher.post_process(
-        #             preds, teacher_data['im_shape'], paddle.ones_like(teacher_data['scale_factor']))
-           bbox, bbox_num = self.teacher.post_process_semi(preds)
-        self.place=body_feats[0].place
+           bbox=preds[0].astype('float32')
+           label=preds[1].argmax(-1).unsqueeze(-1).astype('float32')
+           score=F.softmax(preds[1],axis=2).max(-1).unsqueeze(-1).astype('float32')
 
-        if bbox.numel() > 0:
-            proposal_list = paddle.concat([bbox[:, 2:], bbox[:, 1:2]], axis=-1)
-            proposal_list = proposal_list.split(tuple(np.array(bbox_num)), 0)
-        else:
-            proposal_list = [paddle.expand(paddle.to_tensor([])[:, None], (-1, 5),place=self.place)]
-        
-        proposal_label_list = paddle.cast(bbox[:, 0], np.int32)
-        proposal_label_list = proposal_label_list.split(tuple(np.array(bbox_num)), 0)
-            
-        proposal_list = [paddle.to_tensor(p, place=self.place) for p in proposal_list]
-        proposal_label_list = [paddle.to_tensor(p, place=self.place) for p in proposal_label_list]
-        # print(bbox[:,1].max())
-        # filter invalid box roughly
+        proposal_list=paddle.concat([label,score,bbox],axis=-1)
+        print(score.max())    
+
         if isinstance(self.train_cfg['pseudo_label_initial_score_thr'], float):
             thr = self.train_cfg['pseudo_label_initial_score_thr']
         else:
             # TODO: use dynamic threshold
-            raise NotImplementedError("Dynamic Threshold is not implemented yet.")
-        # print("thr0.5 :",sum([len(bbox) for bbox in proposal_list]), "\tscore:",[proposal[:, -1] for proposal in proposal_list])
+            raise NotImplementedError("Dynamic Threshold is not implemented yet.") 
+        proposal_list, proposal_label_list = filter_invalid(
+                                                                bbox[0,:],
+                                                                label[0,:,0],
+                                                                score[0,:,0],
+                                                                thr=thr,
+                                                                min_size=self.train_cfg['min_pseduo_box_size'],)
         
-        proposal_list, proposal_label_list, _ = list(
-            zip(
-                *[
-                    filter_invalid(
-                        proposal[:,:4],
-                        proposal_label,
-                        proposal[:, -1],
-                        thr=thr,
-                        min_size=self.train_cfg['min_pseduo_box_size'],
-                    )
-                    for proposal, proposal_label in zip(
-                        proposal_list, proposal_label_list
-                    )
-                ]
-            )
-        )
-        teacher_bboxes = list(proposal_list)
-        teacher_labels = proposal_label_list
+        teacher_bboxes = [proposal_list]
+        teacher_labels = [proposal_label_list]
+        assert len(teacher_bboxes)==len(teacher_labels)==1
         max_pixels=1000
         assert data_unsup_s['image'].shape[0]==len(teacher_bboxes)
         for i in range(data_unsup_s['image'].shape[0]):
@@ -199,20 +191,20 @@ class DETR_SSOD(MultiSteamDetector):
                 cur_one_tensor = cur_one_tensor.tile([teacher_bboxes[i].shape[0], 1])
                 if 'flipped' in teacher_data.keys() and teacher_data['flipped']:
                     original_boxes = paddle.abs(cur_one_tensor - teacher_bboxes[i])
-
                 else:
                     original_boxes = teacher_bboxes[i]
 
                 # if 'filpped' in records_unlabel_q.keys() and records_unlabel_q['filpped']:
                 #     cur_boxes = cur_boxes[:, [2, 1, 0, 3]] * torch.as_tensor([-1, 1, -1, 1]).cuda() + torch.as_tensor([img_w, 0, img_w, 0]).cuda()
 
-                original_boxes = box_cxcywh_to_xyxy(original_boxes)
+                original_boxes = bbox_cxcywh_to_xyxy(original_boxes)
                 img_w = teacher_data['OriginalImageSize'][i][1]
                 img_h = teacher_data['OriginalImageSize'][i][0]
                 scale_fct = paddle.to_tensor([img_w, img_h, img_w, img_h])
                 original_boxes = original_boxes * scale_fct
+            
                 cur_boxes = paddle.clone(original_boxes)
-
+                cur_labels = paddle.clone(teacher_labels[i])
                 if 'flipped' in  data_unsup_s.keys() and  data_unsup_s['flipped']:
                    cur_boxes = paddle.index_select(x=cur_boxes, index=paddle.to_tensor([2,1,0,3]), axis=1) * paddle.to_tensor([-1, 1, -1, 1]) + paddle.to_tensor([img_w, 0, img_w, 0])
   
@@ -236,22 +228,27 @@ class DETR_SSOD(MultiSteamDetector):
                     cropped_boxes = cropped_boxes.clip(min=0)
                     area = (cropped_boxes[:, 1, :] - cropped_boxes[:, 0, :]).prod(axis=1)
                     cur_boxes = cropped_boxes.reshape([-1, 4])
+                    gt_before = copy.deepcopy(cur_boxes)
                     fields.append("boxes")
                     cropped_boxes = paddle.clone(cur_boxes)
                     cropped_boxes = cropped_boxes.reshape([-1, 2, 2])
-                    # keep = paddle.all(cropped_boxes[:, 1, :] > cropped_boxes[:, 0, :], axis=1)
-                    # cur_boxes = cur_boxes[keep]
-                    # cur_labels = cur_labels[keep]
-                    img_w = w
-                    img_h = h
-                    # random resize
-                    rescaled_size2 = data_unsup_s['RandomResize_scale'][i][1]
-                    rescaled_size2 = get_size_with_aspect_ratio((img_w, img_h), rescaled_size2, max_size=max_pixels)
-                    ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_size2, (img_w, img_h)))
-                    ratio_width, ratio_height = ratios
-                    cur_boxes = cur_boxes * paddle.to_tensor([ratio_width, ratio_height, ratio_width, ratio_height])
-                    img_w = rescaled_size2[0]
-                    img_h = rescaled_size2[1]
+                    keep = paddle.all(cropped_boxes[:, 1, :] > cropped_boxes[:, 0, :], axis=1)
+                    if False in keep:
+                        print(1)
+                    cur_boxes = cur_boxes[keep]
+                    cur_labels = cur_labels[keep]
+                    if cur_boxes.shape[0]!=0:
+                        img_w = w
+                        img_h = h
+                        # random resize
+                        rescaled_size2 = data_unsup_s['RandomResize_scale'][i][1]
+                        rescaled_size2 = get_size_with_aspect_ratio((img_w, img_h), rescaled_size2, max_size=max_pixels)
+                        ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_size2, (img_w, img_h)))
+                        ratio_width, ratio_height = ratios
+                        cur_boxes = cur_boxes * paddle.to_tensor([ratio_width, ratio_height, ratio_width, ratio_height])
+                        gt_before = gt_before * paddle.to_tensor([ratio_width, ratio_height, ratio_width, ratio_height])
+                        img_w = rescaled_size2[0]
+                        img_h = rescaled_size2[1]
                 else:
                     # random resize
                     rescaled_size1 = data_unsup_s['RandomResize_scale'][i][0]
@@ -259,14 +256,60 @@ class DETR_SSOD(MultiSteamDetector):
                     ratios = tuple(float(s) / float(s_orig) for s, s_orig in zip(rescaled_size1, (img_w, img_h)))
                     ratio_width, ratio_height = ratios
                     cur_boxes = cur_boxes * paddle.to_tensor([ratio_width, ratio_height, ratio_width, ratio_height])
+                    gt_before = copy.deepcopy(cur_boxes)
                     img_w = rescaled_size1[0]
                     img_h = rescaled_size1[1]
 
                 # finally, deal with normalize part in deformable detr aug code
-                cur_boxes = box_xyxy_to_cxcywh(cur_boxes)
-                cur_boxes = cur_boxes / paddle.to_tensor([img_w, img_h, img_w, img_h], dtype=paddle.float32)   
-                teacher_bboxes[i]=cur_boxes
-        
+                if cur_boxes.shape[0]!=0:
+                    gt = paddle.clone(cur_boxes)
+                    cur_boxes = bbox_xyxy_to_cxcywh(cur_boxes)
+                    
+                    cur_boxes = cur_boxes / paddle.to_tensor([img_w, img_h, img_w, img_h], dtype=paddle.float32)   
+
+                if 'RandomErasing1' in data_unsup_s.keys() and cur_boxes.shape[0]!=0:
+                    region = data_unsup_s['RandomErasing1'][0]
+                    i1, j1, h1, w1, _ = region
+                    cur_boxes_xy = bbox_cxcywh_to_xyxy(cur_boxes)
+                    i1 = i1 / img_h
+                    j1 = j1 / img_w
+                    h1 = h1 / img_h
+                    w1 = w1 / img_w
+                    keep = ~((cur_boxes_xy[:, 0] > j1) & (cur_boxes_xy[:, 1] > i1) & (cur_boxes_xy[:, 2] < j1 + w1) & (cur_boxes_xy[:, 3] < i1 + h1))
+                    cur_boxes = cur_boxes[keep]
+                    cur_labels = cur_labels[keep]
+                    if cur_boxes.shape[0]==0:
+                        cur_labels=paddle.zeros([0,1])
+
+                if 'RandomErasing2' in data_unsup_s.keys() and cur_boxes.shape[0]!=0:
+                    region = data_unsup_s['RandomErasing2'][0]
+                    i1, j1, h1, w1, _ = region
+                    cur_boxes_xy = bbox_cxcywh_to_xyxy(cur_boxes)
+                    i1 = i1 / img_h
+                    j1 = j1 / img_w
+                    h1 = h1 / img_h
+                    w1 = w1 / img_w
+                    keep = ~((cur_boxes_xy[:, 0] > j1) & (cur_boxes_xy[:, 1] > i1) & (cur_boxes_xy[:, 2] < j1 + w1) & (cur_boxes_xy[:, 3] < i1 + h1))
+                    cur_boxes = cur_boxes[keep]
+                    cur_labels = cur_labels[keep]
+                    if cur_boxes.shape[0]==0:
+                        cur_labels=paddle.zeros([0,1])
+                if 'RandomErasing3' in data_unsup_s.keys() and cur_boxes.shape[0]!=0:
+                    region = data_unsup_s['RandomErasing3'][0]
+                    i1, j1, h1, w1, _ = region
+                    cur_boxes_xy = bbox_cxcywh_to_xyxy(cur_boxes)
+                    i1 = i1 / img_h
+                    j1 = j1 / img_w
+                    h1 = h1 / img_h
+                    w1 = w1 / img_w
+                    keep = ~((cur_boxes_xy[:, 0] > j1) & (cur_boxes_xy[:, 1] > i1) & (cur_boxes_xy[:, 2] < j1 + w1) & (cur_boxes_xy[:, 3] < i1 + h1))
+                    cur_boxes = cur_boxes[keep]
+                    cur_labels = cur_labels[keep]
+                    if cur_boxes.shape[0]==0:
+                        cur_labels=paddle.zeros([0,1])
+                # if 'keep' in locals().keys():
+                #    print(keep)
+                assert cur_boxes.shape[0] == cur_labels.shape[0]
         teacher_info=[teacher_bboxes,teacher_labels]
         student_info=student_data
 
@@ -277,21 +320,23 @@ class DETR_SSOD(MultiSteamDetector):
         pseudo_bboxes=list(teacher_info[0])
         pseudo_labels=list(teacher_info[1])
         student_data=student_info
+        self.place=student_data['gt_bbox'][0].place
         # print(pseudo_labels)
         losses = dict()
         for i in range(len(pseudo_bboxes)):
             if pseudo_labels[i].shape[0]==0:
-                pseudo_bboxes[i]=paddle.zeros([1,4]).numpy()
-                pseudo_labels[i]=paddle.zeros([1,1]).numpy()
+                pseudo_bboxes[i]=paddle.zeros([1,4])
+                pseudo_labels[i]=paddle.zeros([1,1])
             else:
-                pseudo_bboxes[i]=pseudo_bboxes[i][:,:4].numpy()
-                pseudo_labels[i]=pseudo_labels[i].unsqueeze(-1).numpy()
+                pseudo_bboxes[i]=pseudo_bboxes[i][:,:4]
+                pseudo_labels[i]=pseudo_labels[i].unsqueeze(-1)
         for i in range(len(pseudo_bboxes)):
             pseudo_labels[i]= paddle.to_tensor(pseudo_labels[i],dtype=paddle.int32,place=self.place)
             pseudo_bboxes[i]= paddle.to_tensor(pseudo_bboxes[i],dtype=paddle.float32,place=self.place)
         # print(pseudo_bboxes[0].shape[0])
         student_data['gt_bbox'].extend(pseudo_bboxes)  
         student_data['gt_class'].extend(pseudo_labels)
+        
         # student_data.update(gt_bbox=pseudo_bboxes,gt_class=pseudo_labels)
         body_feats=self.student.backbone(student_data)
         pad_mask = student_data['pad_mask'] if self.training else None
@@ -335,16 +380,16 @@ class DETR_SSOD(MultiSteamDetector):
         
         return sample
 
-def box_cxcywh_to_xyxy(x):
-    x_c, y_c, w, h = x.unbind(-1)
-    b = [(x_c - 0.5 * w), (y_c - 0.5 * h),
-         (x_c + 0.5 * w), (y_c + 0.5 * h)]
-    return paddle.stack(b, axis=-1)
-def box_xyxy_to_cxcywh(x):
-    x0, y0, x1, y1 = x.unbind(-1)
-    b = [(x0 + x1) / 2, (y0 + y1) / 2,
-         (x1 - x0), (y1 - y0)]
-    return paddle.stack(b, axis=-1)
+
+def bbox_cxcywh_to_xyxy(x):
+    cxcy, wh = paddle.split(x, 2, axis=-1)
+    return paddle.concat([cxcy - 0.5 * wh, cxcy + 0.5 * wh], axis=-1)
+
+
+def bbox_xyxy_to_cxcywh(x):
+    x1, y1, x2, y2 = x.split(4, axis=-1)
+    return paddle.concat(
+        [(x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1), (y2 - y1)], axis=-1)
 
 def get_size_with_aspect_ratio(image_size, size, max_size=None):
     w, h = image_size

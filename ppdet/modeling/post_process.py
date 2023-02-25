@@ -725,6 +725,7 @@ class DETRBBoxSemiPostProcess(object):
         scores = F.softmax(logits,axis=2)
         import copy
         soft_scores=copy.deepcopy(scores)
+        # print(scores.max(-1).sum()+bbox_pred.sum())
         scores, index = paddle.topk(
             scores.max(-1), 300, axis=-1)
         # labels = soft_scores.argmax(-1)[index]
@@ -743,4 +744,5 @@ class DETRBBoxSemiPostProcess(object):
         bbox_num = paddle.to_tensor(
             bbox_pred.shape[1], dtype='int32').tile([bbox_pred.shape[0]])
         bbox_pred = bbox_pred.reshape([-1, 6])
+        # print(bbox_pred[:,1:].sum())
         return bbox_pred, bbox_num

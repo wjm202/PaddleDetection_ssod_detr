@@ -246,13 +246,14 @@ class DETRLoss(nn.Layer):
             if bbox.sum()==0:
                gt_bbox[i]=paddle.zeros([0,4]) 
                gt_class[i]=paddle.zeros([0,1])
+            
 
         if "match_indices" in kwargs:
             match_indices = kwargs["match_indices"]
         else:
             match_indices = self.matcher(boxes[-1].detach(),
                                          logits[-1].detach(), gt_bbox, gt_class)
-        
+
         num_gts = sum(len(a) for a in gt_bbox)
         num_gts = paddle.to_tensor([num_gts], dtype="float32")
         if paddle.distributed.get_world_size() > 1:
