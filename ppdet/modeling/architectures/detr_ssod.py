@@ -208,6 +208,7 @@ class DETR_SSOD(MultiSteamDetector):
                 ]
             )
         )
+        # print( bbox[:, 1:2].max())
         teacher_bboxes = list(proposal_list)
         teacher_labels = proposal_label_list
         max_pixels=1000

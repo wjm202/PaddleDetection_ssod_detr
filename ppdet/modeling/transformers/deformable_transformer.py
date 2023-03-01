@@ -63,12 +63,12 @@ class MSDeformableAttention(nn.Layer):
         self.attention_weights = nn.Linear(embed_dim, self.total_points)
         self.value_proj = nn.Linear(embed_dim, embed_dim)
         self.output_proj = nn.Linear(embed_dim, embed_dim)
-        try:
-            # use cuda op
-            from deformable_detr_ops import ms_deformable_attn
-        except:
-            # use paddle func
-            from .utils import deformable_attention_core_func as ms_deformable_attn
+        # try:
+        #     # use cuda op
+        #     from deformable_detr_ops import ms_deformable_attn
+        # except:
+        #     # use paddle func
+        from .utils import deformable_attention_core_func as ms_deformable_attn
         self.ms_deformable_attn_core = ms_deformable_attn
 
         self._reset_parameters()
